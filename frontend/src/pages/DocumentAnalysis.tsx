@@ -3,7 +3,7 @@
  */
 import React, { useState, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { documentApi } from '../services/api';
+import { collectSseText, documentApi, getErrorMessage } from '../services/api';
 import { CloudArrowUpIcon, DocumentIcon } from '@heroicons/react/24/outline';
 import { draftStorage } from '../utils/draftStorage';
 
@@ -113,8 +113,8 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
       } else {
         setMessage({ type: 'error', text: response.data.message });
       }
-    } catch (error: any) {
-      setMessage({ type: 'error', text: error.response?.data?.detail || '文件上传失败' });
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorMessage(error, '文件上传失败') });
     } finally {
       setUploading(false);
     }
@@ -135,41 +135,6 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
       let overviewResult = '';
       let requirementsResult = '';
 
-      const decoder = new TextDecoder();
-
-      // 处理流式响应的通用函数
-      const processStream = async (response: Response, onChunk: (chunk: string) => void) => {
-        const reader = response.body?.getReader();
-        if (!reader) {
-          throw new Error('无法读取响应流');
-        }
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6);
-              if (data === '[DONE]') {
-                break;
-              }
-              try {
-                const parsed = JSON.parse(data);
-                if (parsed.chunk) {
-                  onChunk(parsed.chunk);
-                }
-              } catch (e) {
-                // 忽略JSON解析错误
-              }
-            }
-          }
-        }
-      };
-
       // 第一步：分析项目概述
       setCurrentAnalysisStep('overview');
       const overviewResponse = await documentApi.analyzeDocumentStream({
@@ -177,11 +142,13 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
         analysis_type: 'overview',
       });
 
-      await processStream(overviewResponse, (chunk) => {
-        overviewResult += chunk;
-        const normalizedContent = normalizeLineBreaks(overviewResult);
-        setStreamingOverview(normalizedContent);
-      });
+      overviewResult = await collectSseText(
+        overviewResponse,
+        (fullText) => {
+          setStreamingOverview(normalizeLineBreaks(fullText));
+        },
+        '项目概述解析失败'
+      );
 
       const finalOverview = normalizeLineBreaks(overviewResult);
       setLocalOverview(finalOverview);
@@ -193,17 +160,19 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
         analysis_type: 'requirements',
       });
 
-      await processStream(requirementsResponse, (chunk) => {
-        requirementsResult += chunk;
-        const normalizedContent = normalizeLineBreaks(requirementsResult);
-        setStreamingRequirements(normalizedContent);
-      });
+      requirementsResult = await collectSseText(
+        requirementsResponse,
+        (fullText) => {
+          setStreamingRequirements(normalizeLineBreaks(fullText));
+        },
+        '技术评分要求解析失败'
+      );
 
       const finalRequirements = normalizeLineBreaks(requirementsResult);
       setLocalRequirements(finalRequirements);
 
       // 完成后更新父组件状态
-      onAnalysisComplete(overviewResult, requirementsResult);
+      onAnalysisComplete(finalOverview, finalRequirements);
       setMessage({ type: 'success', text: '标书解析完成' });
       
       // 清空流式内容
@@ -211,8 +180,8 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
       setStreamingRequirements('');
       setCurrentAnalysisStep(null);
 
-    } catch (error: any) {
-      setMessage({ type: 'error', text: error.message || '标书解析失败' });
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorMessage(error, '标书解析失败') });
       setStreamingOverview('');
       setStreamingRequirements('');
       setCurrentAnalysisStep(null);

@@ -3,7 +3,7 @@
  */
 import React, { useState } from 'react';
 import { OutlineData, OutlineItem } from '../types';
-import { outlineApi, expandApi } from '../services/api';
+import { collectSseText, expandApi, getErrorMessage, outlineApi } from '../services/api';
 import { ChevronRightIcon, ChevronDownIcon, DocumentTextIcon, PencilIcon, TrashIcon, PlusIcon } from '@heroicons/react/24/outline';
 
 interface OutlineEditProps {
@@ -27,7 +27,7 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [expandFile, setExpandFile] = useState<File | null>(null);
-  const [uploadedExpand, setuploadedExpand] = useState(false);
+  const [uploadedExpand, setUploadedExpand] = useState(false);
   const [oldOutline, setOldOutline] = useState<string | null>(null);
   const [oldDocument, setOldDocument] = useState<string | null>(null);
 
@@ -37,7 +37,7 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
     if (!file) return;
 
     try {
-      setuploadedExpand(true);
+      setUploadedExpand(true);
       setMessage(null);
 
       const response = await expandApi.uploadExpandFile(file);
@@ -50,10 +50,9 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
       } else {
         throw new Error(response.data.message || '文件上传失败');
       }
-    } catch (error: any) {
-      setMessage({ type: 'error', text: error.response?.data?.message || error.message || '文件上传失败' });
-    } finally {
-
+    } catch (error) {
+      setUploadedExpand(false);
+      setMessage({ type: 'error', text: getErrorMessage(error, '文件上传失败') });
     }
   };
 
@@ -76,40 +75,13 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         old_document: oldDocument || undefined,
       });
 
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new Error('无法读取响应流');
-      }
-
-      let result = '';
-      const decoder = new TextDecoder();
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') {
-              break;
-            }
-            try {
-              const parsed = JSON.parse(data);
-              if (parsed.chunk) {
-                result += parsed.chunk;
-                // 实时显示生成的内容
-                setStreamingContent(result);
-              }
-            } catch (e) {
-              // 忽略JSON解析错误
-            }
-          }
-        }
-      }
+      const result = await collectSseText(
+        response,
+        (fullText) => {
+          setStreamingContent(fullText);
+        },
+        '目录生成失败'
+      );
 
       // 解析最终结果
       try {
@@ -131,11 +103,11 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         collectIds(outlineJson.outline);
         setExpandedItems(allIds);
         
-      } catch (parseError) {
+      } catch {
         throw new Error('解析目录结构失败');
       }
-    } catch (error: any) {
-      setMessage({ type: 'error', text: error.message || '目录生成失败' });
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorMessage(error, '目录生成失败') });
       setStreamingContent(''); // 出错时也清空
     } finally {
       setGenerating(false);
@@ -218,14 +190,14 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
 
     if (window.confirm('确定要删除这个目录项吗？')) {
       const deleteFromItems = (items: OutlineItem[]): OutlineItem[] => {
-        return items.filter(item => {
+        return items.flatMap(item => {
           if (item.id === itemId) {
-            return false;
+            return [];
           }
-          if (item.children) {
-            item.children = deleteFromItems(item.children);
-          }
-          return true;
+          const nextItem = item.children
+            ? { ...item, children: deleteFromItems(item.children) }
+            : item;
+          return [nextItem];
         });
       };
 

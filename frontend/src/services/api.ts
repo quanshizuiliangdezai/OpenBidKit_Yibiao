@@ -1,29 +1,20 @@
 /**
- * API服务
+ * API 服务与流式响应工具
  */
 import axios from 'axios';
+import { ConfigData, OutlineData, OutlineItem } from '../types';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 120000, // 调整为60秒
+  timeout: 120000,
 });
 
-// 响应拦截器
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    console.error('API请求错误:', error);
-    return Promise.reject(error);
-  }
+  (error) => Promise.reject(error)
 );
-
-export interface ConfigData {
-  api_key: string;
-  base_url?: string;
-  model_name: string;
-}
 
 export interface FileUploadResponse {
   success: boolean;
@@ -45,36 +36,189 @@ export interface OutlineRequest {
   old_document?: string;
 }
 
-export interface ContentGenerationRequest {
-  outline: { outline: any[] };
-  project_overview: string;
-}
-
 export interface ChapterContentRequest {
-  chapter: any;
-  parent_chapters?: any[];
-  sibling_chapters?: any[];
+  chapter: OutlineItem;
+  parent_chapters?: OutlineItem[];
+  sibling_chapters?: OutlineItem[];
   project_overview: string;
 }
 
-// 配置相关API
-export const configApi = {
-  // 保存配置
-  saveConfig: (config: ConfigData) =>
-    api.post('/api/config/save', config),
+export interface WordExportRequest {
+  project_name?: string;
+  project_overview?: string;
+  outline: OutlineItem[];
+}
 
-  // 加载配置
-  loadConfig: () =>
-    api.get('/api/config/load'),
+export interface StreamEvent {
+  chunk?: string;
+  error?: boolean;
+  message?: string;
+}
 
-  // 获取可用模型
-  getModels: (config: ConfigData) =>
-    api.post('/api/config/models', config),
+const formatErrorDetail = (detail: unknown): string | null => {
+  if (!detail) {
+    return null;
+  }
+
+  if (typeof detail === 'string') {
+    return detail;
+  }
+
+  if (Array.isArray(detail)) {
+    const lines = detail
+      .map((item) => {
+        if (typeof item === 'string') {
+          return item;
+        }
+
+        if (item && typeof item === 'object') {
+          const maybeItem = item as { loc?: Array<string | number>; msg?: string };
+          const path = maybeItem.loc?.join(' -> ');
+          return path ? `${path}: ${maybeItem.msg || '参数校验失败'}` : (maybeItem.msg || '参数校验失败');
+        }
+
+        return null;
+      })
+      .filter((line): line is string => Boolean(line));
+
+    return lines.length > 0 ? lines.join('；') : null;
+  }
+
+  if (detail && typeof detail === 'object') {
+    const maybeDetail = detail as { detail?: unknown; message?: string };
+    return formatErrorDetail(maybeDetail.detail) || maybeDetail.message || JSON.stringify(detail);
+  }
+
+  return String(detail);
 };
 
-// 文档相关API
+export const getErrorMessage = (error: unknown, fallback = '请求失败'): string => {
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data?.detail;
+    const message = error.response?.data?.message;
+    return formatErrorDetail(detail) || message || error.message || fallback;
+  }
+
+  if (error instanceof Error) {
+    return error.message || fallback;
+  }
+
+  return fallback;
+};
+
+const ensureResponseOk = async (response: Response, fallback: string): Promise<Response> => {
+  if (response.ok) {
+    return response;
+  }
+
+  try {
+    const data = await response.json();
+    throw new Error(formatErrorDetail(data.detail) || data.message || fallback);
+  } catch (error) {
+    if (error instanceof Error && error.message !== 'Unexpected end of JSON input') {
+      throw error;
+    }
+  }
+
+  const text = await response.text();
+  throw new Error(text || fallback);
+};
+
+export const readSseStream = async (
+  response: Response,
+  onEvent: (event: StreamEvent) => void,
+  fallbackMessage: string
+): Promise<void> => {
+  await ensureResponseOk(response, fallbackMessage);
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error('无法读取响应流');
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split('\n\n');
+    buffer = events.pop() || '';
+
+    for (const eventBlock of events) {
+      const dataLine = eventBlock
+        .split('\n')
+        .find((line) => line.startsWith('data: '));
+
+      if (!dataLine) {
+        continue;
+      }
+
+      const data = dataLine.slice(6);
+      if (data === '[DONE]') {
+        return;
+      }
+
+      let event: StreamEvent | null = null;
+      try {
+        event = JSON.parse(data) as StreamEvent;
+      } catch {
+        // 忽略非法片段，等待后续完整数据
+        continue;
+      }
+
+      onEvent(event);
+    }
+  }
+};
+
+export const collectSseText = async (
+  response: Response,
+  onText?: (fullText: string, chunk: string) => void,
+  fallbackMessage = '流式请求失败'
+): Promise<string> => {
+  let fullText = '';
+
+  await readSseStream(
+    response,
+    (event) => {
+      if (event.error) {
+        throw new Error(event.message || fallbackMessage);
+      }
+
+      if (!event.chunk) {
+        return;
+      }
+
+      fullText += event.chunk;
+      onText?.(fullText, event.chunk);
+    },
+    fallbackMessage
+  );
+
+  return fullText;
+};
+
+const postJson = (path: string, data: unknown) =>
+  fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(data),
+  });
+
+export const configApi = {
+  saveConfig: (config: ConfigData) => api.post('/api/config/save', config),
+  loadConfig: () => api.get<ConfigData>('/api/config/load'),
+  getModels: (config: ConfigData) => api.post<{ models: string[]; success: boolean; message: string }>('/api/config/models', config),
+};
+
 export const documentApi = {
-  // 上传文件
   uploadFile: (file: File) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -84,67 +228,21 @@ export const documentApi = {
       },
     });
   },
-
-
-  // 流式分析文档
-  analyzeDocumentStream: (data: AnalysisRequest) =>
-    fetch(`${API_BASE_URL}/api/document/analyze-stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    }),
-
-  // 导出Word文档
-  exportWord: (data: any) =>
-    fetch(`${API_BASE_URL}/api/document/export-word`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    }),
+  analyzeDocumentStream: (data: AnalysisRequest) => postJson('/api/document/analyze-stream', data),
+  exportWord: async (data: WordExportRequest) => ensureResponseOk(await postJson('/api/document/export-word', data), '导出失败'),
 };
 
-// 目录相关API
 export const outlineApi = {
-  // 生成目录
-  generateOutline: (data: OutlineRequest) =>
-    api.post('/api/outline/generate', data),
-
-  // 流式生成目录
-  generateOutlineStream: (data: OutlineRequest) =>
-    fetch(`${API_BASE_URL}/api/outline/generate-stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    }),
-
+  generateOutline: (data: OutlineRequest) => api.post<OutlineData>('/api/outline/generate', data),
+  generateOutlineStream: (data: OutlineRequest) => postJson('/api/outline/generate-stream', data),
 };
 
-// 内容相关API
 export const contentApi = {
-  // 生成单章节内容
-  generateChapterContent: (data: ChapterContentRequest) =>
-    api.post('/api/content/generate-chapter', data),
-
-  // 流式生成单章节内容
-  generateChapterContentStream: (data: ChapterContentRequest) =>
-    fetch(`${API_BASE_URL}/api/content/generate-chapter-stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    }),
+  generateChapterContent: (data: ChapterContentRequest) => api.post<{ success: boolean; content: string }>('/api/content/generate-chapter', data),
+  generateChapterContentStream: (data: ChapterContentRequest) => postJson('/api/content/generate-chapter-stream', data),
 };
 
-// 方案扩写相关API
 export const expandApi = {
-  // 上传方案扩写文件
   uploadExpandFile: (file: File) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -152,7 +250,7 @@ export const expandApi = {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
-      timeout: 300000, // 文件上传专用超时设置：5分钟
+      timeout: 300000,
     });
   },
 };

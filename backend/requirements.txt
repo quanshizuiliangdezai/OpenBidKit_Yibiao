@@ -14,16 +14,5 @@ anyio>=4,<5
 pdfplumber==0.11.7
 pymupdf==1.26.4
 docx2python==3.5.0
-requests==2.32.3
 aiohttp==3.10.11
 Pillow==10.4.0
-asyncio-throttle==1.0.2
-duckduckgo-search==8.1.1
-# LangChain支持（已移除）
-beautifulsoup4==4.12.3
-# 增强爬虫能力
-playwright==1.51.0
-seleniumbase==4.33.3
-undetected-chromedriver==3.5.5
-# MCP服务支持
-mcp==1.13.1

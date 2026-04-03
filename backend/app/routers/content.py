@@ -1,84 +1,61 @@
-"""内容相关API路由"""
+"""内容相关 API 路由。"""
+
+import logging
+
 from fastapi import APIRouter, HTTPException
-from ..models.schemas import ContentGenerationRequest, ChapterContentRequest
+
+from ..models.schemas import ChapterContentRequest
 from ..services.openai_service import OpenAIService
-from ..utils.config_manager import config_manager
-from ..utils.sse import sse_response
-import json
+from ..utils.errors import AppError
+from ..utils.sse import sse_chunk, sse_done, sse_error, sse_response
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/content", tags=["内容管理"])
 
 
 @router.post("/generate-chapter")
 async def generate_chapter_content(request: ChapterContentRequest):
-    """为单个章节生成内容"""
+    """为单个章节生成完整内容。"""
     try:
-        # 加载配置
-        config = config_manager.load_config()
-        
-        if not config.get('api_key'):
-            raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
-
-        # 创建OpenAI服务实例
         openai_service = OpenAIService()
-        
-        # 生成单章节内容
-        content = ""
-        async for chunk in openai_service._generate_chapter_content(
+        content = await openai_service.generate_chapter_content(
             chapter=request.chapter,
             parent_chapters=request.parent_chapters,
             sibling_chapters=request.sibling_chapters,
-            project_overview=request.project_overview
-        ):
-            content += chunk
-        
+            project_overview=request.project_overview,
+        )
         return {"success": True, "content": content}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"章节内容生成失败: {str(e)}")
+    except AppError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception as exc:
+        logger.exception("章节内容生成失败")
+        raise HTTPException(status_code=500, detail=f"章节内容生成失败: {exc}") from exc
 
 
 @router.post("/generate-chapter-stream")
 async def generate_chapter_content_stream(request: ChapterContentRequest):
-    """流式为单个章节生成内容"""
+    """流式生成单章节内容。"""
     try:
-        # 加载配置
-        config = config_manager.load_config()
-        
-        if not config.get('api_key'):
-            raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
-
-        # 创建OpenAI服务实例
         openai_service = OpenAIService()
-        
-        async def generate():
-            try:
-                # 发送开始信号
-                yield f"data: {json.dumps({'status': 'started', 'message': '开始生成章节内容...'}, ensure_ascii=False)}\n\n"
-                
-                # 流式生成章节内容
-                full_content = ""
-                async for chunk in openai_service._generate_chapter_content(
-                    chapter=request.chapter,
-                    parent_chapters=request.parent_chapters,
-                    sibling_chapters=request.sibling_chapters,
-                    project_overview=request.project_overview
-                ):
-                    full_content += chunk
-                    # 实时发送内容片段
-                    yield f"data: {json.dumps({'status': 'streaming', 'content': chunk, 'full_content': full_content}, ensure_ascii=False)}\n\n"
-                
-                # 发送完成信号
-                yield f"data: {json.dumps({'status': 'completed', 'content': full_content}, ensure_ascii=False)}\n\n"
-                
-            except Exception as e:
-                # 发送错误信息
-                yield f"data: {json.dumps({'status': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
-            
-            # 发送结束信号
-            yield "data: [DONE]\n\n"
-        
-        return sse_response(generate())
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"章节内容生成失败: {str(e)}")
+    except AppError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+    async def generate():
+        try:
+            async for chunk in openai_service.stream_chapter_content(
+                chapter=request.chapter,
+                parent_chapters=request.parent_chapters,
+                sibling_chapters=request.sibling_chapters,
+                project_overview=request.project_overview,
+            ):
+                yield sse_chunk(chunk)
+        except AppError as exc:
+            yield sse_error(exc.message)
+        except Exception:
+            logger.exception("章节内容流式生成失败")
+            yield sse_error("章节内容生成失败，请稍后重试")
+        finally:
+            yield sse_done()
+
+    return sse_response(generate())

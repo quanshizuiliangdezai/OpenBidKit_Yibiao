@@ -16,7 +16,6 @@ const initialState: AppState = {
   projectOverview: '',
   techRequirements: '',
   outlineData: null,
-  selectedChapter: '',
 };
 
 export const useAppState = () => {
@@ -71,14 +70,6 @@ export const useAppState = () => {
     });
   }, []);
 
-  const updateSelectedChapter = useCallback((chapterId: string) => {
-    setState(prev => {
-      const next = { ...prev, selectedChapter: chapterId };
-      draftStorage.saveDraft({ selectedChapter: chapterId });
-      return next;
-    });
-  }, []);
-
   const nextStep = useCallback(() => {
     setState(prev => {
       const nextStepValue = Math.min(prev.currentStep + 1, 2);
@@ -104,7 +95,6 @@ export const useAppState = () => {
     updateFileContent,
     updateAnalysisResults,
     updateOutline,
-    updateSelectedChapter,
     nextStep,
     prevStep,
   };

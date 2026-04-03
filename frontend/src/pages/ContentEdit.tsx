@@ -5,15 +5,12 @@ import React, { useState, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { OutlineData, OutlineItem } from '../types';
 import { DocumentTextIcon, PlayIcon, DocumentArrowDownIcon, CheckCircleIcon, ExclamationCircleIcon, ArrowUpIcon } from '@heroicons/react/24/outline';
-import { contentApi, ChapterContentRequest, documentApi } from '../services/api';
+import { collectSseText, contentApi, ChapterContentRequest, documentApi, getErrorMessage } from '../services/api';
 import { saveAs } from 'file-saver';
-import { Paragraph, TextRun } from 'docx';
 import { draftStorage } from '../utils/draftStorage';
 
 interface ContentEditProps {
   outlineData: OutlineData | null;
-  selectedChapter: string;
-  onChapterSelect: (chapterId: string) => void;
 }
 
 interface GenerationProgress {
@@ -27,10 +24,9 @@ interface GenerationProgress {
 
 const ContentEdit: React.FC<ContentEditProps> = ({
   outlineData,
-  selectedChapter,
-  onChapterSelect,
 }) => {
   const [isGenerating, setIsGenerating] = useState(false);
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [progress, setProgress] = useState<GenerationProgress>({
     total: 0,
     completed: 0,
@@ -123,7 +119,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     // 初始化计算一次，避免刷新后位置不对
     handleScroll();
 
-    const target: any = scrollContainer || window;
+    const target = scrollContainer || window;
     target.addEventListener('scroll', handleScroll);
     return () => target.removeEventListener('scroll', handleScroll);
   }, []);
@@ -213,59 +209,26 @@ const ContentEdit: React.FC<ContentEditProps> = ({
 
       const response = await contentApi.generateChapterContentStream(request);
 
-      if (!response.ok) throw new Error('生成失败');
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('无法读取响应');
-
       let content = '';
       const updatedItem = { ...item };
-      
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
 
-        const chunk = new TextDecoder().decode(value);
-        const lines = chunk.split('\n');
-        
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
-            
-            try {
-              const parsed = JSON.parse(data);
-              
-              if (parsed.status === 'streaming' && parsed.full_content) {
-                // 实时更新内容
-                content = parsed.full_content;
-                updatedItem.content = content;
-                // 本地持久化（刷新后可恢复）
-                draftStorage.upsertChapterContent(item.id, content);
-                
-                // 实时更新叶子节点数据以触发重新渲染
-                setLeafItems(prevItems => {
-                  const newItems = [...prevItems];
-                  const index = newItems.findIndex(i => i.id === item.id);
-                  if (index !== -1) {
-                    newItems[index] = { ...updatedItem };
-                  }
-                  return newItems;
-                });
-              } else if (parsed.status === 'completed' && parsed.content) {
-                content = parsed.content;
-                updatedItem.content = content;
-                // 本地持久化（最终结果）
-                draftStorage.upsertChapterContent(item.id, content);
-              } else if (parsed.status === 'error') {
-                throw new Error(parsed.message);
-              }
-            } catch (e) {
-              // 忽略JSON解析错误
+      await collectSseText(
+        response,
+        (fullText) => {
+          content = fullText;
+          updatedItem.content = content;
+          draftStorage.upsertChapterContent(item.id, content);
+          setLeafItems((prevItems) => {
+            const newItems = [...prevItems];
+            const index = newItems.findIndex((leafItem) => leafItem.id === item.id);
+            if (index !== -1) {
+              newItems[index] = { ...updatedItem };
             }
-          }
-        }
-      }
+            return newItems;
+          });
+        },
+        '章节内容生成失败'
+      );
 
       return updatedItem;
     } catch (error) {
@@ -292,6 +255,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     if (!outlineData || leafItems.length === 0) return;
 
     setIsGenerating(true);
+    setMessage(null);
     setProgress({
       total: leafItems.length,
       completed: 0,
@@ -317,8 +281,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
               setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
               return updatedItem;
             })
-            .catch(error => {
-              console.error(`生成内容失败 ${item.title}:`, error);
+            .catch(() => {
               setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
               return item; // 返回原始项目
             })
@@ -334,7 +297,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       // 暂时只更新本地状态
       
     } catch (error) {
-      console.error('生成内容时出错:', error);
+      setMessage({ type: 'error', text: getErrorMessage(error, '生成内容失败') });
     } finally {
       setIsGenerating(false);
       setProgress(prev => ({ ...prev, current: '', generating: new Set<string>() }));
@@ -369,6 +332,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     if (!outlineData) return;
 
     try {
+      setMessage(null);
       // 构建带有最新内容的导出数据（leafItems 中存的是实时内容）
       const buildExportOutline = (items: OutlineItem[]): OutlineItem[] => {
         return items.map(item => {
@@ -391,15 +355,11 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       };
 
       const response = await documentApi.exportWord(exportPayload);
-      if (!response.ok) {
-        throw new Error('导出失败');
-      }
       const blob = await response.blob();
       saveAs(blob, `${outlineData.project_name || '标书文档'}.docx`);
-      
+      setMessage({ type: 'success', text: '导出成功' });
     } catch (error) {
-      console.error('导出失败:', error);
-      alert('导出失败，请重试');
+      setMessage({ type: 'error', text: getErrorMessage(error, '导出失败，请重试') });
     }
   };
 
@@ -471,6 +431,16 @@ const ContentEdit: React.FC<ContentEditProps> = ({
                   style={{ width: `${(progress.completed / progress.total) * 100}%` }}
                 />
               </div>
+            </div>
+          )}
+
+          {message && (
+            <div className={`mt-4 rounded-md border px-4 py-3 text-sm ${
+              message.type === 'success'
+                ? 'border-green-200 bg-green-50 text-green-700'
+                : 'border-red-200 bg-red-50 text-red-700'
+            }`}>
+              {message.text}
             </div>
           )}
         </div>

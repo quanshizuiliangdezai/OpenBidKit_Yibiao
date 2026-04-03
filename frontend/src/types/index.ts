@@ -29,5 +29,4 @@ export interface AppState {
   projectOverview: string;
   techRequirements: string;
   outlineData: OutlineData | null;
-  selectedChapter: string;
 }

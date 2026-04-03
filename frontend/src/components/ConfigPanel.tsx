@@ -3,7 +3,7 @@
  */
 import React, { useState, useEffect } from 'react';
 import { ConfigData } from '../types';
-import { configApi } from '../services/api';
+import { configApi, getErrorMessage } from '../services/api';
 
 interface ConfigPanelProps {
   config: ConfigData;
@@ -16,11 +16,7 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onConfigChange }) => 
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  useEffect(() => {
-    loadConfig();
-  }, []);
-
-  const loadConfig = async () => {
+  const loadConfig = React.useCallback(async () => {
     try {
       const response = await configApi.loadConfig();
       if (response.data) {
@@ -28,17 +24,19 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onConfigChange }) => 
         onConfigChange(response.data);
       }
     } catch (error) {
-      console.error('加载配置失败:', error);
+      setMessage({ type: 'error', text: getErrorMessage(error, '加载配置失败') });
     }
-  };
+  }, [onConfigChange]);
+
+  useEffect(() => {
+    void loadConfig();
+  }, [loadConfig]);
 
   const handleSave = async () => {
     try {
       setLoading(true);
-      console.log('保存配置:', localConfig);
       const response = await configApi.saveConfig(localConfig);
-      console.log('保存响应:', response.data);
-      
+
       if (response.data.success) {
         onConfigChange(localConfig);
         setMessage({ type: 'success', text: '配置保存成功！' });
@@ -47,8 +45,7 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onConfigChange }) => 
         setMessage({ type: 'error', text: response.data.message || '配置保存失败' });
       }
     } catch (error) {
-      console.error('保存配置错误:', error);
-      setMessage({ type: 'error', text: '配置保存失败' });
+      setMessage({ type: 'error', text: getErrorMessage(error, '配置保存失败') });
     } finally {
       setLoading(false);
     }
@@ -76,10 +73,10 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onConfigChange }) => 
         setMessage({ type: 'error', text: response.data.message });
       }
     } catch (error) {
-      setMessage({ type: 'error', text: '获取模型列表失败' });
-    } finally {
-      setLoading(false);
-    }
+        setMessage({ type: 'error', text: getErrorMessage(error, '获取模型列表失败') });
+      } finally {
+        setLoading(false);
+      }
   };
 
   return (
@@ -147,7 +144,6 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onConfigChange }) => 
                 id="model_name"
                 value={localConfig.model_name}
                 onChange={(e) => {
-                  console.log('模型选择变更:', e.target.value);
                   setLocalConfig({ ...localConfig, model_name: e.target.value });
                 }}
                 className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
@@ -230,7 +226,6 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onConfigChange }) => 
                 alt="易标" 
                 className="w-6 h-6" 
                 onError={(e) => {
-                  console.log('易标logo加载失败');
                   e.currentTarget.style.display = 'none';
                 }}
               />

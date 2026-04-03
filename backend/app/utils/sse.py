@@ -1,4 +1,6 @@
-"""SSE (Server-Sent Events) 相关工具"""
+"""SSE (Server-Sent Events) 相关工具。"""
+
+import json
 from typing import AsyncGenerator, Any, Dict, Optional
 
 from fastapi.responses import StreamingResponse
@@ -35,4 +37,21 @@ def sse_response(
     )
 
 
+def sse_data(payload: Dict[str, Any]) -> str:
+    """将 payload 包装为标准 SSE data 事件。"""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
+
+def sse_chunk(chunk: str) -> str:
+    """输出增量文本块。"""
+    return sse_data({"chunk": chunk})
+
+
+def sse_error(message: str) -> str:
+    """输出统一错误事件。"""
+    return sse_data({"error": True, "message": message})
+
+
+def sse_done() -> str:
+    """输出结束标记。"""
+    return "data: [DONE]\n\n"

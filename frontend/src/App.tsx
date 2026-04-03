@@ -17,7 +17,6 @@ function App() {
     updateFileContent,
     updateAnalysisResults,
     updateOutline,
-    updateSelectedChapter,
     nextStep,
     prevStep,
   } = useAppState();
@@ -49,8 +48,6 @@ function App() {
         return (
           <ContentEdit
             outlineData={state.outlineData}
-            selectedChapter={state.selectedChapter}
-            onChapterSelect={updateSelectedChapter}
           />
         );
       default:
