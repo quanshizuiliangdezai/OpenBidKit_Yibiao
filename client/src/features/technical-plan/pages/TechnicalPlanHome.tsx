@@ -169,7 +169,6 @@ function TechnicalPlanHome() {
     try {
       const result = await window.yibiao?.export.exportWord({
         project_name: state.outlineData.project_name,
-        project_overview: state.outlineData.project_overview || state.projectOverview,
         outline: state.outlineData.outline,
       });
       if (result?.canceled) {

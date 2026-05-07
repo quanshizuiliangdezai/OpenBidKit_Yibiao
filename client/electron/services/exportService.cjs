@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { fileURLToPath } = require('node:url');
 const { app, dialog } = require('electron');
 const { imageSize } = require('image-size');
 const {
@@ -111,7 +112,7 @@ async function loadImage(source, context = {}) {
   }
 
   const fileUrlPrefix = 'file://';
-  const rawPath = url.startsWith(fileUrlPrefix) ? decodeURIComponent(new URL(url).pathname) : url;
+  const rawPath = url.startsWith(fileUrlPrefix) ? fileURLToPath(url) : url;
   const resolvedPath = path.isAbsolute(rawPath)
     ? rawPath
     : path.resolve(context.baseDir || process.cwd(), rawPath);
@@ -180,7 +181,12 @@ async function inlineRuns(nodes = [], context = {}, marks = {}) {
   return runs;
 }
 
-async function tableCellParagraphs(cell, context) {
+async function tableCellParagraphs(cell, context, isHeader = false) {
+  const phrasingNodes = (cell.children || []).filter((child) => child.type !== 'paragraph');
+  if (phrasingNodes.length) {
+    return [paragraph(await inlineRuns(phrasingNodes, context, { bold: isHeader }), { after: 80 })];
+  }
+
   const blocks = await markdownNodesToDocx(cell.children || [], context, { inTable: true });
   if (!blocks.length) return [paragraph([textRun('')], { after: 80 })];
   return blocks.filter((block) => block instanceof Paragraph);
@@ -214,7 +220,7 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
         const cells = [];
         for (const cell of row.children || []) {
           cells.push(new TableCell({
-            children: await tableCellParagraphs(cell, context),
+            children: await tableCellParagraphs(cell, context, rowIndex === 0),
             shading: rowIndex === 0 ? { type: ShadingType.CLEAR, fill: 'F1F6FF' } : undefined,
             margins: { top: 120, bottom: 120, left: 140, right: 140 },
           }));
@@ -236,13 +242,17 @@ async function markdownNodesToDocx(nodes = [], context = {}, options = {}) {
         }));
       }
     } else if (node.type === 'blockquote') {
-      const quoteBlocks = await markdownNodesToDocx(node.children || [], context, options);
-      for (const block of quoteBlocks) {
-        if (block instanceof Paragraph) {
-          block.root.push;
+      for (const child of node.children || []) {
+        if (child.type === 'paragraph') {
+          blocks.push(paragraph(await inlineRuns(child.children, context, { color: '536176' }), {
+            indent: { left: 360 },
+            border: { left: { style: BorderStyle.SINGLE, size: 12, color: '2174FD' } },
+            shading: { type: ShadingType.CLEAR, fill: 'F6F9FF' },
+          }));
+        } else {
+          blocks.push(...await markdownNodesToDocx([child], context, options));
         }
       }
-      blocks.push(...quoteBlocks.map((block) => block instanceof Paragraph ? block : block));
     } else if (node.type === 'code') {
       blocks.push(paragraph([new TextRun({ text: cleanText(node.value), font: 'Consolas', size: 21, color: '243048' })], {
         shading: { type: ShadingType.CLEAR, fill: 'F6F9FF' },
@@ -321,11 +331,6 @@ async function buildDocxBuffer(payload) {
     paragraph([textRun('内容由 AI 生成', { italics: true, size: 18 })], { alignment: AlignmentType.CENTER, after: 120 }),
     paragraph([textRun(payload.project_name || '投标技术文件', { bold: true, size: 34 })], { alignment: AlignmentType.CENTER, after: 300 }),
   ];
-
-  if (String(payload.project_overview || '').trim()) {
-    children.push(paragraph([textRun('项目概述', { bold: true })], { heading: HeadingLevel.HEADING_1, before: 260, after: 120 }));
-    children.push(...await markdownToDocxBlocks(payload.project_overview, context));
-  }
 
   await addOutlineItems(children, payload.outline || [], context);
 

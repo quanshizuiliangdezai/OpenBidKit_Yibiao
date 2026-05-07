@@ -66,6 +66,22 @@
 | Error | Attempt | Resolution |
 | --- | --- | --- |
 
+## Current Task: Step04 Word 导出 Markdown 完整转换
+
+### Goal
+将 Step04 正文导出 Word 从“浅层 Markdown 文本处理”升级为“Markdown AST 到 Word 原生结构转换”，确保图片、表格、加粗、列表等 Markdown 语法在 `.docx` 中真实还原，而不是直接输出 Markdown 源文本。
+
+### Phases
+- [completed] 1. 检查现有 `exportService.cjs` 手写 docx XML 和 Markdown 正则解析实现。
+- [completed] 2. 接入 `docx`、`unified`、`remark-parse`、`remark-gfm`、`image-size`。
+- [completed] 3. 重写导出核心为 Markdown AST 递归转换 Word 段落、表格、列表、链接、图片等对象。
+- [completed] 4. 保留现有 `exportWord(payload)` IPC 和保存对话框，不改 Renderer 调用链路。
+- [completed] 5. 运行 docx buffer、表格文本、图片 media、`npm run build`、`npm audit` 和 `git diff --check` 验证。
+
+### Decisions
+- 不继续扩展正则和手写 Word XML，改用 `docx` 对象模型保证后续排版可控。
+- 图片转换在 Electron Main 侧完成，支持 `data:image/*;base64`、`http/https`、`file://`、绝对路径和相对路径。
+
 ## Current Task: Step02/Step03 左侧进度块统一
 
 ### Goal

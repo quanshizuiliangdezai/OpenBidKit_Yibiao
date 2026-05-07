@@ -28,3 +28,4 @@
 - 已排查 Windows 安装包“无响应”：下载文件完整且可解包，本地启动后安装器进程有响应窗口；同时已将后续构建产物命名修正为 `Yibiao-版本-平台-架构.ext`，本地 NSIS 构建验证通过。
 - 已修复打包后图标仍为 Electron 默认图标：恢复 Windows exe 图标资源编辑；macOS workflow 在打包前从 `assets/icon_256.png` 生成 `assets/icon.icns`；`package.json` 格式、`npm run build` 和 `git diff --check` 通过。
 - 已统一 Step02/Step03 左侧进度块为 Step04 的 `content-outline-stats` 风格：Step02 任务列表、Step03 生成日志保持独立滚动；清理旧进度卡样式；`npm run build` 和 `git diff --check` 通过。
+- 已将 Step04 Word 导出从手写 XML/浅层 Markdown 正则改为 Markdown AST 到 `docx` 对象模型：支持标题、加粗、斜体、删除线、链接、列表、表格、引用、代码块和图片导出；模块 smoke test、表格/图片 zip 检查、`npm run build`、`npm audit` 和 `git diff --check` 通过。
