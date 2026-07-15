@@ -1,0 +1,35 @@
+# 依赖与构建产物
+node_modules/
+client/node_modules/
+client/release/
+client/dist/
+# 第三方二进制（opencode/fd/jq/rg 等，由 prepare 脚本下载，非源码）
+client/vendor/
+*.log
+.DS_Store
+
+# 本地 Samba 配置（含内部 IP / 密码，严禁进仓库）
+client/electron/sync-config.local.json
+
+# 本地防丢保险库与脚本（fork 仓库本身就是备份，无需入库）
+_ourmods/
+restore-our-mods.ps1
+snapshot-our-mods.ps1
+
+# 工作区杂项（非源码，不入库）
+03-yibiao/
+OpenBidKit_项目研究.md
+screenshots/
+文章/
+使用说明/
+.agents/
+.vscode/
+*.diff
+*.patch
+*.log
+build.log
+client/build.log
+client/pack.log
+tmp_outline_diff.patch
+client/tmp_outline_diff.patch
+client/.tmp-opencode-download/

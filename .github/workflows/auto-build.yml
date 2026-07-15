@@ -1,0 +1,100 @@
+name: Auto Build & Publish (merge upstream)
+
+# 全自动发版流水线：
+# 1) 周期性检查上游 FB208/OpenBidKit_Yibiao 的最新 Release
+# 2) 若上游有新版，自动合并进咱们仓库（保留咱们的同步/账户 mods）
+# 3) 自动打包 Windows 安装包并发布到咱们自己的 Release 渠道
+# 4) 同事软件的自动更新会从咱们渠道拉取 -> 同时拿到上游新功能 + 咱们的 mods
+#
+# 首次发版：在 Actions 页面手动 Run workflow，勾选 force_build=true。
+# 之后完全自动，无需任何人打包。
+
+on:
+  schedule:
+    - cron: '23 */6 * * *'   # 每 6 小时检查一次上游
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: '强制构建并发布（忽略版本比对，用于首次发版或紧急重发）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout (our repo)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Git identity
+        run: |
+          git config user.name "yibiao-ci"
+          git config user.email "ci@yibiao.local"
+
+      - name: Add upstream & fetch
+        shell: bash
+        run: |
+          git remote add upstream https://github.com/FB208/OpenBidKit_Yibiao.git || true
+          git fetch upstream --tags
+
+      - name: Get upstream latest release tag
+        id: upstream
+        shell: bash
+        run: |
+          TAG=$(gh release view --repo FB208/OpenBidKit_Yibiao --json tagName -q .tagName)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Upstream latest tag: $TAG"
+
+      - name: Merge upstream (if newer)
+        id: merge
+        shell: bash
+        run: |
+          TAG="${{ steps.upstream.outputs.tag }}"
+          LAST=$(cat .upstream-version 2>/dev/null || echo "")
+          if [ "$LAST" = "$TAG" ] && [ "${{ github.event.inputs.force_build }}" != "true" ]; then
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "Already synced with upstream $TAG, skip."
+            exit 0
+          fi
+          if [ "${{ github.event.inputs.force_build }}" = "true" ]; then
+            echo "Force build requested."
+          else
+            git merge "upstream/$TAG" --no-edit || { echo "MERGE CONFLICT on upstream $TAG"; git merge --abort; echo "should_build=false" >> "$GITHUB_OUTPUT"; exit 1; }
+            echo "$TAG" > .upstream-version
+            git add -A
+            git commit -m "chore: merge upstream $TAG" || true
+            git push origin HEAD
+          fi
+          echo "should_build=true" >> "$GITHUB_OUTPUT"
+
+      - name: Write Samba sync config from secret
+        if: steps.merge.outputs.should_build == 'true'
+        shell: bash
+        run: |
+          echo '${{ secrets.YIBIAO_SYNC_CONFIG }}' > client/electron/sync-config.local.json
+
+      - name: Setup Node 22
+        if: steps.merge.outputs.should_build == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install dependencies
+        if: steps.merge.outputs.should_build == 'true'
+        working-directory: client
+        run: npm ci
+
+      - name: Build & publish to our channel
+        if: steps.merge.outputs.should_build == 'true'
+        working-directory: client
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist:win -- --publish always
