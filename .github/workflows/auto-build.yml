@@ -1,17 +1,16 @@
 name: Build & Publish (our channel)
 
 # 自有更新渠道的打包发版流水线。
-# 触发：push 到 master 时自动构建并发布 Windows 安装包到咱们自己的 Release 渠道；
+# 触发：push 到 main 时自动构建并发布 Windows 安装包到咱们自己的 Release 渠道；
 #       也可在 Actions 页面手动 Run workflow 强制构建。
 # 同事软件的设置里保持默认 GitHub 渠道（即咱们仓库），即可自动更新。
 #
-# 说明：当前仓库为独立仓库（带咱们 mods）。上游 FB208 的新功能如需并入，
-#       需先把本仓库转为 FB208 的 fork（共享历史）后再启用自动合并；
-#       在此之前，mods 的更新靠 push 到 master 自动发版。
+# 本仓库已是 FB208/OpenBidKit_Yibiao 的真正 fork（共享历史）。
+# 上游新功能自动合并由 sync-upstream.yml 处理（每天 08:00 UTC+8）。
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   workflow_dispatch:
     inputs:
       force_build:
