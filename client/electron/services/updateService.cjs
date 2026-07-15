@@ -3,11 +3,11 @@ const http = require('node:http');
 const https = require('node:https');
 const path = require('node:path');
 
-const GITHUB_RELEASE_API = 'https://api.github.com/repos/FB208/OpenBidKit_Yibiao/releases/latest';
-const GITHUB_RELEASE_DOWNLOAD_URL = 'https://github.com/FB208/OpenBidKit_Yibiao/releases/latest';
+const GITHUB_RELEASE_API = 'https://api.github.com/repos/quanshizuiliangdezai/OpenBidKit_Yibiao/releases/latest';
+const GITHUB_RELEASE_DOWNLOAD_URL = 'https://github.com/quanshizuiliangdezai/OpenBidKit_Yibiao/releases/latest';
 const GITHUB_PROVIDER_OPTIONS = {
   provider: 'github',
-  owner: 'FB208',
+  owner: 'quanshizuiliangdezai',
   repo: 'OpenBidKit_Yibiao',
   releaseType: 'release',
 };

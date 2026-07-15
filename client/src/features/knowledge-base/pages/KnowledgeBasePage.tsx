@@ -300,6 +300,7 @@ function KnowledgeBasePage() {
   const [activeFolderId, setActiveFolderId] = useState('');
   const [listLoading, setListLoading] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [migrationRunning, setMigrationRunning] = useState(false);
   const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
   const [pendingMigrationStatus, setPendingMigrationStatus] = useState<KnowledgeBaseMigrationStatus | null>(null);
@@ -671,6 +672,44 @@ function KnowledgeBasePage() {
     }
   };
 
+  const syncToTeam = async () => {
+    if (!window.yibiao?.sync) return;
+    if (syncing) return;
+    try {
+      setSyncing(true);
+      const result = await window.yibiao.sync.push();
+      if (!result?.ok) {
+        showToast(result?.error || '同步到团队库失败', 'error');
+        return;
+      }
+      showToast(`已同步 ${result.pushed_documents ?? 0} 篇文档到团队库`, 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '同步到团队库失败', 'error');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const pullFromTeam = async () => {
+    if (!window.yibiao?.sync) return;
+    if (syncing) return;
+    try {
+      setSyncing(true);
+      const result = await window.yibiao.sync.pull();
+      if (!result?.ok) {
+        showToast(result?.error || '拉取团队库失败', 'error');
+        return;
+      }
+      showToast(`已拉取 ${result.merged_documents ?? 0} 篇新文档（跳过 ${result.skipped_documents ?? 0} 篇已有）`, 'success');
+      const refreshed = await window.yibiao?.knowledgeBase.list();
+      if (refreshed) setIndex(refreshed);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '拉取团队库失败', 'error');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const renameFolder = async (folderId: string, currentName: string) => {
     if (migrationRunning) {
       showToast('知识库迁移中，请稍候', 'info');
@@ -970,6 +1009,8 @@ function KnowledgeBasePage() {
           <button type="button" className="primary-action" onClick={uploadDocuments} disabled={loading || migrationRunning || !activeFolder}>
             {migrationRunning ? '迁移中...' : loading ? '处理中...' : '上传文档'}
           </button>
+          <button type="button" className="secondary-action" onClick={syncToTeam} disabled={syncing || migrationRunning || listLoading}>同步到团队库</button>
+          <button type="button" className="secondary-action" onClick={pullFromTeam} disabled={syncing || migrationRunning || listLoading}>拉取团队库</button>
         </div>
       </section>
 

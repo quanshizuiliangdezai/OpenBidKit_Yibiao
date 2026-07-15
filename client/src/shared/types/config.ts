@@ -76,6 +76,12 @@ export interface AgentModeScenariosConfig {
   existing_plan_expansion_original_outline_extraction: boolean;
 }
 
+export interface AccountInfo {
+  username: string;
+  display_name: string;
+  registered_at: string;
+}
+
 export interface ClientConfig extends AiConfig {
   image_model: ImageModelConfig;
   image_model_profiles: ImageModelProfiles;
@@ -89,4 +95,5 @@ export interface ClientConfig extends AiConfig {
   developer_token_stats_auto_open?: boolean;
   analytics_client_id?: string;
   analytics_created_at?: string;
+  account?: AccountInfo | null;
 }

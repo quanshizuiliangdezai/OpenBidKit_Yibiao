@@ -53,7 +53,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "FB208",
+        "owner": "quanshizuiliangdezai",
         "repo": "OpenBidKit_Yibiao",
         "releaseType": "release"
       }

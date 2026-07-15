@@ -1,0 +1,104 @@
+name: Build & Publish (our channel)
+
+# 自有更新渠道的打包发版流水线。
+# 触发：push 到 master 时自动构建并发布 Windows 安装包到咱们自己的 Release 渠道；
+#       也可在 Actions 页面手动 Run workflow 强制构建。
+# 同事软件的设置里保持默认 GitHub 渠道（即咱们仓库），即可自动更新。
+#
+# 说明：当前仓库为独立仓库（带咱们 mods）。上游 FB208 的新功能如需并入，
+#       需先把本仓库转为 FB208 的 fork（共享历史）后再启用自动合并；
+#       在此之前，mods 的更新靠 push 到 master 自动发版。
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: '强制构建并发布（即使无新提交）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  OPENCODE_VERSION: 'v1.17.8'
+  RIPGREP_VERSION: '14.1.1'
+  FD_VERSION: 'v10.3.0'
+  JQ_VERSION: 'jq-1.7.1'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout (our repo)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Git identity
+        run: |
+          git config user.name "yibiao-ci"
+          git config user.email "ci@yibiao.local"
+
+      - name: Write Samba sync config from secret
+        shell: bash
+        run: echo '${{ secrets.YIBIAO_SYNC_CONFIG }}' > client/electron/sync-config.local.json
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Prepare OpenCode binary
+        working-directory: client
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/prepare-opencode-binary.cjs --platform win32 --arch x64
+
+      - name: Verify OpenCode binary
+        working-directory: client
+        run: node scripts/verify-opencode-binary.cjs --platform win32 --arch x64
+
+      - name: Prepare OpenCode tools
+        working-directory: client
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/prepare-opencode-tools.cjs --platform win32 --arch x64
+
+      - name: Verify OpenCode tools
+        working-directory: client
+        run: node scripts/verify-opencode-tools.cjs --platform win32 --arch x64
+
+      - name: Rebuild Electron native dependencies
+        working-directory: client
+        run: npm run postinstall
+
+      - name: Smoke test Electron native dependencies
+        working-directory: client
+        run: npm run smoke:electron-native
+
+      - name: Set build version (timestamp, 单调递增)
+        working-directory: client
+        shell: bash
+        run: |
+          TS=$(date +%Y%m%d%H%M)
+          npm version "0.1.$TS" --no-git-tag-version --allow-same-version
+
+      - name: Build renderer
+        working-directory: client
+        run: npm run build
+
+      - name: Build & publish Windows installer
+        working-directory: client
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win nsis zip --publish always

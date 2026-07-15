@@ -30,6 +30,8 @@ const { createSystemFontService } = require('../services/systemFontService.cjs')
 const { createTaskService } = require('../services/taskService.cjs');
 const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
 const { createTemplateStore } = require('../services/templateStore.cjs');
+const { createSyncService } = require('../services/syncService.cjs');
+const { registerSyncIpc } = require('./syncIpc.cjs');
 const { checkRequiredOnlineServices, getRequiredOnlineServiceStatus } = require('../services/requiredOnlineServices.cjs');
 const { initLocalImageRenderService } = require('../services/localImageRenderService.cjs');
 
@@ -115,6 +117,8 @@ const workspaceDatabaseChannels = [
   'templates:create',
   'templates:update',
   'templates:delete',
+  'sync:push',
+  'sync:pull',
 ];
 
 function clearWorkspaceDatabaseIpc() {
@@ -183,6 +187,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const templateStore = createTemplateStore({ db: sqliteDatabase.db });
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
   const taskService = createTaskService({ aiService, agentService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
+  const syncService = createSyncService({ app, db: sqliteDatabase.db, configStore });
 
   clearWorkspaceDatabaseIpc();
   registerKnowledgeBaseIpc({ knowledgeBaseService });
@@ -191,8 +196,9 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   registerRejectionCheckIpc({ rejectionCheckStore });
   registerTemplateIpc({ templateStore });
   registerTaskIpc({ taskService });
+  registerSyncIpc({ syncService });
   updateStatus({ phase: 'ready', ready: true, message: '本地数据库已就绪' });
-  return { sqliteDatabase };
+  return { sqliteDatabase, syncService };
 }
 
 function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow }) {

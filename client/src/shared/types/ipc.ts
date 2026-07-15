@@ -383,6 +383,21 @@ export interface AgentSelfCheckReportExportResult {
   message: string;
 }
 
+export interface SyncPushResult {
+  ok: boolean;
+  error?: string;
+  pushed_documents?: number;
+  file?: string;
+}
+
+export interface SyncPullResult {
+  ok: boolean;
+  error?: string;
+  merged_documents?: number;
+  skipped_documents?: number;
+  note?: string;
+}
+
 export interface YibiaoBridge {
   appName: string;
   platform: string;
@@ -538,5 +553,9 @@ export interface YibiaoBridge {
   };
   systemFonts: {
     list: () => Promise<string[]>;
+  };
+  sync: {
+    push: () => Promise<SyncPushResult>;
+    pull: () => Promise<SyncPullResult>;
   };
 }

@@ -252,6 +252,7 @@ const defaultConfig = {
   developer_token_stats_auto_open: false,
   analytics_client_id: '',
   analytics_created_at: '',
+  account: null,
 };
 
 function createAnalyticsClientId() {
@@ -469,6 +470,18 @@ function normalizeAgentModeScenarios(source) {
   };
 }
 
+// 归一化账户信息（团队成员注册身份）。用户名缺失或非字符串视为未注册。
+function normalizeAccount(source) {
+  if (!source || typeof source !== 'object') return null;
+  const username = typeof source.username === 'string' ? String(source.username).trim() : '';
+  if (!username) return null;
+  return {
+    username,
+    display_name: typeof source.display_name === 'string' ? String(source.display_name).trim() : '',
+    registered_at: typeof source.registered_at === 'string' ? source.registered_at : '',
+  };
+}
+
 const VALID_NUMBERING_FORMATS = ['outline-decimal', 'custom'];
 const VALID_HEADING_BORDER_STRUCTURES = ['上下结构', '左右结构'];
 const VALID_LIST_STYLES = ['none', 'disc', 'circle', 'square', 'diamond', 'dash', 'check', 'arrow', 'sparkle'];
@@ -676,6 +689,7 @@ function normalizeConfig(config) {
     developer_token_stats_auto_open: source.developer_token_stats_auto_open === undefined ? defaultConfig.developer_token_stats_auto_open : Boolean(source.developer_token_stats_auto_open),
     analytics_client_id: source.analytics_client_id || defaultConfig.analytics_client_id,
     analytics_created_at: source.analytics_created_at || defaultConfig.analytics_created_at,
+    account: normalizeAccount(source.account),
   };
 }
 

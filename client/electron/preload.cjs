@@ -185,6 +185,10 @@ const bridge = {
   systemFonts: {
     list: () => ipcRenderer.invoke('system-fonts:list'),
   },
+  sync: {
+    push: () => ipcRenderer.invoke('sync:push'),
+    pull: () => ipcRenderer.invoke('sync:pull'),
+  },
 };
 
 contextBridge.exposeInMainWorld('yibiao', bridge);

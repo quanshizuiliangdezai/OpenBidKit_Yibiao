@@ -109,6 +109,11 @@ export const appMenuItems: AppMenuItem[] = [
     label: '资源下载',
     description: '投标相关资料、工具下载',
   },
+  {
+    id: 'account',
+    label: '账户',
+    description: '团队成员注册与上传身份',
+  },
 ];
 
 const developerMenuItems: AppMenuItem[] = [
