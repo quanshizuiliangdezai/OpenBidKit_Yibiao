@@ -1,0 +1,74 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    # Every day at 08:00 UTC+8 (00:00 UTC)
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/FB208/OpenBidKit_Yibiao.git || true
+          git fetch upstream
+
+      - name: Merge upstream/main
+        run: |
+          # Try to merge upstream/main into master
+          # Use --no-edit to keep commit message clean
+          # If there are conflicts, the step will fail and we'll get notified
+          git merge upstream/main --no-edit || {
+            echo "::warning::Merge conflicts detected. Aborting merge."
+            git merge --abort
+            exit 1
+          }
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet HEAD~1 HEAD -- . ':!.github'; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push to master
+        if: steps.changes.outputs.has_changes == 'true'
+        run: |
+          git push origin master
+
+      - name: Create summary
+        run: |
+          echo "## Upstream Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.changes.outputs.has_changes }}" == "true" ]; then
+            echo "✅ Merged upstream changes and pushed to master." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### New commits from upstream:" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            git log --oneline HEAD~1..HEAD >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### auto-build workflow will be triggered automatically by the push." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "ℹ️ No upstream changes to merge. Already up to date." >> $GITHUB_STEP_SUMMARY
+          fi
