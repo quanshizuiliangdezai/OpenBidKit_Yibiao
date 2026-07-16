@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
   last_batch_size INTEGER, parser_label TEXT, sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   uploaded_by TEXT, uploaded_at TEXT,
+  is_deleted INTEGER NOT NULL DEFAULT 0,
+  deleted_at TEXT,
   FOREIGN KEY (folder_id) REFERENCES knowledge_folders(folder_id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS knowledge_blocks (
@@ -161,12 +163,33 @@ def copy_rows_by_doc(src, dst, table, document_id):
     dst.executemany(sql, [tuple(row[cols.index(c)] for c in cols_no_id) for row in rows])
 
 
+def column_exists(conn, table, column):
+    cur = conn.execute("PRAGMA table_info(%s)" % table)
+    return any(c[1] == column for c in cur.fetchall())
+
+
 def copy_document(src, dst, document_id, username, now):
     cur = src.execute("SELECT * FROM knowledge_documents WHERE document_id = ?", (document_id,))
     row = cur.fetchone()
     if not row:
         return
     cols = [d[0] for d in cur.description]
+    is_deleted = 0
+    if 'is_deleted' in cols:
+        is_deleted = int(row[cols.index('is_deleted')] or 0)
+
+    if is_deleted:
+        # 删除指令：主库有则软删，没有则忽略（避免把已删文档插进去）
+        exists = dst.execute(
+            "SELECT 1 FROM knowledge_documents WHERE document_id=?", (document_id,)
+        ).fetchone()
+        if exists:
+            dst.execute(
+                "UPDATE knowledge_documents SET is_deleted=1, deleted_at=?, uploaded_by=?, uploaded_at=? WHERE document_id=?",
+                (now, username, now, document_id)
+            )
+        return
+
     cols_no_id = [c for c in cols if c != 'id']
     vals = [row[cols.index(c)] for c in cols_no_id]
     cols_no_id.append('uploaded_by')
@@ -178,6 +201,8 @@ def copy_document(src, dst, document_id, username, now):
     dst.execute(sql, vals)
     for t in DOC_CHILD_TABLES:
         copy_rows_by_doc(src, dst, t, document_id)
+
+
 
 
 def copy_folders(src, dst, folder_ids):
@@ -267,15 +292,32 @@ def process_package(zip_path, master):
         
         src = sqlite3.connect(pkg_db)
         now = datetime.datetime.now().isoformat()
+        pkg_has_deleted = column_exists(src, 'knowledge_documents', 'is_deleted')
+        where_clause = "status='success'"
+        if pkg_has_deleted:
+            where_clause = "status='success' OR is_deleted=1"
         docs = src.execute(
-            "SELECT document_id, folder_id FROM knowledge_documents WHERE status='success'"
+            "SELECT document_id, folder_id FROM knowledge_documents WHERE %s" % where_clause
         ).fetchall()
         copy_folders(src, master, set(d[1] for d in docs))
         merged = 0
+        deleted = 0
         for doc_id, folder_id in docs:
             exists = master.execute(
                 "SELECT 1 FROM knowledge_documents WHERE document_id=?", (doc_id,)
             ).fetchone()
+            if pkg_has_deleted:
+                is_deleted = src.execute(
+                    "SELECT is_deleted FROM knowledge_documents WHERE document_id=?", (doc_id,)
+                ).fetchone()
+                if is_deleted and int(is_deleted[0] or 0):
+                    if exists:
+                        master.execute(
+                            "UPDATE knowledge_documents SET is_deleted=1, deleted_at=?, uploaded_by=? WHERE document_id=?",
+                            (now, username, doc_id)
+                        )
+                        deleted += 1
+                    continue
             if exists:
                 continue
             copy_document(src, master, doc_id, username, now)
@@ -283,8 +325,9 @@ def process_package(zip_path, master):
             merged += 1
         src.close()
         master.commit()
-        print("[OK] %s by %s: merged=%d" % (os.path.basename(zip_path), username, merged))
+        print("[OK] %s by %s: merged=%d, deleted=%d" % (os.path.basename(zip_path), username, merged, deleted))
         return True
+
     except Exception as e:
         master.rollback()
         print("[ERR] %s: %s" % (os.path.basename(zip_path), e))

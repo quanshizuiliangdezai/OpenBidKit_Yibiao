@@ -681,7 +681,11 @@ function KnowledgeBasePage() {
         showToast(result?.error || '同步到团队库失败', 'error');
         return;
       }
-      showToast(`已同步 ${result.pushed_documents ?? 0} 篇文档到团队库`, 'success');
+      const parts = [`已同步 ${result.pushed_documents ?? 0} 篇文档到团队库`];
+      if ((result.deleted_documents ?? 0) > 0) {
+        parts.push(`删除 ${result.deleted_documents} 篇`);
+      }
+      showToast(parts.join('，'), 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '同步到团队库失败', 'error');
     } finally {
@@ -699,7 +703,7 @@ function KnowledgeBasePage() {
         showToast(result?.error || '拉取团队库失败', 'error');
         return;
       }
-      showToast(`已拉取 ${result.merged_documents ?? 0} 篇新文档（跳过 ${result.skipped_documents ?? 0} 篇已有）`, 'success');
+      showToast(`已拉取 ${result.merged_documents ?? 0} 篇新文档（跳过 ${result.skipped_documents ?? 0} 篇已有${(result.deleted_documents ?? 0) > 0 ? `，删除 ${result.deleted_documents} 篇` : ''}）`, 'success');
       const refreshed = await window.yibiao?.knowledgeBase.list();
       if (refreshed) setIndex(refreshed);
     } catch (error) {
@@ -764,7 +768,7 @@ function KnowledgeBasePage() {
       const result = await window.yibiao?.knowledgeBase.deleteDocument(document.id);
       setIndex((prev) => ({ ...prev, documents: prev.documents.filter((item) => item.id !== document.id) }));
       setViewer((prev) => (prev?.document.id === document.id ? null : prev));
-      showToast(result?.message || '文档已删除', 'success');
+      showToast(result?.message || '文档已删除（待同步到团队库）', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '删除文档失败', 'error');
     }

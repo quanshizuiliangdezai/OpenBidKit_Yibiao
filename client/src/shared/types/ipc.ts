@@ -404,6 +404,7 @@ export interface SyncPushResult {
   ok: boolean;
   error?: string;
   pushed_documents?: number;
+  deleted_documents?: number;
   file?: string;
 }
 
@@ -412,6 +413,7 @@ export interface SyncPullResult {
   error?: string;
   merged_documents?: number;
   skipped_documents?: number;
+  deleted_documents?: number;
   note?: string;
 }
 

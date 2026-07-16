@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 17;
+const schemaVersion = 18;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -266,6 +266,11 @@ function addKnowledgeDocumentSortOrder(db) {
     CREATE INDEX IF NOT EXISTS idx_knowledge_documents_folder_order
     ON knowledge_documents(folder_id, sort_order, created_at DESC);
   `);
+}
+
+function addKnowledgeDocumentSoftDeleteColumns(db) {
+  addColumnIfMissing(db, 'knowledge_documents', 'is_deleted', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing(db, 'knowledge_documents', 'deleted_at', 'TEXT');
 }
 
 function createDuplicateCheckSchema(db) {
@@ -722,6 +727,8 @@ function createKnowledgeBaseSchema(db) {
       sort_order INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      deleted_at TEXT,
       FOREIGN KEY (folder_id) REFERENCES knowledge_folders(folder_id) ON DELETE CASCADE
     );
 
@@ -1250,9 +1257,9 @@ const migrations = [
     up: addTechnicalPlanTenderFiles,
   },
   {
-    version: 17,
-    description: '技术方案新增全文图片编排结果',
-    up: addTechnicalPlanIllustrationPlan,
+    version: 18,
+    description: '知识库文档新增软删除同步字段',
+    up: addKnowledgeDocumentSoftDeleteColumns,
   },
 ];
 

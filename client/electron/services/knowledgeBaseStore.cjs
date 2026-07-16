@@ -305,6 +305,7 @@ function createKnowledgeBaseStore({ app, db }) {
       SELECT d.*
       FROM knowledge_documents d
       LEFT JOIN knowledge_folders f ON f.folder_id = d.folder_id
+      WHERE d.is_deleted = 0
       ORDER BY COALESCE(f.sort_order, 0) ASC, d.folder_id ASC, d.sort_order ASC, d.created_at DESC, d.document_id ASC
     `).all().map(documentFromRow);
     return { folders, documents };
@@ -315,7 +316,8 @@ function createKnowledgeBaseStore({ app, db }) {
     const legacyRows = db.prepare(`
       SELECT d.document_id
       FROM knowledge_documents d
-      WHERE d.status != 'success'
+      WHERE d.is_deleted = 0
+        AND d.status != 'success'
         AND NOT EXISTS (
           SELECT 1 FROM knowledge_document_steps s WHERE s.document_id = d.document_id LIMIT 1
         )
@@ -325,7 +327,8 @@ function createKnowledgeBaseStore({ app, db }) {
     const interruptedRows = db.prepare(`
       SELECT d.document_id
       FROM knowledge_documents d
-      WHERE d.status IN (${placeholders})
+      WHERE d.is_deleted = 0
+        AND d.status IN (${placeholders})
         AND EXISTS (
           SELECT 1 FROM knowledge_document_steps s WHERE s.document_id = d.document_id LIMIT 1
         )
@@ -352,7 +355,7 @@ function createKnowledgeBaseStore({ app, db }) {
   }
 
   function getDocument(documentId) {
-    const row = db.prepare('SELECT * FROM knowledge_documents WHERE document_id = ?').get(documentId);
+    const row = db.prepare('SELECT * FROM knowledge_documents WHERE document_id = ? AND is_deleted = 0').get(documentId);
     if (!row) throw new Error('知识库文档不存在');
     return documentFromRow(row);
   }
@@ -381,12 +384,20 @@ function createKnowledgeBaseStore({ app, db }) {
 
   function deleteDocument(documentId) {
     const document = getDocument(documentId);
-    db.prepare('DELETE FROM knowledge_documents WHERE document_id = ?').run(documentId);
+    const timestamp = now();
+    db.prepare('UPDATE knowledge_documents SET is_deleted = 1, deleted_at = ?, updated_at = ? WHERE document_id = ?').run(timestamp, timestamp, documentId);
     return document;
   }
 
+  function hardDeleteDocument(documentId) {
+    const document = db.prepare('SELECT * FROM knowledge_documents WHERE document_id = ?').get(documentId);
+    if (!document) throw new Error('知识库文档不存在');
+    db.prepare('DELETE FROM knowledge_documents WHERE document_id = ?').run(documentId);
+    return documentFromRow(document);
+  }
+
   function getNextDocumentSortOrder(folderId) {
-    return Number(db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS value FROM knowledge_documents WHERE folder_id = ?').get(folderId)?.value ?? -1) + 1;
+    return Number(db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS value FROM knowledge_documents WHERE folder_id = ? AND is_deleted = 0').get(folderId)?.value ?? -1) + 1;
   }
 
   function reorderIds(ids, draggedId, targetId, position) {
@@ -415,7 +426,7 @@ function createKnowledgeBaseStore({ app, db }) {
     const rows = db.prepare(`
       SELECT document_id
       FROM knowledge_documents
-      WHERE folder_id = ? AND document_id != ?
+      WHERE folder_id = ? AND document_id != ? AND is_deleted = 0
       ORDER BY sort_order ASC, created_at DESC, document_id ASC
     `).all(folderId, excludedDocumentId || '');
     return rows.map((row) => row.document_id);
@@ -1072,7 +1083,7 @@ function createKnowledgeBaseStore({ app, db }) {
     const seen = new Set();
     const items = [];
     for (const documentId of ids) {
-      const document = db.prepare('SELECT document_id, status FROM knowledge_documents WHERE document_id = ?').get(documentId);
+      const document = db.prepare('SELECT document_id, status FROM knowledge_documents WHERE document_id = ? AND is_deleted = 0').get(documentId);
       if (!document || document.status !== 'success') continue;
       for (const item of readItems(documentId)) {
         const itemId = String(item?.id || '').trim();
@@ -1177,7 +1188,7 @@ function createKnowledgeBaseStore({ app, db }) {
     }
 
     for (const document of legacy.documents) {
-      const exists = db.prepare('SELECT 1 FROM knowledge_documents WHERE document_id = ?').get(document.id);
+      const exists = db.prepare('SELECT 1 FROM knowledge_documents WHERE document_id = ? AND is_deleted = 0').get(document.id);
       if (!exists) {
         throw new Error(`迁移校验失败，未找到文档：${document.file_name || document.id}`);
       }

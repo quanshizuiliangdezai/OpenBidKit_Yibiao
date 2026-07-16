@@ -123,6 +123,16 @@ function copyDocumentFiles(srcKbRoot, dstKbRoot, folderId, documentId) {
   fs.cpSync(src, dst, { recursive: true });
 }
 
+// 判断某表是否存在某列（用于兼容旧主库/旧客户端）
+function hasColumn(db, table, column) {
+  return db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all()
+    .some((c) => c.name === column);
+}
+
+
+
 // 获取配置文件路径（用于同步到团队库）
 function getConfigFilePath(app) {
   const paths = require('../utils/paths.cjs');
@@ -210,14 +220,18 @@ function createSyncService({ app, db, configStore }) {
     const kbRoot = paths.getKnowledgeBaseDir(app);
     const configPath = getConfigFilePath(app);
 
-    const docs = db
-      .prepare("SELECT document_id, folder_id FROM knowledge_documents WHERE status = 'success'")
+    const successDocs = db
+      .prepare("SELECT document_id, folder_id FROM knowledge_documents WHERE status = 'success' AND is_deleted = 0")
       .all();
-    if (!docs.length) {
-      return { ok: false, error: '没有已处理成功(status=success)的文档可同步' };
+    const deletedDocs = db
+      .prepare("SELECT document_id, folder_id FROM knowledge_documents WHERE is_deleted = 1")
+      .all();
+    const syncableDocs = [...successDocs, ...deletedDocs];
+    if (!syncableDocs.length) {
+      return { ok: false, error: '没有可同步的文档' };
     }
 
-    const folderIds = new Set(docs.map((d) => d.folder_id));
+    const folderIds = new Set(syncableDocs.map((d) => d.folder_id));
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yibiao-sync-'));
     try {
       const pkgPath = path.join(tmp, 'knowledge.sqlite');
@@ -225,9 +239,13 @@ function createSyncService({ app, db, configStore }) {
       try {
         copyKnowledgeSchema(pkgDb, db);
         copyFolders(db, pkgDb, folderIds);
-        for (const d of docs) {
+        for (const d of successDocs) {
           copyDocument(db, pkgDb, d.document_id);
           copyDocumentFiles(kbRoot, path.join(tmp, 'kb'), d.folder_id, d.document_id);
+        }
+        // 已软删除的文档只复制 knowledge_documents 行（作为删除指令），不复制子表/文件
+        for (const d of deletedDocs) {
+          copyRowsByDoc(db, pkgDb, 'knowledge_documents', d.document_id);
         }
       } finally {
         pkgDb.close();
@@ -238,8 +256,10 @@ function createSyncService({ app, db, configStore }) {
         exported_at: new Date().toISOString(),
         app: 'yibiao',
         schema: 'knowledge-sync-v1',
-        document_count: docs.length,
-        documents: docs.map((d) => d.document_id),
+        document_count: successDocs.length,
+        deleted_document_count: deletedDocs.length,
+        documents: successDocs.map((d) => d.document_id),
+        deleted_documents: deletedDocs.map((d) => d.document_id),
       };
       fs.writeFileSync(path.join(tmp, 'manifest.json'), JSON.stringify(manifest, null, 2));
 
@@ -315,7 +335,7 @@ function createSyncService({ app, db, configStore }) {
           let data = '';
           postRes.on('data', (chunk) => { data += chunk; });
           postRes.on('end', () => {
-            resolve({ ok: true, pushed_documents: docs.length, file: zipName, serverResponse: data });
+            resolve({ ok: true, pushed_documents: successDocs.length, deleted_documents: deletedDocs.length, file: zipName, serverResponse: data });
           });
         });
         postReq.on('error', (err) => {
@@ -367,11 +387,16 @@ function createSyncService({ app, db, configStore }) {
       
       const mDb = new Database(masterDbPath, { readonly: true, fileMustExist: true });
       try {
-        const masterDocs = mDb
-          .prepare("SELECT document_id, folder_id FROM knowledge_documents WHERE status = 'success'")
-          .all();
+        const masterHasDeleted = hasColumn(mDb, 'knowledge_documents', 'is_deleted');
+        const masterDocs = masterHasDeleted
+          ? mDb
+            .prepare("SELECT document_id, folder_id, is_deleted FROM knowledge_documents WHERE status = 'success' OR is_deleted = 1")
+            .all()
+          : mDb
+            .prepare("SELECT document_id, folder_id, 0 AS is_deleted FROM knowledge_documents WHERE status = 'success'")
+            .all();
         if (!masterDocs.length) {
-          return { ok: true, merged_documents: 0, skipped_documents: 0, note: '团队库暂无内容' };
+          return { ok: true, merged_documents: 0, skipped_documents: 0, deleted_documents: 0, note: '团队库暂无内容' };
         }
         
         // 先合并所有涉及的文件夹（保证文档外键存在）
@@ -379,10 +404,19 @@ function createSyncService({ app, db, configStore }) {
 
         let merged = 0;
         let skipped = 0;
+        let deleted = 0;
+        const now = new Date().toISOString();
+        const localExistsStmt = db.prepare('SELECT 1 FROM knowledge_documents WHERE document_id = ?');
+        const localSoftDeleteStmt = db.prepare('UPDATE knowledge_documents SET is_deleted = 1, deleted_at = ?, updated_at = ? WHERE document_id = ?');
         for (const d of masterDocs) {
-          const exists = db
-            .prepare('SELECT 1 FROM knowledge_documents WHERE document_id = ?')
-            .get(d.document_id);
+          const exists = localExistsStmt.get(d.document_id);
+          if (d.is_deleted) {
+            if (exists) {
+              localSoftDeleteStmt.run(now, now, d.document_id);
+              deleted++;
+            }
+            continue;
+          }
           if (exists) {
             skipped++;
             continue;
@@ -428,6 +462,7 @@ function createSyncService({ app, db, configStore }) {
           ok: true,
           merged_documents: merged,
           skipped_documents: skipped,
+          deleted_documents: deleted,
           config_synced: configSynced,
         };
       } finally {
