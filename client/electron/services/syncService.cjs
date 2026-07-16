@@ -28,6 +28,7 @@ const paths = require('../utils/paths.cjs');
 // 环境变量用于生产环境自定义，默认值保证开箱即用
 const DEFAULT_SMB_CONFIG = {
   host: '59.49.48.147',
+  port: 15002,
   share: 'toubiao',
   user: 'yibiao',
   pass: 'Yibiao@2026',
@@ -38,6 +39,7 @@ const DEFAULT_SMB_CONFIG = {
 function loadSmbConfig() {
   return {
     host: process.env.YIBIAO_SYNC_SMB_HOST || DEFAULT_SMB_CONFIG.host,
+    port: process.env.YIBIAO_SYNC_SMB_PORT || DEFAULT_SMB_CONFIG.port,
     share: process.env.YIBIAO_SYNC_SMB_SHARE || DEFAULT_SMB_CONFIG.share,
     user: process.env.YIBIAO_SYNC_SMB_USER || DEFAULT_SMB_CONFIG.user,
     pass: process.env.YIBIAO_SYNC_SMB_PASS || DEFAULT_SMB_CONFIG.pass,
@@ -60,7 +62,8 @@ const DOC_CHILD_TABLES = [
 ];
 
 function uncRoot() {
-  return `\\\\${SMB.host}\\${SMB.share}`;
+  // 通过端口访问 Samba：\\\\IP,port\\share
+  return `\\\\${SMB.host},${SMB.port}\\${SMB.share}`;
 }
 
 // Windows 访问 Samba UNC 路径前确保已挂载（凭据持久化）。失败忽略，后续 IO 会暴露真实错误。
