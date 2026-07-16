@@ -535,6 +535,12 @@ function setupAutoUpdate({ app, mainWindow }) {
     setProgressBar(mainWindow, -1);
     console.warn('自动更新检查失败', error);
   });
+
+  // 启动时延迟 3 秒自动检查更新（避免影响启动速度）
+  setTimeout(() => {
+    console.info('[update] 启动时自动检查更新');
+    autoUpdater.checkForUpdates();
+  }, 3000);
 }
 
 module.exports = {
