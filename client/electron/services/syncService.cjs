@@ -8,8 +8,8 @@
  * 3. 子表（knowledge_blocks / candidate_items / items / item_blocks / discarded_groups 等）带有
  *    `INTEGER PRIMARY KEY AUTOINCREMENT` 的 id 列，跨库合并时必须**省略 id** 让目标库自增，
  *    否则不同来源的自增 id 会撞主键。所有复制逻辑统一排除名为 'id' 的列。
- * 4. push：本机 status='success' 的文档 → 打包为 knowledge.sqlite + kb/ + manifest.json → 写 Samba 共享 incoming/。
- *    pull：从 Samba 共享拉 master.zip → 把本机没有的 success 文档合并进本机（只 INSERT 新 docId）。
+ * 4. push：本机 status='success' 的文档 → 打包为 knowledge.sqlite + kb/ + manifest.json → HTTP POST 上传。
+ *    pull：HTTP GET 下载 master.zip → 把本机没有的 success 文档合并进本机（只 INSERT 新 docId）。
  * 5. 上传身份：push 时在 manifest 记录 account.username；服务器 merge 时写入主库 uploaded_by/uploaded_at。
  *
  * 本服务运行在 Electron 主进程，复用已加载的 better-sqlite3（无 ABI 问题），直接读已打开的本机库实例。
@@ -23,31 +23,24 @@ const AdmZip = require('adm-zip');
 const Database = require('better-sqlite3');
 const paths = require('../utils/paths.cjs');
 
-// Samba 共享配置（硬编码默认值，环境变量可覆盖）：
+// HTTP 同步配置（硬编码默认值，环境变量可覆盖）：
 // 优先级 env > 默认值
-// 环境变量用于生产环境自定义，默认值保证开箱即用
-const DEFAULT_SMB_CONFIG = {
-  host: '59.49.48.147',
-  port: 15002,
-  share: 'toubiao',
-  user: 'yibiao',
-  pass: 'Yibiao@2026',
-  incoming: 'incoming',
-  masterZip: 'master.zip',
+const DEFAULT_HTTP_CONFIG = {
+  baseUrl: 'http://59.49.48.147:15002',
+  uploadPath: '/yibiao/upload',
+  downloadPath: '/yibiao/download',
+  authToken: 'yibiao-sync-2026',
 };
 
-function loadSmbConfig() {
+function loadHttpConfig() {
   return {
-    host: process.env.YIBIAO_SYNC_SMB_HOST || DEFAULT_SMB_CONFIG.host,
-    port: process.env.YIBIAO_SYNC_SMB_PORT || DEFAULT_SMB_CONFIG.port,
-    share: process.env.YIBIAO_SYNC_SMB_SHARE || DEFAULT_SMB_CONFIG.share,
-    user: process.env.YIBIAO_SYNC_SMB_USER || DEFAULT_SMB_CONFIG.user,
-    pass: process.env.YIBIAO_SYNC_SMB_PASS || DEFAULT_SMB_CONFIG.pass,
-    incoming: process.env.YIBIAO_SYNC_SMB_INCOMING || DEFAULT_SMB_CONFIG.incoming,
-    masterZip: process.env.YIBIAO_SYNC_SMB_MASTER || DEFAULT_SMB_CONFIG.masterZip,
+    baseUrl: process.env.YIBIAO_SYNC_BASE_URL || DEFAULT_HTTP_CONFIG.baseUrl,
+    uploadPath: process.env.YIBIAO_SYNC_UPLOAD_PATH || DEFAULT_HTTP_CONFIG.uploadPath,
+    downloadPath: process.env.YIBIAO_SYNC_DOWNLOAD_PATH || DEFAULT_HTTP_CONFIG.downloadPath,
+    authToken: process.env.YIBIAO_SYNC_AUTH_TOKEN || DEFAULT_HTTP_CONFIG.authToken,
   };
 }
-const SMB = loadSmbConfig();
+const HTTP = loadHttpConfig();
 
 // knowledge_* 表中按 document_id 关联的子表
 const DOC_CHILD_TABLES = [
@@ -60,31 +53,6 @@ const DOC_CHILD_TABLES = [
   'knowledge_document_steps',
   'knowledge_match_batches',
 ];
-
-function uncRoot() {
-  // 通过端口访问 Samba：\\\\IP,port\\share
-  return `\\\\${SMB.host},${SMB.port}\\${SMB.share}`;
-}
-
-// Windows 访问 Samba UNC 路径前确保已挂载（凭据持久化）。失败忽略，后续 IO 会暴露真实错误。
-function ensureSmbMounted() {
-  try {
-    execSync(
-      `net use "${uncRoot()}" /user:${SMB.user} "${SMB.pass}" /persistent:yes`,
-      { stdio: 'ignore', windowsHide: true }
-    );
-  } catch (_) {
-    /* 已挂载或凭据错误均忽略，写文件时若仍失败会如实返回 */
-  }
-}
-
-function incomingDir() {
-  return path.join(uncRoot(), SMB.incoming);
-}
-
-function masterZipPath() {
-  return path.join(uncRoot(), SMB.masterZip);
-}
 
 // 从本机库复制 knowledge_* 建表语句到目标库（零硬编码，始终与软件 schema 同步）
 function copyKnowledgeSchema(targetDb, srcDb) {
@@ -151,13 +119,73 @@ function getConfigFilePath(app) {
   return paths.getConfigFilePath(app);
 }
 
+// HTTP 上传函数
+function httpPost(url, formData, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const https = require('node:https');
+    const http = require('node:http');
+    const urlObj = new URL(url);
+    const transport = urlObj.protocol === 'https:' ? https : http;
+    
+    const options = {
+      hostname: urlObj.hostname,
+      port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
+      path: urlObj.pathname + urlObj.search,
+      method: 'POST',
+      headers: { ...headers },
+    };
+
+    const req = transport.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        resolve({ status: res.statusCode, data });
+      });
+    });
+
+    req.on('error', reject);
+    formData.pipe(req);
+  });
+}
+
+// HTTP 下载函数
+function httpGet(url) {
+  return new Promise((resolve, reject) => {
+    const https = require('node:https');
+    const http = require('node:http');
+    const urlObj = new URL(url);
+    const transport = urlObj.protocol === 'https:' ? https : http;
+    
+    const options = {
+      hostname: urlObj.hostname,
+      port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
+      path: urlObj.pathname + urlObj.search,
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${HTTP.authToken}`,
+      },
+    };
+
+    const req = transport.request(options, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => { chunks.push(chunk); });
+      res.on('end', () => {
+        resolve({ status: res.statusCode, data: Buffer.concat(chunks) });
+      });
+    });
+
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 function createSyncService({ app, db, configStore }) {
   if (!db) {
     throw new Error('syncService 需要已打开的 workspace 数据库实例');
   }
 
-  // 上传到团队库：导出本机 success 文档 → 写 Samba incoming/
-  function pushToTeam() {
+  // 上传到团队库：导出本机 success 文档 → HTTP POST 上传
+  async function pushToTeam() {
     const cfg = configStore ? configStore.load() : null;
     const account = cfg && cfg.account;
     if (!account || !account.username) {
@@ -215,38 +243,123 @@ function createSyncService({ app, db, configStore }) {
         zip.addLocalFile(configPath);
       }
 
-      ensureSmbMounted();
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
       const rand = Math.random().toString(36).slice(2, 8);
       const zipName = `${username}_${ts}_${rand}.zip`;
       const outZip = path.join(tmp, zipName);
       zip.writeZip(outZip);
-      fs.copyFileSync(outZip, path.join(incomingDir(), zipName));
 
-      return { ok: true, pushed_documents: docs.length, file: zipName };
+      // 读取 zip 文件并上传
+      const zipBuffer = fs.readFileSync(outZip);
+      
+      // 使用 FormData 上传
+      const boundary = '----YibiaoSyncBoundary' + Date.now();
+      const bodyParts = [];
+      
+      // 添加 zip 文件
+      bodyParts.push(
+        `--${boundary}\r\n`,
+        `Content-Disposition: form-data; name="file"; filename="${zipName}"\r\n`,
+        `Content-Type: application/zip\r\n\r\n`,
+        zipBuffer,
+        `\r\n`
+      );
+      
+      // 添加 manifest
+      const manifestBuffer = fs.readFileSync(path.join(tmp, 'manifest.json'));
+      bodyParts.push(
+        `--${boundary}\r\n`,
+        `Content-Disposition: form-data; name="manifest"; filename="manifest.json"\r\n`,
+        `Content-Type: application/json\r\n\r\n`,
+        manifestBuffer,
+        `\r\n`
+      );
+      
+      bodyParts.push(`--${boundary}--\r\n`);
+      
+      const requestBody = Buffer.concat([
+        ...bodyParts.slice(0, -1).map(p => typeof p === 'string' ? Buffer.from(p) : p),
+        bodyParts[bodyParts.length - 1]
+      ]);
+
+      const uploadUrl = `${HTTP.baseUrl}${HTTP.uploadPath}`;
+      const response = await httpPost(uploadUrl, null, {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Authorization': `Bearer ${HTTP.authToken}`,
+      });
+
+      // 发送请求
+      const https = require('node:https');
+      const http = require('node:http');
+      const urlObj = new URL(uploadUrl);
+      const transport = urlObj.protocol === 'https:' ? https : http;
+      
+      const postOptions = {
+        hostname: urlObj.hostname,
+        port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
+        path: urlObj.pathname + urlObj.search,
+        method: 'POST',
+        headers: {
+          ...response.headers,
+          'Content-Length': requestBody.length,
+        },
+      };
+
+      return new Promise((resolve) => {
+        const postReq = transport.request(postOptions, (postRes) => {
+          let data = '';
+          postRes.on('data', (chunk) => { data += chunk; });
+          postRes.on('end', () => {
+            resolve({ ok: true, pushed_documents: docs.length, file: zipName, serverResponse: data });
+          });
+        });
+        postReq.on('error', (err) => {
+          resolve({ ok: false, error: `HTTP 上传失败: ${err.message}` });
+        });
+        postReq.write(requestBody);
+        postReq.end();
+      });
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   }
 
-  // 从团队库拉取：读 Samba 共享 master.zip → 合并本机没有的 success 文档（只 INSERT 新 docId）
+  // 从团队库拉取：HTTP GET 下载 master.zip → 合并本机没有的 success 文档（只 INSERT 新 docId）
   // 同时拉取 user_config.json（管理员配置的 AI API Key 等全局设置）
-  function pullFromTeam() {
-    ensureSmbMounted();
-    const mz = masterZipPath();
-    if (!fs.existsSync(mz)) {
-      return { ok: false, error: '服务器主库快照 master.zip 不存在，可能尚无任何人上传' };
+  async function pullFromTeam() {
+    const downloadUrl = `${HTTP.baseUrl}${HTTP.downloadPath}`;
+    
+    let response;
+    try {
+      response = await httpGet(downloadUrl);
+    } catch (err) {
+      return { ok: false, error: `HTTP 下载失败: ${err.message}` };
     }
+
+    if (response.status !== 200) {
+      return { ok: false, error: `服务器返回错误: ${response.status}` };
+    }
+
+    if (!response.data || response.data.length === 0) {
+      return { ok: false, error: '服务器返回空数据，可能尚无任何人上传' };
+    }
+
     const kbDst = paths.getKnowledgeBaseDir(app);
     const configPath = getConfigFilePath(app);
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yibiao-pull-'));
     try {
-      const zip = new AdmZip(mz);
+      // 保存下载的 zip 文件
+      const zipPath = path.join(tmp, 'master.zip');
+      fs.writeFileSync(zipPath, response.data);
+
+      const zip = new AdmZip(zipPath);
       zip.extractAllTo(tmp, true);
+      
       const masterDbPath = path.join(tmp, 'knowledge.sqlite');
       if (!fs.existsSync(masterDbPath)) {
         return { ok: false, error: 'master.zip 结构异常：缺少 knowledge.sqlite' };
       }
+      
       const mDb = new Database(masterDbPath, { readonly: true, fileMustExist: true });
       try {
         const masterDocs = mDb
@@ -255,6 +368,7 @@ function createSyncService({ app, db, configStore }) {
         if (!masterDocs.length) {
           return { ok: true, merged_documents: 0, skipped_documents: 0, note: '团队库暂无内容' };
         }
+        
         // 先合并所有涉及的文件夹（保证文档外键存在）
         copyFolders(mDb, db, new Set(masterDocs.map((d) => d.folder_id)));
 
