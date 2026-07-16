@@ -148,13 +148,20 @@ function prepareOpenCodeEnvironment({ app, runtimeRoot, workspaceDir }) {
     path.resolve(getAgentCacheDir(app)),
   ]));
 
+  // 基础 mutableRoots：runtimeRoot + cacheDir
+  const mutableRoots = [path.resolve(runtimeRoot), path.resolve(getAgentCacheDir(app))];
+
+  // 加入 OpenCode 二进制所在目录，避免 debug paths 检查时报"路径越界"
+  const opencodeBinDir = path.resolve(path.dirname(opencodeBinaryPath));
+  const extendedMutableRoots = Array.from(new Set([...mutableRoots, opencodeBinDir]));
+
   return {
     layout,
     toolEnvironment,
     env,
     allowedRoots,
     skillRoots,
-    mutableRoots: [path.resolve(runtimeRoot), path.resolve(getAgentCacheDir(app))],
+    mutableRoots: extendedMutableRoots,
     permissionExceptionRoots: [path.resolve(layout.toolOutputDir)],
   };
 }
