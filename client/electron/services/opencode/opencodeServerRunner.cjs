@@ -132,7 +132,7 @@ function normalizeTimeoutMs(value, fallback = 10 * 60 * 1000) {
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
 }
 
-async function waitForOpenCodeHealth({ baseUrl, authHeader, stderrBuffer, stdoutBuffer, childState, timeoutMs = 30000 }) {
+async function waitForOpenCodeHealth({ baseUrl, authHeader, stderrBuffer, stdoutBuffer, childState, timeoutMs = 60000, probeTimeoutMs = 4000 }) {
   const startedAt = Date.now();
   let lastError = null;
 
@@ -156,14 +156,25 @@ async function waitForOpenCodeHealth({ baseUrl, authHeader, stderrBuffer, stdout
       });
     }
 
+    // 关键：每次探活都用独立的 AbortController 做单次限时。
+    // 冷启动阶段（大二进制被杀软实时扫描、bun 运行时初始化）服务器会先 listen、
+    // 但对首个 /global/health 请求迟迟不应答；若不给单次超时，被接受却未应答的连接
+    // 会把 undici 默认 headersTimeout（约 5 分钟）吃满，从而击穿整体启动预算，
+    // 最终抛出 “UND_ERR_HEADERS_TIMEOUT: Headers Timeout Error”。
+    // 加了单次超时后：单次探活会快速失败并重试，直到服务器就绪（通常几秒）即通过。
+    const controller = new AbortController();
+    const probeTimer = setTimeout(() => controller.abort(new Error('health probe timeout')), probeTimeoutMs);
     try {
       const response = await fetch(`${baseUrl}/global/health`, {
         headers: { Authorization: authHeader },
+        signal: controller.signal,
       });
       if (response.ok) return true;
       lastError = new Error(`health status ${response.status}`);
     } catch (error) {
       lastError = error;
+    } finally {
+      clearTimeout(probeTimer);
     }
 
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -349,7 +360,7 @@ async function startOpenCodeSidecar({
     });
 
     emitStage(onStage, 'opencode-health', 'running', `正在检查 OpenCode Server 健康状态：${baseUrl}`);
-    await waitForOpenCodeHealth({ baseUrl, authHeader, stderrBuffer, stdoutBuffer, childState, timeoutMs: 30000 });
+    await waitForOpenCodeHealth({ baseUrl, authHeader, stderrBuffer, stdoutBuffer, childState, timeoutMs: 60000, probeTimeoutMs: 4000 });
     childState.healthPassed = true;
     emitStage(onStage, 'opencode-health', 'success', baseUrl, { port, baseUrl });
 
