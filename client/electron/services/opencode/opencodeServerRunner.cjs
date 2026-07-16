@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const net = require('node:net');
+const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const {
@@ -97,8 +98,9 @@ function attachOpenCodeDiagnostics(error, meta = {}) {
   error.openCodeExitCode = meta.exitInfo?.code ?? error.openCodeExitCode;
   error.openCodeExitSignal = meta.exitInfo?.signal || error.openCodeExitSignal || '';
   error.openCodeSpawnError = meta.spawnError?.message || error.openCodeSpawnError || '';
-  error.openCodeStderrTail = stderrTail;
+  error.openCodeStartupLogPath = meta.startupLogPath || error.openCodeStartupLogPath || '';
   error.openCodeStdoutTail = stdoutTail;
+  error.openCodeStderrTail = stderrTail;
   error.openCodeLastHealthError = meta.lastError?.message || error.openCodeLastHealthError || '';
   error.openCodeLastHealthCause = getFetchCauseMessage(meta.lastError) || error.openCodeLastHealthCause || '';
   error.isolationCheck = meta.isolationCheck || error.isolationCheck || null;
@@ -113,6 +115,7 @@ function createOpenCodeStartError(message, meta = {}) {
   if (meta.lastError?.message) details.push(`lastError: ${meta.lastError.message}${cause ? ` (${cause})` : ''}`);
   if (meta.exitInfo) details.push(`exit: code=${meta.exitInfo.code ?? 'null'} signal=${meta.exitInfo.signal || 'null'}`);
   if (meta.spawnError?.message) details.push(`spawnError: ${meta.spawnError.message}`);
+  if (meta.startupLogPath) details.push(`startupLog: ${meta.startupLogPath}`);
   if (stdoutTail) details.push(`stdout:\n${stdoutTail}`);
   if (stderrTail) details.push(`stderr:\n${stderrTail}`);
   const error = new Error(`${message}${details.length ? `\n${details.join('\n')}` : ''}`);
@@ -295,6 +298,7 @@ async function startOpenCodeSidecar({
     };
 
     const env = {
+      ...process.env,
       ...environmentInfo.env,
       OPENCODE_CONFIG_CONTENT: JSON.stringify(opencodeConfig),
       OPENCODE_PERMISSION: JSON.stringify(opencodeConfig.permission),
@@ -331,17 +335,39 @@ async function startOpenCodeSidecar({
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    child.stdout.on('data', (chunk) => stdoutBuffer.push(chunk));
-    child.stderr.on('data', (chunk) => stderrBuffer.push(chunk));
+    const startupLogPath = path.join(layout.opencodeTempDir, `opencode-startup-${Date.now()}.log`);
+    try {
+      fs.mkdirSync(layout.opencodeTempDir, { recursive: true });
+    } catch {}
+    let startupLog = null;
+    try {
+      startupLog = fs.createWriteStream(startupLogPath, { flags: 'a' });
+      startupLog.write(`[spawn] ${opencodeBin} serve --pure --hostname 127.0.0.1 --port ${port}\n`);
+      startupLog.write(`[cwd] ${workspaceDir}\n`);
+      startupLog.write(`[env-keys] ${Object.keys(env).sort().join(', ')}\n\n`);
+    } catch {}
+
+    childState.meta.startupLogPath = startupLogPath;
+
+    child.stdout.on('data', (chunk) => {
+      stdoutBuffer.push(chunk);
+      try { startupLog?.write(chunk); } catch {}
+    });
+    child.stderr.on('data', (chunk) => {
+      stderrBuffer.push(chunk);
+      try { startupLog?.write(chunk); } catch {}
+    });
 
     child.once('error', (error) => {
       childState.spawnError = error;
       emitStage(onStage, 'opencode-server-start', 'error', error?.message || String(error));
       stderrBuffer.push(`\n[spawn error] ${error?.message || String(error)}\n`);
+      try { startupLog?.write(`\n[spawn error] ${error?.message || String(error)}\n`); } catch {}
     });
 
     child.once('exit', (code, signal) => {
       childState.exitInfo = { code, signal };
+      try { startupLog?.write(`\n[exit] code=${code ?? 'null'} signal=${signal || 'null'}\n`); startupLog?.end(); } catch {}
       if (!childState.healthPassed && code !== 0) {
         emitStage(onStage, 'opencode-server-start', 'error', `OpenCode 进程退出：code=${code ?? 'null'} signal=${signal || 'null'}`);
         console.warn('[opencode] server exited', {
