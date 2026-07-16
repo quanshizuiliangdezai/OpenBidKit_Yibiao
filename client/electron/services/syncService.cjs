@@ -282,12 +282,12 @@ function createSyncService({ app, db, configStore }) {
         bodyParts[bodyParts.length - 1]
       ]);
 
-      const uploadUrl = `${HTTP.baseUrl}${HTTP.uploadPath}`;
-      const response = await httpPost(uploadUrl, null, {
-        'Content-Type': `multipart/form-data; boundary=${boundary}`,
-        'Authorization': `Bearer ${HTTP.authToken}`,
-      });
+      const requestBody = Buffer.concat(
+        bodyParts.map(p => typeof p === 'string' ? Buffer.from(p) : p)
+      );
 
+      const uploadUrl = `${HTTP.baseUrl}${HTTP.uploadPath}`;
+      
       // 发送请求
       const https = require('node:https');
       const http = require('node:http');
@@ -300,8 +300,8 @@ function createSyncService({ app, db, configStore }) {
         path: urlObj.pathname + urlObj.search,
         method: 'POST',
         headers: {
-          ...response.headers,
-          'Content-Length': requestBody.length,
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Authorization': `Bearer ${HTTP.authToken}`,
         },
       };
 

@@ -43,3 +43,4 @@ jobs:
         run: |
           # 推送合并后的代码到 origin/main
           git push origin main
+          echo "✅ Upstream sync completed at $(date)" >> $GITHUB_STEP_SUMMARY
