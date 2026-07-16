@@ -23,27 +23,26 @@ const AdmZip = require('adm-zip');
 const Database = require('better-sqlite3');
 const paths = require('../utils/paths.cjs');
 
-// Samba 共享配置：
-// 优先级 env > ./sync-config.local.json（gitignore，不进仓库） > 留空
-// 部署时把真实 host/share/user/pass 写进 sync-config.local.json，或用环境变量注入。
-// 这样源码里不含任何内部 IP / 密码，仓库可安全托管（含私有仓库）。
+// Samba 共享配置（硬编码默认值，环境变量可覆盖）：
+// 优先级 env > 默认值
+// 环境变量用于生产环境自定义，默认值保证开箱即用
+const DEFAULT_SMB_CONFIG = {
+  host: '59.49.48.147',
+  share: 'toubiao',
+  user: 'yibiao',
+  pass: 'Yibiao@2026',
+  incoming: 'incoming',
+  masterZip: 'master.zip',
+};
+
 function loadSmbConfig() {
-  const fallback = {};
-  try {
-    const cfgPath = path.join(__dirname, 'sync-config.local.json');
-    if (fs.existsSync(cfgPath)) {
-      Object.assign(fallback, JSON.parse(fs.readFileSync(cfgPath, 'utf8')));
-    }
-  } catch (e) {
-    console.warn('[sync] 读取 sync-config.local.json 失败', e);
-  }
   return {
-    host: process.env.YIBIAO_SYNC_SMB_HOST || fallback.host || '',
-    share: process.env.YIBIAO_SYNC_SMB_SHARE || fallback.share || 'toubiao',
-    user: process.env.YIBIAO_SYNC_SMB_USER || fallback.user || 'yibiao',
-    pass: process.env.YIBIAO_SYNC_SMB_PASS || fallback.pass || '',
-    incoming: process.env.YIBIAO_SYNC_SMB_INCOMING || fallback.incoming || 'incoming',
-    masterZip: process.env.YIBIAO_SYNC_SMB_MASTER || fallback.masterZip || 'master.zip',
+    host: process.env.YIBIAO_SYNC_SMB_HOST || DEFAULT_SMB_CONFIG.host,
+    share: process.env.YIBIAO_SYNC_SMB_SHARE || DEFAULT_SMB_CONFIG.share,
+    user: process.env.YIBIAO_SYNC_SMB_USER || DEFAULT_SMB_CONFIG.user,
+    pass: process.env.YIBIAO_SYNC_SMB_PASS || DEFAULT_SMB_CONFIG.pass,
+    incoming: process.env.YIBIAO_SYNC_SMB_INCOMING || DEFAULT_SMB_CONFIG.incoming,
+    masterZip: process.env.YIBIAO_SYNC_SMB_MASTER || DEFAULT_SMB_CONFIG.masterZip,
   };
 }
 const SMB = loadSmbConfig();
