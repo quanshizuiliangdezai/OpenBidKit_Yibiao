@@ -310,7 +310,6 @@ function KnowledgeBasePage() {
   const [markdownPreview, setMarkdownPreview] = useState('');
   const [itemsPreview, setItemsPreview] = useState<KnowledgeItem[]>([]);
   const [analysisSnapshot, setAnalysisSnapshot] = useState<KnowledgeAnalysisSnapshot | null>(null);
-  const [batchSize, setBatchSize] = useState(20);
   const [startingMatching, setStartingMatching] = useState(false);
   const [developerMode, setDeveloperMode] = useState(false);
   const [showCreateFolder, setShowCreateFolder] = useState(false);
@@ -396,7 +395,7 @@ function KnowledgeBasePage() {
     const pendingDocuments = index.documents.filter((document) => document.status === 'ready_for_matching' && !autoMatchingIdsRef.current.has(document.id));
     pendingDocuments.forEach((document) => {
       autoMatchingIdsRef.current.add(document.id);
-      void startMatching(document, 20, { silent: true });
+      void startMatching(document, { silent: true });
     });
   }, [developerMode, index.documents]);
 
@@ -936,7 +935,7 @@ function KnowledgeBasePage() {
     });
   };
 
-  const startMatching = async (targetDocument = viewer?.document, batchSizeOverride = batchSize, options?: { silent?: boolean }) => {
+  const startMatching = async (targetDocument = viewer?.document, options?: { silent?: boolean }) => {
     if (migrationRunning) {
       if (!options?.silent) showToast('知识库迁移中，请稍候', 'info');
       return;
@@ -944,7 +943,7 @@ function KnowledgeBasePage() {
     if (!targetDocument) return;
     try {
       setStartingMatching(true);
-      const result = await window.yibiao?.knowledgeBase.startMatching(targetDocument.id, batchSizeOverride);
+      const result = await window.yibiao?.knowledgeBase.startMatching(targetDocument.id);
       if (!options?.silent) {
         showToast(result?.message || '已提交匹配任务', result?.success ? 'success' : 'info');
       }
@@ -981,10 +980,8 @@ function KnowledgeBasePage() {
           analysisSnapshot={analysisSnapshot}
           viewerLoading={viewerLoading}
           viewerTrace={viewerTrace}
-          batchSize={batchSize}
           startingMatching={startingMatching}
           developerMode={developerMode}
-          onBatchSizeChange={setBatchSize}
           onBack={closeViewer}
           onModeChange={(mode) => void openDocument(viewer.document, mode)}
           onStartMatching={() => void startMatching()}
@@ -1254,10 +1251,8 @@ interface KnowledgeDocumentViewerProps {
   analysisSnapshot: KnowledgeAnalysisSnapshot | null;
   viewerLoading: boolean;
   viewerTrace: RenderDebugTrace | null;
-  batchSize: number;
   startingMatching: boolean;
   developerMode: boolean;
-  onBatchSizeChange: (value: number) => void;
   onBack: () => void;
   onModeChange: (mode: KnowledgeViewer['mode']) => void;
   onStartMatching: () => void;
@@ -1272,10 +1267,8 @@ function KnowledgeDocumentViewer({
   analysisSnapshot,
   viewerLoading,
   viewerTrace,
-  batchSize,
   startingMatching,
   developerMode,
-  onBatchSizeChange,
   onBack,
   onModeChange,
   onStartMatching,
@@ -1364,9 +1357,7 @@ function KnowledgeDocumentViewer({
           <KnowledgeAnalysisView
             document={document}
             snapshot={analysisSnapshot}
-            batchSize={batchSize}
             startingMatching={startingMatching}
-            onBatchSizeChange={onBatchSizeChange}
             onStartMatching={onStartMatching}
             onRefresh={onRefreshAnalysis}
           />
@@ -1568,14 +1559,12 @@ function DebuggableMarkdownContent({ children, className, debugTrace, developerM
 interface KnowledgeAnalysisViewProps {
   document: KnowledgeDocument;
   snapshot: KnowledgeAnalysisSnapshot | null;
-  batchSize: number;
   startingMatching: boolean;
-  onBatchSizeChange: (value: number) => void;
   onStartMatching: () => void;
   onRefresh: () => void;
 }
 
-function KnowledgeAnalysisView({ document, snapshot, batchSize, startingMatching, onBatchSizeChange, onStartMatching, onRefresh }: KnowledgeAnalysisViewProps) {
+function KnowledgeAnalysisView({ document, snapshot, startingMatching, onStartMatching, onRefresh }: KnowledgeAnalysisViewProps) {
   const report = snapshot?.report;
   const canStart = ['ready_for_matching', 'success', 'error'].includes(document.status) && Boolean(snapshot?.candidate_items.length);
 
@@ -1583,19 +1572,9 @@ function KnowledgeAnalysisView({ document, snapshot, batchSize, startingMatching
     <div className="knowledge-analysis-view">
       <div className="knowledge-analysis-command">
         <div>
-          <strong>分批段落匹配</strong>
-          <p>候选条目已由 AI 两轮抽取生成。这里设置每批投入多少条知识条目，程序会用稳定全文前缀循环匹配段落并执行补漏。</p>
+          <strong>自动分段段落匹配</strong>
+          <p>按模型上下文长度自动分段匹配段落，并在匹配后执行遗漏补漏。</p>
         </div>
-        <label>
-          <span>每批条目数</span>
-          <input
-            type="number"
-            min={1}
-            max={100}
-            value={batchSize}
-            onChange={(event) => onBatchSizeChange(Number(event.target.value) || 1)}
-          />
-        </label>
         <button type="button" className="primary-action" onClick={onStartMatching} disabled={!canStart || startingMatching}>
           {startingMatching ? '提交中...' : document.status === 'success' ? '重新匹配' : '开始匹配'}
         </button>
@@ -1622,7 +1601,7 @@ function KnowledgeAnalysisView({ document, snapshot, batchSize, startingMatching
           <span>AI 舍弃 {report.discarded_blocks_count} 个 block</span>
           <span>重试后系统舍弃 {report.system_discarded_after_retry_count} 个 block</span>
           <span>补漏轮次 {report.recovery_attempt_count}</span>
-          <span>批次大小 {report.batch_size}</span>
+          <span>block 段数 {report.batch_size}</span>
         </div>
       )}
 
