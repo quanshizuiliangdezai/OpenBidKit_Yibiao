@@ -1,0 +1,115 @@
+{
+  "text_model_provider": "jinlong",
+  "text_model_profiles": {
+    "jinlong": {
+      "api_key": "YOUR_JINLONG_API_KEY_HERE",
+      "base_url": "https://jlaudeapi.com/v1",
+      "model_name": "gpt-3.5-turbo",
+      "context_length_limit": 400000,
+      "concurrency_limit": 10,
+      "request_mode": "stream"
+    },
+    "volcengine": {
+      "api_key": "",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "model_name": "",
+      "context_length_limit": 400000,
+      "concurrency_limit": 10,
+      "request_mode": "stream"
+    },
+    "deepseek": {
+      "api_key": "",
+      "base_url": "https://api.deepseek.com",
+      "model_name": "",
+      "context_length_limit": 400000,
+      "concurrency_limit": 10,
+      "request_mode": "stream"
+    },
+    "agnes": {
+      "api_key": "",
+      "base_url": "https://apihub.agnes-ai.com/v1",
+      "model_name": "",
+      "context_length_limit": 400000,
+      "concurrency_limit": 10,
+      "request_mode": "stream"
+    },
+    "custom": {
+      "api_key": "",
+      "base_url": "",
+      "model_name": "",
+      "context_length_limit": 400000,
+      "concurrency_limit": 10,
+      "request_mode": "stream"
+    }
+  },
+  "image_model_profiles": {
+    "jinlong": {
+      "provider": "jinlong",
+      "base_url": "https://img-api.jlaudeapi.com/v1",
+      "api_key": "YOUR_JINLONG_IMAGE_API_KEY_HERE",
+      "model_name": "gpt-image-2",
+      "image_size": "1024x1024",
+      "request_mode": "normal",
+      "concurrency_limit": 2,
+      "status": "untested",
+      "tested_at": "",
+      "last_error": ""
+    },
+    "volcengine": {
+      "provider": "volcengine",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key": "",
+      "model_name": "",
+      "image_size": "1024x1024",
+      "request_mode": "stream",
+      "concurrency_limit": 2,
+      "status": "untested",
+      "tested_at": "",
+      "last_error": ""
+    },
+    "google-ai-studio": {
+      "provider": "google-ai-studio",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "api_key": "",
+      "model_name": "gemini-3.1-flash-image-preview",
+      "image_size": "1K",
+      "request_mode": "stream",
+      "concurrency_limit": 2,
+      "status": "untested",
+      "tested_at": "",
+      "last_error": ""
+    },
+    "agnes": {
+      "provider": "agnes",
+      "base_url": "https://apihub.agnes-ai.com/v1",
+      "api_key": "",
+      "model_name": "",
+      "image_size": "1024x1024",
+      "request_mode": "stream",
+      "concurrency_limit": 2,
+      "status": "untested",
+      "tested_at": "",
+      "last_error": ""
+    },
+    "custom": {
+      "provider": "custom",
+      "base_url": "",
+      "api_key": "",
+      "model_name": "",
+      "image_size": "1024x1024",
+      "request_mode": "stream",
+      "concurrency_limit": 2,
+      "status": "untested",
+      "tested_at": "",
+      "last_error": ""
+    }
+  },
+  "components": {
+    "file_parser": {
+      "provider": "local",
+      "mineru_token": ""
+    },
+    "mermaid_concurrency_limit": 5,
+    "html_concurrency_limit": 5
+  }
+}

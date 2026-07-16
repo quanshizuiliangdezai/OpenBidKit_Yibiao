@@ -143,6 +143,12 @@ function copyDocumentFiles(srcKbRoot, dstKbRoot, folderId, documentId) {
   fs.cpSync(src, dst, { recursive: true });
 }
 
+// 获取配置文件路径（用于同步到团队库）
+function getConfigFilePath(app) {
+  const paths = require('../utils/paths.cjs');
+  return paths.getConfigFilePath(app);
+}
+
 function createSyncService({ app, db, configStore }) {
   if (!db) {
     throw new Error('syncService 需要已打开的 workspace 数据库实例');
@@ -162,6 +168,7 @@ function createSyncService({ app, db, configStore }) {
       return { ok: false, error: '本地知识库数据库不存在' };
     }
     const kbRoot = paths.getKnowledgeBaseDir(app);
+    const configPath = getConfigFilePath(app);
 
     const docs = db
       .prepare("SELECT document_id, folder_id FROM knowledge_documents WHERE status = 'success'")
@@ -201,6 +208,11 @@ function createSyncService({ app, db, configStore }) {
       zip.addLocalFolder(path.join(tmp, 'kb'), 'kb');
       zip.addLocalFile(path.join(tmp, 'manifest.json'));
 
+      // 如果本地存在 user_config.json，也打包进去（供服务器 merge 时同步给全员）
+      if (configPath && fs.existsSync(configPath)) {
+        zip.addLocalFile(configPath);
+      }
+
       ensureSmbMounted();
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
       const rand = Math.random().toString(36).slice(2, 8);
@@ -216,6 +228,7 @@ function createSyncService({ app, db, configStore }) {
   }
 
   // 从团队库拉取：读 Samba 共享 master.zip → 合并本机没有的 success 文档（只 INSERT 新 docId）
+  // 同时拉取 user_config.json（管理员配置的 AI API Key 等全局设置）
   function pullFromTeam() {
     ensureSmbMounted();
     const mz = masterZipPath();
@@ -223,6 +236,7 @@ function createSyncService({ app, db, configStore }) {
       return { ok: false, error: '服务器主库快照 master.zip 不存在，可能尚无任何人上传' };
     }
     const kbDst = paths.getKnowledgeBaseDir(app);
+    const configPath = getConfigFilePath(app);
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yibiao-pull-'));
     try {
       const zip = new AdmZip(mz);
@@ -256,7 +270,45 @@ function createSyncService({ app, db, configStore }) {
           copyDocumentFiles(path.join(tmp, 'kb'), kbDst, d.folder_id, d.document_id);
           merged++;
         }
-        return { ok: true, merged_documents: merged, skipped_documents: skipped };
+
+        // 拉取 user_config.json（AI API Key 等全局配置）
+        let configSynced = false;
+        const remoteConfigPath = path.join(tmp, 'user_config.json');
+        if (configPath && fs.existsSync(remoteConfigPath)) {
+          try {
+            // 远程配置存在，复制到本地
+            const remoteCfg = JSON.parse(fs.readFileSync(remoteConfigPath, 'utf8'));
+            const localCfg = configStore ? configStore.load() : null;
+            // 只同步 AI 相关配置字段（text_model_profiles, image_model_profiles），保留本地 account/analytics 等用户专属数据
+            if (localCfg && configStore) {
+              const mergedCfg = {
+                ...localCfg,
+                text_model_provider: remoteCfg.text_model_provider || localCfg.text_model_provider,
+                text_model_profiles: {
+                  ...localCfg.text_model_profiles,
+                  ...remoteCfg.text_model_profiles,
+                },
+                image_model_profiles: {
+                  ...localCfg.image_model_profiles,
+                  ...remoteCfg.image_model_profiles,
+                },
+                image_model: remoteCfg.image_model || localCfg.image_model,
+              };
+              configStore.save(mergedCfg);
+              configSynced = true;
+            }
+          } catch (e) {
+            console.warn('[sync] 拉取 user_config.json 失败:', e.message);
+            // 配置拉取失败不影响文档同步结果
+          }
+        }
+
+        return {
+          ok: true,
+          merged_documents: merged,
+          skipped_documents: skipped,
+          config_synced: configSynced,
+        };
       } finally {
         mDb.close();
       }

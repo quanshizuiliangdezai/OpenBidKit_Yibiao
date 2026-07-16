@@ -216,6 +216,10 @@ def rebuild_master_zip():
                 fp = os.path.join(root, f)
                 arc = os.path.join('kb', os.path.relpath(fp, MASTER_KB))
                 z.write(fp, arc)
+        # 如果 master 目录下有 user_config.json，也打包进去
+        remote_cfg = os.path.join(MASTER_DIR, 'user_config.json')
+        if os.path.exists(remote_cfg):
+            z.write(remote_cfg, 'user_config.json')
 
 
 def process_package(zip_path, master):
@@ -235,6 +239,32 @@ def process_package(zip_path, master):
                 username = manifest.get('username', 'unknown')
             except Exception:
                 pass
+        
+        # 如果 zip 里有 user_config.json，合并到服务器端配置
+        pkg_config = os.path.join(tmp, 'user_config.json')
+        remote_config = os.path.join(MASTER_DIR, 'user_config.json')
+        if os.path.exists(pkg_config):
+            try:
+                pkg_cfg = json.load(open(pkg_config, encoding='utf-8'))
+                if os.path.exists(remote_config):
+                    # 已存在远程配置，合并（远程配置优先保留 AI 字段）
+                    remote_cfg = json.load(open(remote_config, encoding='utf-8'))
+                    merged_cfg = {
+                        **remote_cfg,
+                        'text_model_provider': pkg_cfg.get('text_model_provider', remote_cfg.get('text_model_provider')),
+                        'text_model_profiles': {**remote_cfg.get('text_model_profiles', {}), **pkg_cfg.get('text_model_profiles', {})},
+                        'image_model_profiles': {**remote_cfg.get('image_model_profiles', {}), **pkg_cfg.get('image_model_profiles', {})},
+                        'image_model': pkg_cfg.get('image_model', remote_cfg.get('image_model')),
+                    }
+                    with open(remote_config, 'w', encoding='utf-8') as f:
+                        json.dump(merged_cfg, f, ensure_ascii=False, indent=2)
+                else:
+                    # 首次上传配置，直接复制
+                    shutil.copy2(pkg_config, remote_config)
+                print("[CONFIG] user_config.json 已合并（来自 %s）" % username)
+            except Exception as e:
+                print("[WARN] user_config.json 合并失败: %s" % e)
+        
         src = sqlite3.connect(pkg_db)
         now = datetime.datetime.now().isoformat()
         docs = src.execute(
