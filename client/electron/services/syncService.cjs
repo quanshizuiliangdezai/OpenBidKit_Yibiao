@@ -277,11 +277,6 @@ function createSyncService({ app, db, configStore }) {
       
       bodyParts.push(`--${boundary}--\r\n`);
       
-      const requestBody = Buffer.concat([
-        ...bodyParts.slice(0, -1).map(p => typeof p === 'string' ? Buffer.from(p) : p),
-        bodyParts[bodyParts.length - 1]
-      ]);
-
       const requestBody = Buffer.concat(
         bodyParts.map(p => typeof p === 'string' ? Buffer.from(p) : p)
       );
