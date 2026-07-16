@@ -73,10 +73,16 @@ function copyDocument(srcDb, targetDb, documentId) {
 }
 
 // 按 document_id 复制某表行；排除自增 id 列，靠业务 UNIQUE 键（document_id, ...）幂等。
+// 关键：只插入【目标表真实存在】的列——避免服务端主库多出的列（如 uploaded_by）
+//       在写回本地库时因列不存在而报错（SqliteError: no column named ...）。
 function copyRowsByDoc(srcDb, targetDb, table, documentId) {
   const rows = srcDb.prepare(`SELECT * FROM ${table} WHERE document_id = ?`).all(documentId);
   if (!rows.length) return;
-  const cols = Object.keys(rows[0]).filter((c) => c !== 'id');
+  const targetCols = new Set(
+    targetDb.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name)
+  );
+  const cols = Object.keys(rows[0]).filter((c) => c !== 'id' && targetCols.has(c));
+  if (!cols.length) return;
   const placeholders = cols.map(() => '?').join(',');
   const stmt = targetDb.prepare(
     `INSERT OR IGNORE INTO ${table} (${cols.join(',')}) VALUES (${placeholders})`
@@ -95,7 +101,11 @@ function copyFolders(srcDb, targetDb, folderIds) {
     .prepare(`SELECT * FROM knowledge_folders WHERE folder_id IN (${placeholders})`)
     .all(...ids);
   if (!rows.length) return;
-  const cols = Object.keys(rows[0]).filter((c) => c !== 'id');
+  const targetCols = new Set(
+    targetDb.prepare(`PRAGMA table_info(knowledge_folders)`).all().map((c) => c.name)
+  );
+  const cols = Object.keys(rows[0]).filter((c) => c !== 'id' && targetCols.has(c));
+  if (!cols.length) return;
   const stmt = targetDb.prepare(
     `INSERT OR IGNORE INTO knowledge_folders (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`
   );
