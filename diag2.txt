@@ -1,0 +1,15 @@
+
+git : fatal: unable to access 'https://github.com/FB208/OpenBidKit_Yibiao.git/': Empty reply from server
+???? ?:1 ??: 469
++ ... 8/* ?? =="; git -c credential.helper= fetch https://github.com/FB208/ ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (fatal: unable t...ply from server:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+git : fatal: Needed a single revision
+???? ?:1 ??: 694
++ ... /v2.18.0 ????? =="; git rev-parse --verify FB208/v2.18.0 2>&1 | Out-F ...
++                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (fatal: Needed a single revision:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
