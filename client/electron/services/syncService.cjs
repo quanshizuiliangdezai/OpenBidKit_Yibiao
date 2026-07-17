@@ -247,6 +247,9 @@ function createSyncService({ app, db, configStore }) {
 
     const folderIds = new Set(syncableDocs.map((d) => d.folder_id));
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yibiao-sync-'));
+    // 确保 kb 目录始终存在：只推送删除指令时 successDocs 为空，copyDocumentFiles 不会创建该目录，
+    // 但 zip.addLocalFolder 要求目录必须存在，否则报 ADM-ZIP: File not found。
+    fs.mkdirSync(path.join(tmp, 'kb'), { recursive: true });
     try {
       const pkgPath = path.join(tmp, 'knowledge.sqlite');
       const pkgDb = new Database(pkgPath);
@@ -279,7 +282,10 @@ function createSyncService({ app, db, configStore }) {
 
       const zip = new AdmZip();
       zip.addLocalFile(pkgPath);
-      zip.addLocalFolder(path.join(tmp, 'kb'), 'kb');
+      const kbTmp = path.join(tmp, 'kb');
+      if (fs.existsSync(kbTmp)) {
+        zip.addLocalFolder(kbTmp, 'kb');
+      }
       zip.addLocalFile(path.join(tmp, 'manifest.json'));
 
       // 如果本地存在 user_config.json，也打包进去（供服务器 merge 时同步给全员）
