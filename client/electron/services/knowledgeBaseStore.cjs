@@ -378,6 +378,16 @@ function createKnowledgeBaseStore({ app, db }) {
   function deleteFolder(folderId) {
     const folder = db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(folderId);
     if (!folder) throw new Error('知识库文件夹不存在');
+
+    // 先把文件夹下所有文档软删除，确保「删除文件夹」也能作为同步指令推给团队库；
+    // 否则外键 ON DELETE CASCADE 会把文档级联硬删，导致团队库收不到删除通知。
+    const timestamp = now();
+    db.prepare(`
+      UPDATE knowledge_documents
+      SET is_deleted = 1, deleted_at = ?, updated_at = ?
+      WHERE folder_id = ? AND is_deleted = 0
+    `).run(timestamp, timestamp, folderId);
+
     db.prepare('DELETE FROM knowledge_folders WHERE folder_id = ?').run(folderId);
     return folderFromRow(folder);
   }

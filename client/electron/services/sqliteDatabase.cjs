@@ -1112,6 +1112,14 @@ const schemaHealthColumnGroups = [
       content_illustration_plan_json: 'TEXT',
     },
   },
+  {
+    version: 18,
+    table: 'knowledge_documents',
+    columns: {
+      is_deleted: 'INTEGER NOT NULL DEFAULT 0',
+      deleted_at: 'TEXT',
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
