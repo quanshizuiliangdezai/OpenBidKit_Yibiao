@@ -177,7 +177,7 @@ function registerWorkspaceDatabaseStatusIpc({ mainWindow }) {
   };
 }
 
-function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, updateStatus }) {
+function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, updateStatus, mainWindow }) {
   const sqliteDatabase = createSqliteDatabase(app, { onStatus: updateStatus });
   const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
@@ -197,6 +197,20 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   registerTemplateIpc({ templateStore });
   registerTaskIpc({ taskService });
   registerSyncIpc({ syncService });
+  // 启动后台自动同步守护：每 30 秒先拉后推，把同步状态广播给前端。
+  // 依赖 mainWindow 存在；渲染进程销毁时跳过发送。
+  if (mainWindow) {
+    syncService.startAutoSync({
+      intervalMs: 30000,
+      onStatus: (status) => {
+        try {
+          if (!mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+            mainWindow.webContents.send('sync:auto-status', status);
+          }
+        } catch { /* 渲染进程可能已销毁，忽略 */ }
+      },
+    });
+  }
   updateStatus({ phase: 'ready', ready: true, message: '本地数据库已就绪' });
   return { sqliteDatabase, syncService };
 }
@@ -310,7 +324,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     databaseStatus.updateStatus({ phase: 'checking', ready: false, message: '正在检查本地数据库' });
     setTimeout(() => {
       try {
-        registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, updateStatus: databaseStatus.updateStatus });
+        registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, updateStatus: databaseStatus.updateStatus, mainWindow });
       } catch (error) {
         databaseStatus.updateStatus({
           phase: 'error',

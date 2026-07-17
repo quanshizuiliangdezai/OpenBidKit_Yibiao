@@ -295,12 +295,38 @@ type KnowledgeViewer = {
   mode: 'analysis' | 'items' | 'markdown';
 };
 
+type AutoSyncStatus = {
+  enabled: boolean;
+  running: boolean;
+  status: 'idle' | 'syncing' | 'error';
+  lastError: string | null;
+  lastSuccessAt: string | null;
+  lastPullAt: string | null;
+  lastPullChanges: number;
+  message: string;
+};
+
+function formatRelativeTime(iso: string | null): string {
+  if (!iso) return '';
+  const diff = Date.now() - new Date(iso).getTime();
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return `${sec}秒前`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}分钟前`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}小时前`;
+  const day = Math.floor(hr / 24);
+  return `${day}天前`;
+}
+
 function KnowledgeBasePage() {
   const [index, setIndex] = useState<KnowledgeBaseIndex>(emptyIndex);
   const [activeFolderId, setActiveFolderId] = useState('');
   const [listLoading, setListLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [autoStatus, setAutoStatus] = useState<AutoSyncStatus | null>(null);
+  const lastPullRef = useRef<{ at: string | null; changes: number }>({ at: null, changes: 0 });
   const [migrationRunning, setMigrationRunning] = useState(false);
   const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
   const [pendingMigrationStatus, setPendingMigrationStatus] = useState<KnowledgeBaseMigrationStatus | null>(null);
@@ -375,6 +401,30 @@ function KnowledgeBasePage() {
       unsubscribe?.();
     };
   }, []);
+
+  // 订阅后台自动同步状态（先取一次初始状态，再监听推送）
+  useEffect(() => {
+    if (!window.yibiao?.sync) return undefined;
+    let unsubscribe: (() => void) | undefined;
+    void (async () => {
+      try {
+        const s = await window.yibiao.sync.getAutoStatus();
+        if (s) setAutoStatus(s);
+      } catch { /* 忽略：同步服务尚未就绪 */ }
+      unsubscribe = window.yibiao.sync.onStatus((s) => setAutoStatus(s));
+    })();
+    return () => unsubscribe?.();
+  }, []);
+
+  // 当自动拉取带回了新文档/删除时，刷新本地列表，让其他人新增的内容实时出现
+  useEffect(() => {
+    if (!autoStatus) return;
+    const { lastPullAt, lastPullChanges } = autoStatus;
+    if (lastPullAt && lastPullChanges > 0 && lastPullRef.current.at !== lastPullAt) {
+      lastPullRef.current = { at: lastPullAt, changes: lastPullChanges };
+      void loadInitialData();
+    }
+  }, [autoStatus]);
 
   useEffect(() => {
     setVisibleDocumentCount(documentRenderBatchSize);
@@ -716,6 +766,26 @@ function KnowledgeBasePage() {
     }
   };
 
+  const toggleAutoSync = async (enabled: boolean) => {
+    if (!window.yibiao?.sync) return;
+    try {
+      await window.yibiao.sync.setAutoEnabled(enabled);
+      const s = await window.yibiao.sync.getAutoStatus();
+      if (s) setAutoStatus(s);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '切换自动同步失败', 'error');
+    }
+  };
+
+  const runAutoNow = async () => {
+    if (!window.yibiao?.sync) return;
+    try {
+      await window.yibiao.sync.runNow();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '立即同步失败', 'error');
+    }
+  };
+
   const renameFolder = async (folderId: string, currentName: string) => {
     if (migrationRunning) {
       showToast('知识库迁移中，请稍候', 'info');
@@ -1013,6 +1083,63 @@ function KnowledgeBasePage() {
           <button type="button" className="primary-action" onClick={uploadDocuments} disabled={loading || migrationRunning || !activeFolder}>
             {migrationRunning ? '迁移中...' : loading ? '处理中...' : '上传文档'}
           </button>
+          {autoStatus ? (
+            <span
+              title={autoStatus.status === 'error' ? autoStatus.lastError || '' : autoStatus.message}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '4px 10px',
+                borderRadius: 999,
+                fontSize: 12,
+                lineHeight: '16px',
+                whiteSpace: 'nowrap',
+                border: '1px solid',
+                borderColor:
+                  autoStatus.status === 'error' ? '#f5c2c2'
+                  : autoStatus.status === 'syncing' ? '#cfe3ff'
+                  : '#c9ebd1',
+                color:
+                  autoStatus.status === 'error' ? '#b42318'
+                  : autoStatus.status === 'syncing' ? '#1d4ed8'
+                  : '#15803d',
+                background:
+                  autoStatus.status === 'error' ? '#fef3f2'
+                  : autoStatus.status === 'syncing' ? '#eff6ff'
+                  : '#f0fdf4',
+              }}
+            >
+              <span
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background:
+                    autoStatus.status === 'error' ? '#b42318'
+                    : autoStatus.status === 'syncing' ? '#1d4ed8'
+                    : '#15803d',
+                }}
+              />
+              {autoStatus.status === 'syncing'
+                ? '同步中…'
+                : autoStatus.status === 'error'
+                ? '同步失败'
+                : autoStatus.lastSuccessAt
+                ? `已同步 · ${formatRelativeTime(autoStatus.lastSuccessAt)}`
+                : '自动同步已开启'}
+            </span>
+          ) : null}
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#475467', userSelect: 'none' }}>
+            <input
+              type="checkbox"
+              checked={autoStatus?.enabled !== false}
+              disabled={!autoStatus}
+              onChange={(e) => void toggleAutoSync(e.target.checked)}
+            />
+            自动同步
+          </label>
+          <button type="button" className="secondary-action" onClick={runAutoNow} disabled={autoStatus?.running || migrationRunning || listLoading}>立即同步</button>
           <button type="button" className="secondary-action" onClick={syncToTeam} disabled={syncing || migrationRunning || listLoading}>同步到团队库</button>
           <button type="button" className="secondary-action" onClick={pullFromTeam} disabled={syncing || migrationRunning || listLoading}>拉取团队库</button>
         </div>

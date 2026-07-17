@@ -560,7 +560,136 @@ function createSyncService({ app, db, configStore }) {
     return await downloadAndMerge(`${HTTP.baseUrl}${HTTP.downloadPath}`);
   }
 
-  return { pushToTeam, pullFromTeam };
+  // ===== 后台自动同步守护 =====
+  // 定时器每 intervalMs 跑一次 tick：先 pull 远程更新，再 push 本地改动。
+  // 复用现有增量 push/pull，因此对网络/磁盘压力极小（无变化直接跳过）。
+  const autoState = {
+    enabled: true,                 // 默认开启，实现“实时数据库文件夹”体验
+    running: false,
+    status: 'idle',                // 'idle' | 'syncing' | 'error'
+    lastError: null,
+    lastSuccessAt: null,
+    lastPullAt: null,
+    lastPullChanges: 0,            // 上次 pull 合并/删除的文档数（前端据此判断是否需要刷新列表）
+    message: '',
+  };
+  let autoTimer = null;
+  let autoOnStatus = null;
+
+  function emitAutoStatus() {
+    if (autoOnStatus) {
+      try { autoOnStatus(getAutoStatus()); } catch { /* 渲染进程可能已销毁 */ }
+    }
+  }
+
+  function getAutoStatus() {
+    return {
+      enabled: autoState.enabled,
+      running: autoState.running,
+      status: autoState.status,
+      lastError: autoState.lastError,
+      lastSuccessAt: autoState.lastSuccessAt,
+      lastPullAt: autoState.lastPullAt,
+      lastPullChanges: autoState.lastPullChanges,
+      message: autoState.message,
+    };
+  }
+
+  function setAutoEnabled(enabled) {
+    autoState.enabled = !!enabled;
+    if (autoState.enabled && !autoTimer) {
+      void runAutoSyncNow();
+    }
+    emitAutoStatus();
+    return getAutoStatus();
+  }
+
+  // 把 push/pull 的返回值归一：ok:false 里分「良性无操作」与「真正错误」。
+  async function safePush() {
+    try {
+      const r = await pushToTeam();
+      if (r && r.ok) {
+        autoState.lastPushAt = new Date().toISOString();
+        return { ok: true, benign: false, result: r };
+      }
+      // 良性：增量位点已最新，没有可推的文档
+      if (r && r.error === '没有可同步的文档') {
+        return { ok: true, benign: true, result: r };
+      }
+      return { ok: false, benign: false, result: r };
+    } catch (e) {
+      return { ok: false, benign: false, error: e.message };
+    }
+  }
+
+  async function safePull() {
+    try {
+      const r = await pullFromTeam();
+      if (r && r.ok) {
+        const changes = (r.merged_documents || 0) + (r.deleted_documents || 0);
+        autoState.lastPullAt = new Date().toISOString();
+        autoState.lastPullChanges = changes;
+        return { ok: true, benign: changes === 0, result: r, changes };
+      }
+      // 良性：服务器暂无内容 / 还没人上传 / manifest 接口暂不可用（降级中）
+      if (r && (r.error || '').includes('master.zip')) return { ok: true, benign: true, result: r };
+      if (r && (r.error || '').includes('尚无任何人上传')) return { ok: true, benign: true, result: r };
+      return { ok: false, benign: false, result: r };
+    } catch (e) {
+      return { ok: false, benign: false, error: e.message };
+    }
+  }
+
+  async function runAutoSyncNow() {
+    if (autoState.running) return getAutoStatus();
+    autoState.running = true;
+    autoState.status = 'syncing';
+    emitAutoStatus();
+    try {
+      // 先拉后推：先拿到别人的更新，再把自己新的推上去
+      const pull = await safePull();
+      const push = await safePush();
+
+      autoState.lastSuccessAt = new Date().toISOString();
+      autoState.lastError = null;
+      autoState.status = 'idle';
+
+      const parts = [];
+      if (pull.ok && pull.result) {
+        if (pull.result.note) parts.push(pull.result.note);
+        else parts.push(`拉取 ${pull.result.merged_documents ?? 0} 篇/删 ${pull.result.deleted_documents ?? 0} 篇`);
+      }
+      if (push.ok && push.result && !push.benign) {
+        parts.push(`推送 ${push.result.pushed_documents ?? 0} 篇/删 ${push.result.deleted_documents ?? 0} 篇`);
+      }
+      autoState.message = parts.join('；') || '已是最新';
+    } catch (e) {
+      autoState.status = 'error';
+      autoState.lastError = e.message;
+    } finally {
+      autoState.running = false;
+      emitAutoStatus();
+    }
+    return getAutoStatus();
+  }
+
+  function startAutoSync({ intervalMs = 30000, onStatus } = {}) {
+    autoOnStatus = onStatus || null;
+    if (autoTimer) clearInterval(autoTimer);
+    autoTimer = setInterval(() => {
+      if (!autoState.enabled) return;
+      void runAutoSyncNow();
+    }, intervalMs);
+    void runAutoSyncNow(); // 启动后立即跑一次
+    emitAutoStatus();
+  }
+
+  function stopAutoSync() {
+    if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+    emitAutoStatus();
+  }
+
+  return { pushToTeam, pullFromTeam, getAutoStatus, setAutoEnabled, startAutoSync, stopAutoSync, runAutoSyncNow };
 }
 
 module.exports = { createSyncService };

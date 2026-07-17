@@ -188,6 +188,14 @@ const bridge = {
   sync: {
     push: () => ipcRenderer.invoke('sync:push'),
     pull: () => ipcRenderer.invoke('sync:pull'),
+    getAutoStatus: () => ipcRenderer.invoke('sync:get-auto-status'),
+    setAutoEnabled: (enabled) => ipcRenderer.invoke('sync:set-auto-enabled', enabled),
+    runNow: () => ipcRenderer.invoke('sync:auto-run-now'),
+    onStatus: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('sync:auto-status', listener);
+      return () => ipcRenderer.removeListener('sync:auto-status', listener);
+    },
   },
 };
 
