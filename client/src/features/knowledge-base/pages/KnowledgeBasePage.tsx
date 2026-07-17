@@ -395,15 +395,22 @@ function KnowledgeBasePage() {
   // 订阅后台自动同步状态（先取一次初始状态，再监听推送）
   useEffect(() => {
     if (!window.yibiao?.sync) return undefined;
+    let cancelled = false;
     let unsubscribe: (() => void) | undefined;
     void (async () => {
       try {
         const s = await window.yibiao.sync.getAutoStatus();
-        if (s) setAutoStatus(s);
+        if (s && !cancelled) setAutoStatus(s);
       } catch { /* 忽略：同步服务尚未就绪 */ }
-      unsubscribe = window.yibiao.sync.onStatus((s) => setAutoStatus(s));
+      if (cancelled) return; // 组件已卸载，不再订阅，避免监听器泄漏
+      unsubscribe = window.yibiao.sync.onStatus((s) => {
+        if (!cancelled) setAutoStatus(s);
+      });
     })();
-    return () => unsubscribe?.();
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, []);
 
   // 当自动拉取带回了新文档/删除时，刷新本地列表，让其他人新增的内容实时出现
