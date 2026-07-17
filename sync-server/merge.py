@@ -15,9 +15,13 @@ merge.py —— 团队知识库主库合并（服务器 cron 自动运行）
     跨库合并时必须排除 id，让主库自增，否则不同来源的自增 id 会撞主键。所有复制统一排除列名为 'id'。
   - 文档级幂等：主库已有 document_id → 整篇跳过。
 
-路径可用环境变量覆盖（默认按 /toubiao 挂载点）：
-  YIBIAO_MASTER_DIR  /toubiao/yibiao-kb
-  YIBIAO_SHARE_DIR   /toubiao/yibiao-share
+路径可用环境变量分别覆盖（默认按 /toubiao 挂载点的独立布局）：
+  YIBIAO_MASTER_DB   /toubiao/yibiao-kb/master.sqlite
+  YIBIAO_MASTER_KB   /toubiao/yibiao-kb/knowledge-base
+  YIBIAO_INCOMING    /toubiao/yibiao-share/incoming
+  YIBIAO_MASTER_ZIP  /toubiao/yibiao-share/master.zip
+部署时由 systemd 单元注入，确保与 server.py 实际接收上传 / 对外服务的目录一致。
+
 
 依赖：仅 Python3 标准库（sqlite3 / zipfile / shutil），Linux 自带，零依赖。
 """
@@ -33,13 +37,14 @@ import tempfile
 import datetime
 import traceback
 
-MASTER_DIR = os.environ.get('YIBIAO_MASTER_DIR', '/toubiao/yibiao-kb')
-SHARE_DIR = os.environ.get('YIBIAO_SHARE_DIR', '/toubiao/yibiao-share')
-INCOMING = os.path.join(SHARE_DIR, 'incoming')
+# 四个路径分别可用环境变量覆盖（部署时由 systemd 单元注入），确保与 server.py 实际布局一致。
+# 默认仍按 /toubiao 挂载点的独立布局，向后兼容旧部署。
+MASTER_DB = os.environ.get('YIBIAO_MASTER_DB', '/toubiao/yibiao-kb/master.sqlite')
+MASTER_KB = os.environ.get('YIBIAO_MASTER_KB', '/toubiao/yibiao-kb/knowledge-base')
+INCOMING = os.environ.get('YIBIAO_INCOMING', '/toubiao/yibiao-share/incoming')
+MASTER_ZIP = os.environ.get('YIBIAO_MASTER_ZIP', '/toubiao/yibiao-share/master.zip')
 PROCESSED = os.path.join(INCOMING, 'processed')
-MASTER_KB = os.path.join(MASTER_DIR, 'knowledge-base')
-MASTER_DB = os.path.join(MASTER_DIR, 'master.sqlite')
-MASTER_ZIP = os.path.join(SHARE_DIR, 'master.zip')
+MASTER_DIR = os.path.dirname(MASTER_DB)  # 供 user_config.json 等引用
 
 # knowledge_* 中按 document_id 关联的子表
 DOC_CHILD_TABLES = [
@@ -146,6 +151,13 @@ def ensure_master():
     os.makedirs(PROCESSED, exist_ok=True)
     conn = sqlite3.connect(MASTER_DB)
     conn.executescript(SCHEMA_SQL)
+    # 兼容旧库：CREATE TABLE IF NOT EXISTS 不会给已存在的表追加新列，
+    # 这里补 is_deleted / deleted_at，否则合并带软删标记的增量包会报 no such column 并整包回滚。
+    cols = {r[1] for r in conn.execute('PRAGMA table_info(knowledge_documents)').fetchall()}
+    if 'is_deleted' not in cols:
+        conn.execute("ALTER TABLE knowledge_documents ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0")
+    if 'deleted_at' not in cols:
+        conn.execute("ALTER TABLE knowledge_documents ADD COLUMN deleted_at TEXT")
     conn.commit()
     conn.close()
 
