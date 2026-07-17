@@ -526,6 +526,9 @@ function createSyncService({ app, db, configStore }) {
     }
 
     if (manifest && Array.isArray(manifest.documents)) {
+      if (manifest.documents.length === 0) {
+        return { ok: true, merged_documents: 0, skipped_documents: 0, deleted_documents: 0, note: '团队库为空，无需拉取' };
+      }
       const localRows = db.prepare('SELECT document_id, is_deleted FROM knowledge_documents').all();
       const localMap = new Map(localRows.map((r) => [r.document_id, !!r.is_deleted]));
       const needIds = [];

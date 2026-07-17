@@ -152,10 +152,11 @@ class SyncHandler(http.server.BaseHTTPRequestHandler):
                 return
             path = self.path.split('?')[0].rstrip('/')
             # 清单接口：返回主库文档清单（轻量），供客户端判断是否真的需要下载
+            # 空库时返回 200 + documents: []，让客户端提示"团队库为空"而非"服务器错误"
             if path.endswith('/yibiao/manifest'):
                 manifest = build_manifest()
                 if manifest is None:
-                    self._send_json(404, {'error': 'master.zip 不存在'})
+                    self._send_json(200, {'documents': [], 'generated_at': datetime.datetime.now().isoformat()})
                     return
                 self._send_json(200, manifest)
                 return
