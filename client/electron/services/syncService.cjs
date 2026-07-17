@@ -609,7 +609,6 @@ function createSyncService({ app, db, configStore }) {
     try {
       const r = await pushToTeam();
       if (r && r.ok) {
-        autoState.lastPushAt = new Date().toISOString();
         return { ok: true, benign: false, result: r };
       }
       // 良性：增量位点已最新，没有可推的文档
@@ -650,16 +649,25 @@ function createSyncService({ app, db, configStore }) {
       const pull = await safePull();
       const push = await safePush();
 
+      // 真错误（非良性无操作）必须如实上报，绝不能当作成功 —— 否则失败会被绿勾掩盖。
+      const pullErr = !pull.ok ? (pull.error || (pull.result && pull.result.error)) : null;
+      const pushErr = !push.ok ? (push.error || (push.result && push.result.error)) : null;
+      if (pullErr || pushErr) {
+        autoState.status = 'error';
+        autoState.lastError = pullErr || pushErr;
+        return getAutoStatus();
+      }
+
       autoState.lastSuccessAt = new Date().toISOString();
       autoState.lastError = null;
       autoState.status = 'idle';
 
       const parts = [];
-      if (pull.ok && pull.result) {
+      if (pull.ok && pull.result && pull.result.ok) {
         if (pull.result.note) parts.push(pull.result.note);
         else parts.push(`拉取 ${pull.result.merged_documents ?? 0} 篇/删 ${pull.result.deleted_documents ?? 0} 篇`);
       }
-      if (push.ok && push.result && !push.benign) {
+      if (push.ok && push.result && push.result.ok) {
         parts.push(`推送 ${push.result.pushed_documents ?? 0} 篇/删 ${push.result.deleted_documents ?? 0} 篇`);
       }
       autoState.message = parts.join('；') || '已是最新';
