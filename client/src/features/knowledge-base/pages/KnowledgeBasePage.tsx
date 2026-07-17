@@ -3,6 +3,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeBaseMigrationStatus, KnowledgeDocument, KnowledgeItem } from '../types';
+import type { AutoSyncStatus } from '../../../shared/types/ipc';
 
 declare global {
   interface Window {
@@ -293,17 +294,6 @@ function logProfilerRender(
 type KnowledgeViewer = {
   document: KnowledgeDocument;
   mode: 'analysis' | 'items' | 'markdown';
-};
-
-type AutoSyncStatus = {
-  enabled: boolean;
-  running: boolean;
-  status: 'idle' | 'syncing' | 'error';
-  lastError: string | null;
-  lastSuccessAt: string | null;
-  lastPullAt: string | null;
-  lastPullChanges: number;
-  message: string;
 };
 
 function formatRelativeTime(iso: string | null): string {

@@ -417,6 +417,17 @@ export interface SyncPullResult {
   note?: string;
 }
 
+export interface AutoSyncStatus {
+  enabled: boolean;
+  running: boolean;
+  status: 'idle' | 'syncing' | 'error';
+  lastError: string | null;
+  lastSuccessAt: string | null;
+  lastPullAt: string | null;
+  lastPullChanges: number;
+  message: string;
+}
+
 export interface YibiaoBridge {
   appName: string;
   platform: string;
@@ -576,5 +587,9 @@ export interface YibiaoBridge {
   sync: {
     push: () => Promise<SyncPushResult>;
     pull: () => Promise<SyncPullResult>;
+    getAutoStatus: () => Promise<AutoSyncStatus>;
+    setAutoEnabled: (enabled: boolean) => Promise<AutoSyncStatus>;
+    runNow: () => Promise<AutoSyncStatus>;
+    onStatus: (callback: (status: AutoSyncStatus) => void) => () => void;
   };
 }
