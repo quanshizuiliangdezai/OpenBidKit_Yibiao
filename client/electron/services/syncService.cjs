@@ -131,6 +131,18 @@ function hasColumn(db, table, column) {
     .some((c) => c.name === column);
 }
 
+// 增量同步位点：记录上次成功 push/pull 的时间（knowledge_sync_meta 表）
+function getSyncMeta(db, key) {
+  const row = db.prepare('SELECT value FROM knowledge_sync_meta WHERE key = ?').get(key);
+  return row ? row.value : null;
+}
+function setSyncMeta(db, key, value) {
+  db.prepare(
+    'INSERT INTO knowledge_sync_meta(key, value) VALUES(?, ?) ' +
+    'ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).run(key, value);
+}
+
 
 
 // 获取配置文件路径（用于同步到团队库）
@@ -220,12 +232,14 @@ function createSyncService({ app, db, configStore }) {
     const kbRoot = paths.getKnowledgeBaseDir(app);
     const configPath = getConfigFilePath(app);
 
+    // 增量推送：只传「上次成功 push 之后有变化」的文档 + 软删文档，避免每次都把全库重新上传一遍。
+    const lastPushAt = getSyncMeta(db, 'last_push_at') || '0';
     const successDocs = db
-      .prepare("SELECT document_id, folder_id FROM knowledge_documents WHERE status = 'success' AND is_deleted = 0")
-      .all();
+      .prepare("SELECT document_id, folder_id FROM knowledge_documents WHERE status = 'success' AND is_deleted = 0 AND updated_at > ?")
+      .all(lastPushAt);
     const deletedDocs = db
-      .prepare("SELECT document_id, folder_id FROM knowledge_documents WHERE is_deleted = 1")
-      .all();
+      .prepare("SELECT document_id, folder_id FROM knowledge_documents WHERE is_deleted = 1 AND updated_at > ?")
+      .all(lastPushAt);
     const syncableDocs = [...successDocs, ...deletedDocs];
     if (!syncableDocs.length) {
       return { ok: false, error: '没有可同步的文档' };
@@ -335,7 +349,17 @@ function createSyncService({ app, db, configStore }) {
           let data = '';
           postRes.on('data', (chunk) => { data += chunk; });
           postRes.on('end', () => {
-            resolve({ ok: true, pushed_documents: successDocs.length, deleted_documents: deletedDocs.length, file: zipName, serverResponse: data });
+            const ok = postRes.statusCode >= 200 && postRes.statusCode < 300;
+            // 仅当服务器确认收到（2xx）才推进同步位点，避免失败时误判为已同步
+            if (ok) setSyncMeta(db, 'last_push_at', new Date().toISOString());
+            resolve({
+              ok,
+              pushed_documents: ok ? successDocs.length : 0,
+              deleted_documents: ok ? deletedDocs.length : 0,
+              file: zipName,
+              serverResponse: data,
+              status: postRes.statusCode,
+            });
           });
         });
         postReq.on('error', (err) => {
@@ -349,42 +373,23 @@ function createSyncService({ app, db, configStore }) {
     }
   }
 
-  // 从团队库拉取：HTTP GET 下载 master.zip → 合并本机没有的 success 文档（只 INSERT 新 docId）
-  // 同时拉取 user_config.json（管理员配置的 AI API Key 等全局设置）
-  async function pullFromTeam() {
-    const downloadUrl = `${HTTP.baseUrl}${HTTP.downloadPath}`;
-    
-    let response;
-    try {
-      response = await httpGet(downloadUrl);
-    } catch (err) {
-      return { ok: false, error: `HTTP 下载失败: ${err.message}` };
-    }
-
-    if (response.status !== 200) {
-      return { ok: false, error: `服务器返回错误: ${response.status}` };
-    }
-
-    if (!response.data || response.data.length === 0) {
-      return { ok: false, error: '服务器返回空数据，可能尚无任何人上传' };
-    }
-
+  // 把下载到的 zip 缓冲（Buffer）解压并合并进本机库，返回统计结果（只 INSERT 本地没有的文档）。
+  async function mergeZipBuffer(data) {
     const kbDst = paths.getKnowledgeBaseDir(app);
     const configPath = getConfigFilePath(app);
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yibiao-pull-'));
     try {
-      // 保存下载的 zip 文件
       const zipPath = path.join(tmp, 'master.zip');
-      fs.writeFileSync(zipPath, response.data);
+      fs.writeFileSync(zipPath, data);
 
       const zip = new AdmZip(zipPath);
       zip.extractAllTo(tmp, true);
-      
+
       const masterDbPath = path.join(tmp, 'knowledge.sqlite');
       if (!fs.existsSync(masterDbPath)) {
         return { ok: false, error: 'master.zip 结构异常：缺少 knowledge.sqlite' };
       }
-      
+
       const mDb = new Database(masterDbPath, { readonly: true, fileMustExist: true });
       try {
         const masterHasDeleted = hasColumn(mDb, 'knowledge_documents', 'is_deleted');
@@ -398,8 +403,7 @@ function createSyncService({ app, db, configStore }) {
         if (!masterDocs.length) {
           return { ok: true, merged_documents: 0, skipped_documents: 0, deleted_documents: 0, note: '团队库暂无内容' };
         }
-        
-        // 先合并所有涉及的文件夹（保证文档外键存在）
+
         copyFolders(mDb, db, new Set(masterDocs.map((d) => d.folder_id)));
 
         let merged = 0;
@@ -431,10 +435,8 @@ function createSyncService({ app, db, configStore }) {
         const remoteConfigPath = path.join(tmp, 'user_config.json');
         if (configPath && fs.existsSync(remoteConfigPath)) {
           try {
-            // 远程配置存在，复制到本地
             const remoteCfg = JSON.parse(fs.readFileSync(remoteConfigPath, 'utf8'));
             const localCfg = configStore ? configStore.load() : null;
-            // 只同步 AI 相关配置字段（text_model_profiles, image_model_profiles），保留本地 account/analytics 等用户专属数据
             if (localCfg && configStore) {
               const mergedCfg = {
                 ...localCfg,
@@ -454,7 +456,6 @@ function createSyncService({ app, db, configStore }) {
             }
           } catch (e) {
             console.warn('[sync] 拉取 user_config.json 失败:', e.message);
-            // 配置拉取失败不影响文档同步结果
           }
         }
 
@@ -471,6 +472,92 @@ function createSyncService({ app, db, configStore }) {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
+  }
+
+  // 仅把主库已软删、但本地尚未软删的文档在本地标记删除（无需下载文件）
+  function applySoftDeletes(manifest, localMap) {
+    const now = new Date().toISOString();
+    const stmt = db.prepare('UPDATE knowledge_documents SET is_deleted = 1, deleted_at = ?, updated_at = ? WHERE document_id = ?');
+    const tx = db.transaction(() => {
+      for (const d of manifest.documents) {
+        if (d.is_deleted && localMap.get(d.document_id) === false) {
+          stmt.run(now, now, d.document_id);
+        }
+      }
+    });
+    tx();
+  }
+
+  async function downloadAndMerge(url) {
+    let response;
+    try {
+      response = await httpGet(url);
+    } catch (err) {
+      return { ok: false, error: `HTTP 下载失败: ${err.message}` };
+    }
+    if (response.status !== 200) {
+      return { ok: false, error: `服务器返回错误: ${response.status}` };
+    }
+    if (!response.data || response.data.length === 0) {
+      return { ok: false, error: '服务器返回空数据，可能尚无任何人上传' };
+    }
+    return await mergeZipBuffer(response.data);
+  }
+
+  // 增量拉取：先向服务器要一份轻量清单（/yibiao/manifest），与本地比对后——
+  //   · 本地已是最新 → 直接返回，不下载任何东西；
+  //   · 有缺失文档 → 只请求这些文档的增量包（?ids=），避免每次都下整个库；
+  //   · 旧服务器无 manifest 接口 → 自动降级为全量下载。
+  async function pullFromTeam() {
+    let manifest = null;
+    try {
+      const mRes = await httpGet(`${HTTP.baseUrl}/yibiao/manifest`);
+      if (mRes.status === 200 && mRes.data && mRes.data.length) {
+        manifest = JSON.parse(mRes.data.toString('utf-8'));
+      }
+    } catch (e) {
+      manifest = null; // 旧服务器无此接口，走全量降级
+    }
+
+    if (manifest && Array.isArray(manifest.documents)) {
+      const localRows = db.prepare('SELECT document_id, is_deleted FROM knowledge_documents').all();
+      const localMap = new Map(localRows.map((r) => [r.document_id, !!r.is_deleted]));
+      const needIds = [];
+      let needDelete = 0;
+      for (const d of manifest.documents) {
+        const localDeleted = localMap.get(d.document_id);
+        if (d.is_deleted) {
+          if (localDeleted === false) needDelete++;
+        } else if (localDeleted === undefined) {
+          needIds.push(d.document_id);
+        }
+      }
+
+      if (needIds.length === 0 && needDelete === 0) {
+        return { ok: true, merged_documents: 0, skipped_documents: 0, deleted_documents: 0, note: '本地已是最新，跳过下载' };
+      }
+
+      if (needIds.length > 0) {
+        try {
+          const res = await httpGet(`${HTTP.baseUrl}${HTTP.downloadPath}?ids=${encodeURIComponent(needIds.join(','))}`);
+          if (res.status === 200 && res.data && res.data.length) {
+            const mergeResult = await mergeZipBuffer(res.data);
+            if (needDelete > 0) applySoftDeletes(manifest, localMap);
+            return mergeResult;
+          }
+        } catch (e) {
+          // 落到全量降级
+        }
+        return await downloadAndMerge(`${HTTP.baseUrl}${HTTP.downloadPath}`);
+      }
+
+      // 只需软删、无需下载文件
+      applySoftDeletes(manifest, localMap);
+      return { ok: true, merged_documents: 0, skipped_documents: 0, deleted_documents: needDelete, note: '已同步删除' };
+    }
+
+    // 降级：全量下载（兼容旧服务器 / manifest 不可用）
+    return await downloadAndMerge(`${HTTP.baseUrl}${HTTP.downloadPath}`);
   }
 
   return { pushToTeam, pullFromTeam };

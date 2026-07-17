@@ -895,6 +895,16 @@ function createExportTemplatesSchema(db) {
   `);
 }
 
+// 记录本地知识库与团队库的同步位点（上次成功 push/pull 的时间），用于增量同步。
+function createKnowledgeSyncMetaSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS knowledge_sync_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+  `);
+}
+
 const schemaHealthTableGroups = [
   {
     version: 1,
@@ -959,6 +969,11 @@ const schemaHealthTableGroups = [
       'knowledge_match_batches',
     ],
     repair: createKnowledgeBaseSchema,
+  },
+  {
+    version: 18,
+    tables: ['knowledge_sync_meta'],
+    repair: createKnowledgeSyncMetaSchema,
   },
   {
     version: 4,

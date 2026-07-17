@@ -703,7 +703,10 @@ function KnowledgeBasePage() {
         showToast(result?.error || '拉取团队库失败', 'error');
         return;
       }
-      showToast(`已拉取 ${result.merged_documents ?? 0} 篇新文档（跳过 ${result.skipped_documents ?? 0} 篇已有${(result.deleted_documents ?? 0) > 0 ? `，删除 ${result.deleted_documents} 篇` : ''}）`, 'success');
+      const pullMsg = result.note
+        ? result.note
+        : `已拉取 ${result.merged_documents ?? 0} 篇新文档（跳过 ${result.skipped_documents ?? 0} 篇已有${(result.deleted_documents ?? 0) > 0 ? `，删除 ${result.deleted_documents} 篇` : ''}）`;
+      showToast(pullMsg, 'success');
       const refreshed = await window.yibiao?.knowledgeBase.list();
       if (refreshed) setIndex(refreshed);
     } catch (error) {

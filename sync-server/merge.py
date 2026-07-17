@@ -343,17 +343,24 @@ def main():
     master.execute('PRAGMA journal_mode=WAL')
     try:
         zips = sorted(glob.glob(os.path.join(INCOMING, '*.zip')))
+        changed = False
         if not zips:
             print("[INFO] incoming/ 无增量包")
         for zp in zips:
             if process_package(zp, master):
                 dest = os.path.join(PROCESSED, os.path.basename(zp))
                 shutil.move(zp, dest)
+                changed = True
     finally:
         master.execute('PRAGMA wal_checkpoint(TRUNCATE)')
         master.close()
-    rebuild_master_zip()
-    print("[INFO] master.zip 已重建")
+    # 性能优化：只有在真正合并了增量包（changed=True）时才重建 master.zip。
+    # 否则每 5 分钟 timer 都会把整个库重新打包一次，知识库变大后纯属浪费 I/O。
+    if changed:
+        rebuild_master_zip()
+        print("[INFO] master.zip 已重建")
+    else:
+        print("[INFO] 无变化，跳过 master.zip 重建")
 
 
 if __name__ == '__main__':
