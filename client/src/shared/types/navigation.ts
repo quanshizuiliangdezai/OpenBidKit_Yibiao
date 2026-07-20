@@ -23,6 +23,7 @@ export type SectionId =
   | 'developer-export-preview'
   | 'developer-expansion-replace-test'
   | 'developer-opencode-agent-test'
+  | 'developer-agent-test'
   | 'settings'
   | 'account';
 

@@ -20,6 +20,11 @@
   </a>
 </p>
 
+<p align="center">
+  <a href="https://trendshift.io/repositories/45446?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-45446" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/45446" alt="FB208%2FOpenBidKit_Yibiao | Trendshift" width="250" height="55"></a>
+  <a href="https://trendshift.io/repositories/45446?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-45446" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/45446/daily?language=JavaScript" alt="FB208%2FOpenBidKit_Yibiao | Trendshift" width="250" height="55"></a>
+</p>
+
 
 <p align="left">
   <strong>🚀 开箱即用-开源免费AI标书编写工具</strong>
@@ -85,7 +90,7 @@
     </td>
     <td width="33%" valign="top">
       <strong>⚙️ 自定义AI配置</strong><br>
-      支持文本模型、生图模型和文件解析方式配置，适配团队习惯。
+      支持文本模型、生图模型、文件解析方式配置，并可在 OpenCode Agent 与 Pi Agent 间切换。
     </td>
     <td width="33%" valign="top">
       <strong>✏️ 可编辑工作流</strong><br>
@@ -114,7 +119,7 @@
 
 本仓库根目录没有 `package.json`，桌面客户端代码在 `client/`，开发命令都需要在 `client/` 目录下执行。
 
-本地开发调试 OpenCode Agent 相关能力前，需要先准备当前平台的 OpenCode binary。否则开发者测试页会报错：`OpenCode binary 不存在`。
+客户端内置 OpenCode Agent 与 Pi Agent 双运行时，默认使用 OpenCode，可在“设置 - 智能体配置”中切换。Pi Agent 随 `npm ci` 安装；本地调试 OpenCode Agent 前仍需准备当前平台的 OpenCode binary，否则智能体链路测试页会报错：`OpenCode binary 不存在`。
 
 Windows x64：
 
@@ -181,6 +186,7 @@ npm run dist:win
 - **桌面端**：Electron Main / Preload 提供本地文件、配置、导出和后台任务能力
 - **界面层**：Vite + React + TypeScript，使用全局 CSS 和 Radix UI 基础组件
 - **业务模块**：技术方案、知识库、标书查重、废标项检查、设置页
+- **智能体运行时**：OpenCode Agent 与 Pi Agent 共用文本模型配置、AI Proxy、命令工具环境和全局串行队列
 - **本地数据**：配置、工作区、生成缓存保存在 Electron `userData` 目录
 - **打包发布**：使用 electron-builder 构建 Windows / macOS 客户端
 
@@ -299,9 +305,9 @@ npm run dist:win
 
 <a href="https://www.star-history.com/?repos=FB208%2FOpenBidKit_Yibiao&type=timeline&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=FB208/OpenBidKit_Yibiao&type=timeline&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=FB208/OpenBidKit_Yibiao&type=timeline&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=FB208/OpenBidKit_Yibiao&type=timeline&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="assets/star-history/star-history-dark.svg" />
+   <source media="(prefers-color-scheme: light)" srcset="assets/star-history/star-history-light.svg" />
+   <img alt="Star History Chart" src="assets/star-history/star-history-light.svg" />
  </picture>
 </a>
 
