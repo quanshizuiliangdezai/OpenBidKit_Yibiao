@@ -17,6 +17,8 @@ _lock = threading.Lock()
 def _conn():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    # 多线程并发写时，遇锁自动等待而非立即抛 database is locked
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
@@ -90,7 +92,7 @@ def _ensure_admin():
     try:
         row = conn.execute("SELECT id FROM employees WHERE role='admin' LIMIT 1").fetchone()
         if row is None:
-            pw = os.environ.get('KB_ADMIN_PASSWORD', 'Yibiao@Admin2026')
+            pw = os.environ.get('KB_ADMIN_PASSWORD', 'YibiaoAdmin2026')
             h, salt = _hash_password(pw)
             now = datetime.datetime.now().isoformat()
             conn.execute(
@@ -140,6 +142,8 @@ def authenticate(username, password):
                 return None, '账号待审核或未通过'
             if not verify_password(password, row['password_salt'], row['password_hash']):
                 return None, '密码错误'
+            # 登录前清理该用户旧会话，避免 sessions 表无限增长
+            conn.execute("DELETE FROM sessions WHERE employee_id=?", (row['id'],))
             token = secrets.token_urlsafe(32)
             now = datetime.datetime.now()
             expires = (now + datetime.timedelta(days=30)).isoformat()
@@ -191,6 +195,10 @@ def list_pending():
 def review(user_id, action, admin_id, reject_reason=None):
     if action not in ('approve', 'reject'):
         return False, '无效操作'
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        return False, '无效的用户 ID'
     with _lock:
         conn = _conn()
         try:
@@ -226,4 +234,4 @@ def list_employees():
 
 def public_fields(e):
     return {k: e[k] for k in ('id', 'username', 'display_name', 'department', 'role', 'status',
-                              'wechat_openid', 'created_at')}
+                              'created_at')}

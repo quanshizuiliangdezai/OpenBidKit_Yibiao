@@ -43,8 +43,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception:
             return None
 
-    def _serve_html(self):
-        html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'kb_admin.html')
+    def _serve_html(self, name):
+        html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
         try:
             with open(html_path, 'r', encoding='utf-8') as f:
                 html = f.read()
@@ -107,7 +107,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         path = urlparse(self.path).path
 
         if path in ('/', '/admin'):
-            return self._serve_html()
+            return self._serve_html('kb_admin.html')
+        if path == '/register':
+            return self._serve_html('kb_register.html')
 
         if path == '/api/health':
             return self._send(200, {'status': 'ok'})

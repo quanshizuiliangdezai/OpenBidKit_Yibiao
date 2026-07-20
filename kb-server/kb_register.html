@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>易标知识库 · 员工注册</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #f4f6fb; color: #1f2a44; margin: 0; padding: 24px; }
+  .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.06); padding: 24px; max-width: 460px; margin: 40px auto; }
+  h2 { margin-top: 0; color: #1f5fd6; }
+  .tip { color: #5b6b8c; font-size: 13px; margin-bottom: 16px; }
+  .row { margin-bottom: 12px; }
+  input { width: 100%; padding: 10px 12px; border: 1px solid #d4dbe8; border-radius: 8px; font-size: 14px; }
+  button { width: 100%; padding: 11px; border: none; border-radius: 8px; background: #1f5fd6; color: #fff; font-size: 15px; cursor: pointer; }
+  button:hover { background: #174bb0; }
+  #msg { margin-top: 12px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>易标知识库 · 员工注册</h2>
+  <div class="tip">填写信息提交后，等待管理员审核通过即可登录使用。</div>
+  <div class="row"><input id="u" placeholder="登录用户名"></div>
+  <div class="row"><input id="p" type="password" placeholder="密码（至少 6 位）"></div>
+  <div class="row"><input id="n" placeholder="姓名"></div>
+  <div class="row"><input id="d" placeholder="部门（可选）"></div>
+  <button onclick="reg()">提交注册</button>
+  <div id="msg"></div>
+</div>
+<script>
+async function reg() {
+  const msg = document.getElementById('msg');
+  const body = {
+    username: document.getElementById('u').value.trim(),
+    password: document.getElementById('p').value,
+    display_name: document.getElementById('n').value.trim(),
+    department: document.getElementById('d').value.trim()
+  };
+  if (!body.username || !body.password || !body.display_name) {
+    msg.style.color = '#d9534f'; msg.textContent = '用户名、密码、姓名均必填'; return;
+  }
+  if (body.password.length < 6) {
+    msg.style.color = '#d9534f'; msg.textContent = '密码至少 6 位'; return;
+  }
+  const r = await fetch('/api/register', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const j = await r.json();
+  msg.style.color = r.ok ? '#1aa260' : '#d9534f';
+  msg.textContent = r.ok ? '注册成功，请等待管理员审核！' : (j.error || '注册失败');
+}
+</script>
+</body>
+</html>
