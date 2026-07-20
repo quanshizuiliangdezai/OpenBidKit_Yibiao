@@ -7,7 +7,7 @@ Type=simple
 WorkingDirectory=/toubiao/yibiao-kb-server
 Environment=KB_PORT=15004
 Environment=KB_DB=/toubiao/yibiao-kb-server/kb.sqlite
-Environment=KB_ADMIN_PASSWORD=Yibiao@Admin2026
+Environment=KB_ADMIN_PASSWORD=YibiaoAdmin2026
 ExecStart=/usr/bin/python3 /toubiao/yibiao-kb-server/kb_server.py
 Restart=always
 RestartSec=3
