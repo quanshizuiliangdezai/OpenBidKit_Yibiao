@@ -1044,13 +1044,21 @@ function createReport({ blocks, filteredBlocks, candidateItems, finalItems, matc
   };
 }
 
-function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore }) {
+function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore, syncService }) {
   const baseDir = getKnowledgeBaseDir(app);
   const activePreparations = new Set();
   const activeMatches = new Set();
 
   if (!knowledgeBaseStore) {
     throw new Error('知识库数据库服务尚未初始化');
+  }
+
+  // 删除后自动把软删意图推送到团队库，无需用户再手动点「同步到团队库」。
+  // 后台 fire-and-forget：失败静默（后台自动同步或用户手动同步会再次尝试），绝不阻塞删除响应。
+  function notifyTeamOfDeletion() {
+    if (syncService && typeof syncService.pushToTeam === 'function') {
+      Promise.resolve().then(() => syncService.pushToTeam()).catch(() => {});
+    }
   }
 
   function isDeveloperMode() {
@@ -2127,6 +2135,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       }
       fs.rmSync(fromRelative(baseDir, path.join('folders', folderId)), { recursive: true, force: true });
       knowledgeBaseStore.deleteFolder(folderId);
+      notifyTeamOfDeletion();
       return { success: true, message: `已删除文件夹“${folder.name}”及 ${documentsToDelete.length} 个文档` };
     },
 
@@ -2140,6 +2149,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       fs.rmSync(fromRelative(baseDir, document.document_dir), { recursive: true, force: true });
       fs.rmSync(getDebugLogPath(app, documentId), { force: true });
       knowledgeBaseStore.deleteDocument(documentId);
+      notifyTeamOfDeletion();
       return { success: true, message: `已删除文档“${document.file_name}”` };
     },
 

@@ -237,9 +237,12 @@ function createSyncService({ app, db, configStore }) {
     const successDocs = db
       .prepare("SELECT document_id, folder_id FROM knowledge_documents WHERE status = 'success' AND is_deleted = 0 AND updated_at > ?")
       .all(lastPushAt);
+    // 软删文档不限增量位点：软删是「必须传播的意图」（别人/本机其他会话都依赖它），
+    // 且服务器 merge 对已有 document_id 是 UPDATE is_deleted（幂等），重复推送无害。
+    // 否则当 last_push_at 已超前于删除时间时，软删会被漏推 —— 表现为「删了却报没有可同步的文档」。
     const deletedDocs = db
-      .prepare("SELECT document_id, folder_id FROM knowledge_documents WHERE is_deleted = 1 AND updated_at > ?")
-      .all(lastPushAt);
+      .prepare("SELECT document_id, folder_id FROM knowledge_documents WHERE is_deleted = 1")
+      .all();
     const syncableDocs = [...successDocs, ...deletedDocs];
     if (!syncableDocs.length) {
       return { ok: false, error: '没有可同步的文档' };
