@@ -1,0 +1,16 @@
+[Unit]
+Description=Yibiao KB Auth Service (Plan D - account/password + self-register + admin review)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/toubiao/yibiao-kb-server
+Environment=KB_PORT=15004
+Environment=KB_DB=/toubiao/yibiao-kb-server/kb.sqlite
+Environment=KB_ADMIN_PASSWORD=Yibiao@Admin2026
+ExecStart=/usr/bin/python3 /toubiao/yibiao-kb-server/kb_server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
