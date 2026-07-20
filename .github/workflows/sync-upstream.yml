@@ -7,8 +7,7 @@ on:
   workflow_dispatch:  # 允许手动触发
 
 permissions:
-  contents: write
-  workflows: write
+  contents: read
 
 jobs:
   sync-upstream:
@@ -19,7 +18,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT }}
 
       - name: Configure Git
         run: |
@@ -33,7 +32,6 @@ jobs:
 
       - name: Merge upstream/main
         run: |
-          # 尝试合并 upstream/main 到 main
           git merge upstream/main --no-edit || {
             echo "Merge conflict detected. Aborting."
             git merge --abort
@@ -42,6 +40,5 @@ jobs:
 
       - name: Push to origin
         run: |
-          # 推送合并后的代码到 origin/main
-          git push origin main
-          echo "✅ Upstream sync completed at $(date)" >> $GITHUB_STEP_SUMMARY
+          git push https://x-access-token:${{ secrets.PAT }}@github.com/quanshizuiliangdezai/OpenBidKit_Yibiao.git main
+          echo "Upstream sync completed at $(date)" >> $GITHUB_STEP_SUMMARY
