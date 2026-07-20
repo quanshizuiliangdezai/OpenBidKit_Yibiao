@@ -19,9 +19,21 @@ from urllib.parse import parse_qs
 
 PORT = 15002
 UPLOAD_DIR = '/toubiao/yibiao-incoming'
-MASTER_ZIP = '/toubiao/yibiao-master/master.zip'
+MASTER_ZIP = '/toubiao/yibiao-master/master.zip'  # 全量下载兜底（无 ?ids 时）
+# 性能关键：直接读「实时主库」与「实时文件目录」，避免每次请求都把整个 master.zip 解压一遍
+# （库变大会导致每 30s 轮询都解压全库，I/O 随库规模线性增长 → 越来越慢）。
+# 这些路径与 merge.py 通过 systemd 注入的 YIBIAO_MASTER_DB / YIBIAO_MASTER_KB 保持一致。
+MASTER_DB = os.environ.get('YIBIAO_MASTER_DB', '/toubiao/yibiao-master/master.sqlite')
+MASTER_KB = os.environ.get('YIBIAO_MASTER_KB', '/toubiao/yibiao-master/knowledge-base')
 AUTH_TOKEN = 'yibiao-sync-2026'
 LOG_FILE = '/toubiao/yibiao-http-server/server.log'
+
+
+def _master_db_conn():
+    """打开实时主库只读连接；主库不存在（全新部署）时返回 None。"""
+    if not os.path.exists(MASTER_DB):
+        return None
+    return sqlite3.connect(MASTER_DB)
 
 
 def log(msg):
@@ -33,60 +45,53 @@ def log(msg):
         pass
 
 
-def _extract_master_sqlite():
-    """解压 master.zip 里的 knowledge.sqlite 到临时目录，返回 (sqlite_path, tmp_dir)。调用方负责 shutil.rmtree(tmp_dir)。"""
-    tmp = tempfile.mkdtemp(prefix='yibiao-srv-')
-    with zipfile.ZipFile(MASTER_ZIP, 'r') as z:
-        z.extractall(tmp)
-    return os.path.join(tmp, 'knowledge.sqlite'), tmp
-
-
 def build_manifest():
     """返回主库文档清单（轻量 JSON），供客户端增量 pull 时比对，避免每次下载整个 zip。"""
-    if not os.path.exists(MASTER_ZIP):
+    conn = _master_db_conn()
+    if conn is None:
         return None
-    sqlite_path, tmp = _extract_master_sqlite()
     try:
-        conn = sqlite3.connect(sqlite_path)
         cols = [c[1] for c in conn.execute('PRAGMA table_info(knowledge_documents)').fetchall()]
         need = ['document_id', 'folder_id', 'is_deleted', 'updated_at']
         have = [c for c in need if c in cols]
         docs = [dict(zip(have, r)) for r in conn.execute(
             'SELECT {} FROM knowledge_documents'.format(','.join(have))
         ).fetchall()]
-        conn.close()
         return {'documents': docs, 'generated_at': datetime.datetime.now().isoformat()}
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        conn.close()
 
 
 def build_incremental_zip(ids):
-    """按需打包：全量 metadata（knowledge.sqlite，体积小）+ 仅指定文档的 kb 源文件（大文件按需）。"""
-    sqlite_path, tmp = _extract_master_sqlite()
+    """按需打包：实时主库 metadata + 仅指定文档的 kb 源文件（不再解压整个 master.zip）。
+
+    性能：直接读实时 master.sqlite 与实时 knowledge-base 目录，
+    每请求成本 = O(所需文档数) 而非 O(全库大小)，库越大优势越明显。
+    """
+    conn = _master_db_conn()
+    if conn is None:
+        return None
     out_path = tempfile.mktemp(suffix='.zip')
     try:
-        conn = sqlite3.connect(sqlite_path)
         placeholders = ','.join('?' * len(ids))
         rows = conn.execute(
             'SELECT document_id, folder_id FROM knowledge_documents WHERE document_id IN ({})'.format(placeholders),
             ids,
         ).fetchall()
-        conn.close()
-        kb_root = os.path.join(tmp, 'kb')
         with zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED) as z:
-            z.write(sqlite_path, 'knowledge.sqlite')
+            z.write(MASTER_DB, 'knowledge.sqlite')
             for doc_id, folder_id in rows:
-                src = os.path.join(kb_root, 'folders', folder_id, 'documents', doc_id)
+                src = os.path.join(MASTER_KB, 'folders', folder_id, 'documents', doc_id)
                 if not os.path.isdir(src):
                     continue
                 for root, _dirs, files in os.walk(src):
                     for f in files:
                         fp = os.path.join(root, f)
-                        arc = os.path.join('kb', os.path.relpath(fp, kb_root))
+                        arc = os.path.join('kb', os.path.relpath(fp, MASTER_KB))
                         z.write(fp, arc)
         return out_path
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        conn.close()
 
 
 class SyncHandler(http.server.BaseHTTPRequestHandler):
@@ -160,10 +165,10 @@ class SyncHandler(http.server.BaseHTTPRequestHandler):
                     return
                 self._send_json(200, manifest)
                 return
-            # 下载接口：支持 ?ids= 按需下载（只含指定文档的源文件），无 ids 则返回全量（兼容旧客户端）
-            if not os.path.exists(MASTER_ZIP):
-                self._send_json(404, {'error': 'master.zip 不存在'})
-                return
+            # 下载接口：支持 ?ids= 按需下载（只含指定文档的源文件，直接读实时主库），
+            # 无 ids 则返回全量 zip（兼容旧客户端）。
+            # 注意：master.zip 守卫只拦「无 ids 的全量下载」，增量下载即使 master.zip 尚未重建
+            # （如刚硬删完、还没人 push）也能从实时主库正常取文件，不会被 404 误杀。
             ids = None
             if '?' in self.path:
                 qs = parse_qs(self.path.split('?', 1)[1])
@@ -172,17 +177,23 @@ class SyncHandler(http.server.BaseHTTPRequestHandler):
                 id_list = [x for x in ids.split(',') if x]
                 if id_list:
                     tmp_zip = build_incremental_zip(id_list)
-                    try:
-                        with open(tmp_zip, 'rb') as f:
-                            content = f.read()
-                    finally:
-                        os.remove(tmp_zip)
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/zip')
-                    self.send_header('Content-Length', str(len(content)))
-                    self.end_headers()
-                    self.wfile.write(content)
-                    return
+                    if tmp_zip and os.path.exists(tmp_zip):
+                        try:
+                            with open(tmp_zip, 'rb') as f:
+                                content = f.read()
+                        finally:
+                            os.remove(tmp_zip)
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/zip')
+                        self.send_header('Content-Length', str(len(content)))
+                        self.end_headers()
+                        self.wfile.write(content)
+                        return
+                    # 增量构建失败（主库为空/不存在）→ 落到下方全量守卫
+            # 全量下载（无 ids）：master.zip 不存在则 404
+            if not os.path.exists(MASTER_ZIP):
+                self._send_json(404, {'error': 'master.zip 不存在'})
+                return
             with open(MASTER_ZIP, 'rb') as f:
                 content = f.read()
             self.send_response(200)
