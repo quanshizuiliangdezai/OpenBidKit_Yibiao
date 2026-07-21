@@ -5,14 +5,17 @@ import http.server
 import socketserver
 import json
 import os
+import re
 import datetime
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs, quote
 import kb_db
 
 PORT = int(os.environ.get('KB_PORT', '15004'))
 DB_PATH = os.environ.get('KB_DB', '/toubiao/yibiao-kb-server/kb.sqlite')
 kb_db.DB_PATH = DB_PATH
 kb_db.init_db()
+# 为已审核员工补建根文件夹（兼容历史数据）
+kb_db.ensure_all_root_folders()
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -67,15 +70,107 @@ class Handler(http.server.BaseHTTPRequestHandler):
         e = self._auth()
         return e if (e and e['role'] == 'admin') else None
 
+    def _query_param(self, key):
+        q = parse_qs(urlparse(self.path).query)
+        return q.get(key, [None])[0]
+
+    def _can_write_folder(self, employee, parent_id):
+        """员工只能在自己根文件夹及子文件夹内写；管理员全库可写。"""
+        if employee['role'] == 'admin':
+            return True, None
+        root = kb_db.get_root_folder(employee['id'])
+        if not root:
+            return False, '你还没有根文件夹，请联系管理员'
+        if parent_id in (None, '', 0, '0'):
+            return False, '员工不能创建顶级文件夹'
+        if kb_db.is_in_own_subtree(employee['id'], int(parent_id)):
+            return True, None
+        return False, '只能在自己根文件夹及子文件夹内操作'
+
+    def _parse_multipart(self):
+        """极简 multipart/form-data 解析（不依赖已移除的 cgi 模块）。"""
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+        except (TypeError, ValueError):
+            return {}, {}
+        raw = self.rfile.read(length) if length else b''
+        ctype = self.headers.get('Content-Type', '')
+        boundary = None
+        for seg in ctype.split(';'):
+            seg = seg.strip()
+            if seg.startswith('boundary='):
+                boundary = seg[len('boundary='):].strip('"')
+        if not boundary:
+            return {}, {}
+        delim = ('--' + boundary).encode()
+        fields, files = {}, {}
+        for p in raw.split(delim):
+            if p in (b'', b'--', b'\r\n'):
+                continue
+            if p.startswith(b'\r\n'):
+                p = p[2:]
+            if p.endswith(b'\r\n'):
+                p = p[:-2]
+            if p == b'--':
+                continue
+            if b'\r\n\r\n' not in p:
+                continue
+            head, body = p.split(b'\r\n\r\n', 1)
+            headers = {}
+            for line in head.decode('utf-8', 'replace').split('\r\n'):
+                if ':' in line:
+                    k, v = line.split(':', 1)
+                    headers[k.strip().lower()] = v.strip()
+            cd = headers.get('content-disposition', '')
+            name = filename = None
+            for seg in cd.split(';'):
+                seg = seg.strip()
+                if seg.startswith('name='):
+                    name = seg[len('name='):].strip('"')
+                elif seg.startswith('filename='):
+                    filename = seg[len('filename='):].strip('"')
+            if not name:
+                continue
+            if filename:
+                files[name] = {
+                    'filename': filename,
+                    'content_type': headers.get('content-type', 'application/octet-stream'),
+                    'data': body,
+                }
+            else:
+                fields[name] = body.decode('utf-8', 'replace')
+        return fields, files
+
+    def _send_file(self, full_path, filename, mime):
+        size = os.path.getsize(full_path)
+        self.send_response(200)
+        self.send_header('Content-Type', mime or 'application/octet-stream')
+        self.send_header('Content-Length', str(size))
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        self.send_header('Content-Disposition',
+                         'attachment; filename*=UTF-8\'\'' + quote(filename or 'download'))
+        self.end_headers()
+        with open(full_path, 'rb') as fh:
+            while True:
+                chunk = fh.read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+
     # ---------- 路由 ----------
     def do_OPTIONS(self):
         self._send(204)
 
     def do_POST(self):
         path = urlparse(self.path).path
-        data = self._read_json()
-        if data is None:
-            return self._send(400, {'error': '请求体不是合法 JSON'})
+        ctype = self.headers.get('Content-Type', '')
+        data = {}
+        if 'application/json' in ctype:
+            data = self._read_json()
+            if data is None:
+                return self._send(400, {'error': '请求体不是合法 JSON'})
 
         if path == '/api/register':
             ok, err = kb_db.register(
@@ -100,6 +195,47 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not ok:
                 return self._send(400, {'error': err})
             return self._send(200, {'success': True, 'message': '审核完成'})
+
+        if path == '/api/folders':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            name = (data.get('name') or '').strip()
+            parent_id = data.get('parent_id')
+            ok, err = self._can_write_folder(employee, parent_id)
+            if not ok:
+                return self._send(403, {'error': err})
+            folder, ferr = kb_db.create_folder(name, parent_id, employee['id'])
+            if ferr:
+                return self._send(400, {'error': ferr})
+            return self._send(200, {'success': True, 'data': folder})
+
+        if path == '/api/documents':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            ctype = self.headers.get('Content-Type', '')
+            if 'multipart/form-data' not in ctype:
+                return self._send(400, {'error': '上传需使用 multipart/form-data'})
+            fields, files = self._parse_multipart()
+            folder_id = fields.get('folder_id')
+            f = files.get('file')
+            if not folder_id or not f:
+                return self._send(400, {'error': '缺少 folder_id 或 file'})
+            ok, err = self._can_write_folder(employee, folder_id)
+            if not ok:
+                return self._send(403, {'error': err})
+            if not kb_db.get_folder(folder_id):
+                return self._send(400, {'error': '目标文件夹不存在'})
+            title = fields.get('title') or f['filename']
+            doc, derr = kb_db.upload_document(
+                folder_id, employee['id'], title, f['filename'],
+                f.get('content_type', 'application/octet-stream'), f['data'])
+            if derr:
+                return self._send(400, {'error': derr})
+            return self._send(200, {'success': True, 'data': {
+                k: doc[k] for k in ('id', 'folder_id', 'owner_id', 'title',
+                                    'file_name', 'file_size', 'mime_type', 'created_at')}})
 
         return self._send(404, {'error': '接口不存在'})
 
@@ -129,6 +265,73 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not self._is_admin():
                 return self._send(403, {'error': '需要管理员权限'})
             return self._send(200, {'data': kb_db.list_employees()})
+
+        # 下载文档文件（流式）
+        m = re.match(r'^/api/documents/(\d+)/file$', path)
+        if m:
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            doc = kb_db.get_document(m.group(1))
+            if not doc:
+                return self._send(404, {'error': '文档不存在'})
+            full = os.path.join(kb_db.KB_DATA_DIR, doc['file_path'])
+            if not os.path.isfile(full):
+                return self._send(404, {'error': '文件已丢失'})
+            self._send_file(full, doc['file_name'], doc['mime_type'])
+            return
+
+        if path == '/api/folders':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            folders = kb_db.list_folders()
+            parent = self._query_param('parent')
+            if parent not in (None, ''):
+                pid = None if parent in ('0', 'null') else int(parent)
+                folders = [f for f in folders if f['parent_id'] == pid]
+            return self._send(200, {'data': folders})
+
+        if path == '/api/documents':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            folder = self._query_param('folder')
+            if not folder:
+                return self._send(400, {'error': '缺少 folder 参数'})
+            return self._send(200, {'data': kb_db.list_documents(folder)})
+
+        return self._send(404, {'error': '接口不存在'})
+
+    def do_DELETE(self):
+        path = urlparse(self.path).path
+        employee = self._auth()
+        if not employee:
+            return self._send(401, {'error': '未登录或会话已过期'})
+
+        m = re.match(r'^/api/folders/(\d+)$', path)
+        if m:
+            folder = kb_db.get_folder(m.group(1))
+            if not folder:
+                return self._send(404, {'error': '文件夹不存在'})
+            if employee['role'] != 'admin' and folder['owner_id'] != employee['id']:
+                return self._send(403, {'error': '只能删除自己创建的文件夹'})
+            ok, err = kb_db.delete_folder(m.group(1))
+            if not ok:
+                return self._send(400, {'error': err})
+            return self._send(200, {'success': True, 'message': '文件夹已删除'})
+
+        m = re.match(r'^/api/documents/(\d+)$', path)
+        if m:
+            doc = kb_db.get_document(m.group(1))
+            if not doc:
+                return self._send(404, {'error': '文档不存在'})
+            if employee['role'] != 'admin' and doc['owner_id'] != employee['id']:
+                return self._send(403, {'error': '只能删除自己上传的文档'})
+            ok, err = kb_db.delete_document(m.group(1))
+            if not ok:
+                return self._send(400, {'error': err})
+            return self._send(200, {'success': True, 'message': '文档已删除'})
 
         return self._send(404, {'error': '接口不存在'})
 

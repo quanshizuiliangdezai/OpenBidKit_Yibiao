@@ -11,6 +11,8 @@ import datetime
 import threading
 
 DB_PATH = os.environ.get('KB_DB', '/toubiao/yibiao-kb-server/kb.sqlite')
+# 文档物理存储目录（只在服务器，客户端不留存）
+KB_DATA_DIR = os.environ.get('KB_DATA_DIR', '/toubiao/yibiao-kb-server/knowledge-base')
 _lock = threading.Lock()
 
 
@@ -19,11 +21,14 @@ def _conn():
     conn.row_factory = sqlite3.Row
     # 多线程并发写时，遇锁自动等待而非立即抛 database is locked
     conn.execute("PRAGMA busy_timeout=5000")
+    # 启用外键级联：删除文件夹时自动级联删子文件夹与文档行
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    os.makedirs(KB_DATA_DIR, exist_ok=True)
     conn = _conn()
     with conn:
         conn.executescript('''
@@ -199,12 +204,14 @@ def review(user_id, action, admin_id, reject_reason=None):
         user_id = int(user_id)
     except (TypeError, ValueError):
         return False, '无效的用户 ID'
+    name = None
     with _lock:
         conn = _conn()
         try:
-            row = conn.execute("SELECT id FROM employees WHERE id=?", (user_id,)).fetchone()
+            row = conn.execute("SELECT id,display_name,username FROM employees WHERE id=?", (user_id,)).fetchone()
             if not row:
                 return False, '用户不存在'
+            name = row['display_name'] or row['username']
             now = datetime.datetime.now().isoformat()
             if action == 'approve':
                 conn.execute(
@@ -215,9 +222,12 @@ def review(user_id, action, admin_id, reject_reason=None):
                     "UPDATE employees SET status='rejected', reviewed_at=?, reviewed_by=?, reject_reason=? WHERE id=?",
                     (now, admin_id, reject_reason, user_id))
             conn.commit()
-            return True, None
         finally:
             conn.close()
+    # 审核通过时，为该员工建立专属根文件夹（在锁外调用，避免重入死锁）
+    if action == 'approve' and name:
+        create_root_folder(user_id, name)
+    return True, None
 
 
 def list_employees():
@@ -235,3 +245,233 @@ def list_employees():
 def public_fields(e):
     return {k: e[k] for k in ('id', 'username', 'display_name', 'department', 'role', 'status',
                               'created_at')}
+
+
+# ---------- 根文件夹（每员工一个，parent_id=NULL 且 owner_id=该员工）----------
+
+def get_root_folder(employee_id):
+    with _lock:
+        conn = _conn()
+        try:
+            r = conn.execute(
+                "SELECT * FROM knowledge_folders WHERE parent_id IS NULL AND owner_id=? ORDER BY id LIMIT 1",
+                (employee_id,)).fetchone()
+            return dict(r) if r else None
+        finally:
+            conn.close()
+
+
+def create_root_folder(employee_id, name):
+    with _lock:
+        conn = _conn()
+        try:
+            existing = conn.execute(
+                "SELECT id FROM knowledge_folders WHERE parent_id IS NULL AND owner_id=? LIMIT 1",
+                (employee_id,)).fetchone()
+            if existing:
+                r = conn.execute("SELECT * FROM knowledge_folders WHERE id=?", (existing['id'],)).fetchone()
+                return dict(r)
+            cur = conn.execute(
+                "INSERT INTO knowledge_folders (name,parent_id,owner_id,created_at) VALUES (?,NULL,?,?)",
+                (name, employee_id, datetime.datetime.now().isoformat()))
+            conn.commit()
+            r = conn.execute("SELECT * FROM knowledge_folders WHERE id=?", (cur.lastrowid,)).fetchone()
+            return dict(r)
+        finally:
+            conn.close()
+
+
+def ensure_all_root_folders():
+    """为所有已审核通过的员工补建根文件夹（服务启动时调用，兼容历史数据）。"""
+    with _lock:
+        conn = _conn()
+        try:
+            emps = conn.execute(
+                "SELECT id,display_name,username FROM employees WHERE status='approved'").fetchall()
+            for e in emps:
+                if not conn.execute(
+                        "SELECT id FROM knowledge_folders WHERE parent_id IS NULL AND owner_id=?",
+                        (e['id'],)).fetchone():
+                    conn.execute(
+                        "INSERT INTO knowledge_folders (name,parent_id,owner_id,created_at) VALUES (?,NULL,?,?)",
+                        (e['display_name'] or e['username'], e['id'], datetime.datetime.now().isoformat()))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+# ---------- 文件夹 CRUD ----------
+
+def _subtree_ids(root_id):
+    """返回 root_id 及其所有后代文件夹 id 集合（BFS）。"""
+    result = {root_id}
+    queue = [root_id]
+    conn = _conn()
+    try:
+        while queue:
+            cur = queue.pop()
+            rows = conn.execute("SELECT id FROM knowledge_folders WHERE parent_id=?", (cur,)).fetchall()
+            for r in rows:
+                if r['id'] not in result:
+                    result.add(r['id'])
+                    queue.append(r['id'])
+    finally:
+        conn.close()
+    return result
+
+
+def is_in_own_subtree(employee_id, folder_id):
+    """folder_id 是否落在员工自己根文件夹的子树内。"""
+    root = get_root_folder(employee_id)
+    if not root:
+        return False
+    return int(folder_id) == root['id'] or int(folder_id) in _subtree_ids(root['id'])
+
+
+def create_folder(name, parent_id, owner_id):
+    name = (name or '').strip()
+    if not name:
+        return None, '文件夹名必填'
+    with _lock:
+        conn = _conn()
+        try:
+            pid = int(parent_id) if parent_id not in (None, '', 0, '0') else None
+            if pid is not None:
+                p = conn.execute("SELECT id FROM knowledge_folders WHERE id=?", (pid,)).fetchone()
+                if not p:
+                    return None, '父文件夹不存在'
+            cur = conn.execute(
+                "INSERT INTO knowledge_folders (name,parent_id,owner_id,created_at) VALUES (?,?,?,?)",
+                (name, pid, owner_id, datetime.datetime.now().isoformat()))
+            conn.commit()
+            fid = cur.lastrowid
+            row = conn.execute("SELECT * FROM knowledge_folders WHERE id=?", (fid,)).fetchone()
+            return dict(row), None
+        finally:
+            conn.close()
+
+
+def list_folders():
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT id,name,parent_id,owner_id,created_at FROM knowledge_folders ORDER BY name").fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+
+def get_folder(folder_id):
+    with _lock:
+        conn = _conn()
+        try:
+            r = conn.execute("SELECT * FROM knowledge_folders WHERE id=?", (int(folder_id),)).fetchone()
+            return dict(r) if r else None
+        finally:
+            conn.close()
+
+
+def _remove_file(rel_path):
+    if not rel_path:
+        return
+    try:
+        p = os.path.join(KB_DATA_DIR, rel_path)
+        if os.path.isfile(p):
+            os.remove(p)
+    except Exception:
+        pass
+
+
+def delete_folder(folder_id):
+    """硬删：先删物理文件，再删文件夹行（外键级联删子文件夹与文档行）。"""
+    with _lock:
+        conn = _conn()
+        try:
+            ids = list(_subtree_ids(int(folder_id)))
+            if not ids:
+                return False, '文件夹不存在'
+            ph = ','.join('?' * len(ids))
+            docs = conn.execute(
+                "SELECT id,file_path FROM knowledge_documents WHERE folder_id IN (%s)" % ph, ids).fetchall()
+            for d in docs:
+                _remove_file(d['file_path'])
+            conn.execute("DELETE FROM knowledge_folders WHERE id IN (%s)" % ph, ids)
+            conn.commit()
+            return True, None
+        finally:
+            conn.close()
+
+
+# ---------- 文档（上传/列表/下载/硬删）----------
+
+def upload_document(folder_id, owner_id, title, file_name, mime_type, data):
+    folder_id = int(folder_id)
+    if not data:
+        return None, '文件内容为空'
+    with _lock:
+        conn = _conn()
+        try:
+            f = conn.execute("SELECT id FROM knowledge_folders WHERE id=?", (folder_id,)).fetchone()
+            if not f:
+                return None, '目标文件夹不存在'
+            now = datetime.datetime.now().isoformat()
+            cur = conn.execute(
+                "INSERT INTO knowledge_documents "
+                "(folder_id,owner_id,title,file_name,file_path,file_size,mime_type,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (folder_id, owner_id, title, file_name, '', 0, mime_type, now))
+            doc_id = cur.lastrowid
+            # 物理文件以 doc_id 命名存入 KB_DATA_DIR（避免中文/特殊文件名问题）
+            rel = str(doc_id)
+            full = os.path.join(KB_DATA_DIR, rel)
+            os.makedirs(KB_DATA_DIR, exist_ok=True)
+            with open(full, 'wb') as fh:
+                fh.write(data)
+            conn.execute(
+                "UPDATE knowledge_documents SET file_path=?, file_size=? WHERE id=?",
+                (rel, len(data), doc_id))
+            conn.commit()
+            row = conn.execute("SELECT * FROM knowledge_documents WHERE id=?", (doc_id,)).fetchone()
+            return dict(row), None
+        finally:
+            conn.close()
+
+
+def list_documents(folder_id):
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT id,folder_id,owner_id,title,file_name,file_size,mime_type,created_at "
+                "FROM knowledge_documents WHERE folder_id=? ORDER BY title",
+                (int(folder_id),)).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+
+def get_document(doc_id):
+    with _lock:
+        conn = _conn()
+        try:
+            r = conn.execute("SELECT * FROM knowledge_documents WHERE id=?", (int(doc_id),)).fetchone()
+            return dict(r) if r else None
+        finally:
+            conn.close()
+
+
+def delete_document(doc_id):
+    """硬删：删行 + 物理删文件。"""
+    with _lock:
+        conn = _conn()
+        try:
+            r = conn.execute("SELECT id,file_path FROM knowledge_documents WHERE id=?", (int(doc_id),)).fetchone()
+            if not r:
+                return False, '文档不存在'
+            _remove_file(r['file_path'])
+            conn.execute("DELETE FROM knowledge_documents WHERE id=?", (int(doc_id),))
+            conn.commit()
+            return True, None
+        finally:
+            conn.close()
