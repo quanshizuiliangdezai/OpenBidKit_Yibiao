@@ -1027,3 +1027,169 @@
     flex-direction: column-reverse;
   }
 }
+
+/* [方案 D] 团队库登录面板 */
+.kb-login-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  padding: 40px 20px;
+}
+
+.kb-login-card {
+  display: flex;
+  flex-direction: column;
+  width: min(440px, 100%);
+  gap: 20px;
+  padding: 32px;
+  background:
+    radial-gradient(circle at 92% 8%, rgba(33, 116, 253, 0.08), transparent 28%),
+    #ffffff;
+  border: 1px solid rgba(228, 233, 240, 0.92);
+  border-radius: 24px;
+  box-shadow: 0 20px 56px rgba(23, 32, 51, 0.1);
+}
+
+.kb-login-head {
+  display: grid;
+  gap: 6px;
+  text-align: center;
+}
+
+.kb-login-head h2 {
+  margin: 0;
+  color: var(--yb-text);
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.kb-login-head p {
+  margin: 0;
+  color: var(--yb-text-soft);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.kb-login-form {
+  display: grid;
+  gap: 16px;
+}
+
+.kb-login-field {
+  display: grid;
+  gap: 6px;
+}
+
+.kb-login-field span {
+  color: var(--yb-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.kb-login-field input {
+  width: 100%;
+  padding: 10px 14px;
+  color: var(--yb-text);
+  font-size: 14px;
+  background: #fbfcff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 12px;
+  outline: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.kb-login-field input:focus {
+  background: #ffffff;
+  border-color: rgba(33, 116, 253, 0.38);
+  box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.08);
+}
+
+.kb-login-error {
+  padding: 8px 12px;
+  color: #dc2626;
+  font-size: 13px;
+  background: rgba(220, 38, 38, 0.06);
+  border-radius: 8px;
+}
+
+.kb-login-actions {
+  display: flex;
+  justify-content: center;
+}
+
+.kb-login-actions .primary-action {
+  width: 100%;
+  padding: 10px 20px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: opacity 160ms ease;
+}
+
+.kb-login-actions .primary-action:hover {
+  opacity: 0.9;
+}
+
+.kb-login-actions .primary-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.kb-login-hint {
+  text-align: center;
+}
+
+.kb-login-hint p {
+  margin: 0;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* [方案 D] 团队库用户信息条 */
+.kb-user-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  background: rgba(33, 116, 253, 0.04);
+  border: 1px solid rgba(33, 116, 253, 0.12);
+  border-radius: 10px;
+}
+
+.kb-user-bar-name {
+  color: var(--yb-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.kb-user-bar-role {
+  padding: 2px 8px;
+  color: var(--yb-primary);
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(33, 116, 253, 0.1);
+  border-radius: 6px;
+}
+
+.kb-user-bar-logout {
+  margin-left: auto;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--yb-text-soft);
+  background: transparent;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+
+.kb-user-bar-logout:hover {
+  color: #dc2626;
+  border-color: rgba(220, 38, 38, 0.3);
+}

@@ -345,32 +345,68 @@ export interface AgentSelfCheckReportExportResult {
   message: string;
 }
 
-export interface SyncPushResult {
-  ok: boolean;
-  error?: string;
-  pushed_documents?: number;
-  deleted_documents?: number;
-  file?: string;
+export interface KbAuthEmployee {
+  id: string | number;
+  username: string;
+  display_name?: string;
+  role: 'admin' | 'employee';
+  status?: string;
+  [key: string]: unknown;
 }
 
-export interface SyncPullResult {
-  ok: boolean;
-  error?: string;
-  merged_documents?: number;
-  skipped_documents?: number;
-  deleted_documents?: number;
-  note?: string;
+export interface KbAuthStatus {
+  loggedIn: boolean;
+  serverUrl: string;
+  employee: KbAuthEmployee | null;
 }
 
-export interface AutoSyncStatus {
-  enabled: boolean;
-  running: boolean;
-  status: 'idle' | 'syncing' | 'error';
-  lastError: string | null;
-  lastSuccessAt: string | null;
-  lastPullAt: string | null;
-  lastPullChanges: number;
-  message: string;
+export interface KbAuthLoginPayload {
+  username: string;
+  password: string;
+  serverUrl?: string;
+}
+
+export interface KbTeamFolder {
+  id: string | number;
+  name: string;
+  parent_id?: string | number | null;
+  owner_id?: string | number;
+  owner_name?: string;
+  created_at?: string;
+  [key: string]: unknown;
+}
+
+export interface KbTeamDocument {
+  id: string | number;
+  name: string;
+  original_name?: string;
+  folder_id?: string | number | null;
+  file_size?: number;
+  uploaded_by?: string | number;
+  uploaded_by_name?: string;
+  created_at?: string;
+  [key: string]: unknown;
+}
+
+export interface KbTeamTree {
+  folders: KbTeamFolder[];
+  documents: KbTeamDocument[];
+}
+
+export interface KbTeamUploadResult {
+  success: boolean;
+  uploaded?: KbTeamDocument[];
+  errors?: Array<{ file: string; error: string }>;
+  canceled?: boolean;
+  error?: string;
+  needLogin?: boolean;
+}
+
+export interface KbTeamResult {
+  success: boolean;
+  data?: unknown;
+  error?: string;
+  needLogin?: boolean;
 }
 
 export interface YibiaoBridge {
@@ -452,6 +488,13 @@ export interface YibiaoBridge {
     readMarkdown: (documentId: string) => Promise<string>;
     readItems: (documentId: string) => Promise<KnowledgeItem[]>;
     readAnalysis: (documentId: string) => Promise<KnowledgeAnalysisSnapshot>;
+    analyzeExternalFile: (documentId: string | number, filePath: string, fileName: string, folderId: string | number) => Promise<KnowledgeDocument>;
+    getLocalStatus: (documentId: string | number) => Promise<{
+      id: string; status: KnowledgeDocument['status']; progress: number; message: string;
+      item_count: number; block_count: number; filtered_block_count: number;
+      candidate_item_count: number; file_name: string;
+    } | null>;
+    deleteLocalAnalysis: (documentId: string | number) => Promise<{ success: boolean; message: string }>;
     onEvent: (callback: (event: KnowledgeBaseEvent) => void) => () => void;
   };
   technicalPlan: {
@@ -530,12 +573,22 @@ export interface YibiaoBridge {
   systemFonts: {
     list: () => Promise<string[]>;
   };
-  sync: {
-    push: () => Promise<SyncPushResult>;
-    pull: () => Promise<SyncPullResult>;
-    getAutoStatus: () => Promise<AutoSyncStatus>;
-    setAutoEnabled: (enabled: boolean) => Promise<AutoSyncStatus>;
-    runNow: () => Promise<AutoSyncStatus>;
-    onStatus: (callback: (status: AutoSyncStatus) => void) => () => void;
+  kbAuth: {
+    login: (payload: KbAuthLoginPayload) => Promise<{ success: boolean; employee?: KbAuthEmployee | null; error?: string }>;
+    logout: () => Promise<{ success: boolean }>;
+    getStatus: () => Promise<KbAuthStatus>;
+    me: () => Promise<KbAuthEmployee | null>;
+    setServer: (serverUrl: string) => Promise<{ success: boolean; serverUrl: string }>;
+  };
+  kbTeam: {
+    getTree: () => Promise<{ success: boolean; data?: KbTeamTree; error?: string; needLogin?: boolean }>;
+    createFolder: (name: string, parentId?: string | number) => Promise<{ success: boolean; data?: KbTeamFolder; error?: string; needLogin?: boolean }>;
+    deleteFolder: (folderId: string | number) => Promise<KbTeamResult>;
+    deleteDocument: (documentId: string | number) => Promise<KbTeamResult>;
+    uploadDocument: (folderId?: string | number, onProgress?: (percent: number) => void) => Promise<KbTeamUploadResult>;
+    downloadDocument: (documentId: string | number, originalName?: string) => Promise<{ success: boolean; data?: { localPath: string }; error?: string; needLogin?: boolean }>;
+    searchDocuments: (query: string) => Promise<{ success: boolean; data?: KbTeamDocument[]; error?: string }>;
+    getDocumentVersions: (documentId: string | number) => Promise<{ success: boolean; data?: Array<{ version: number; created_at: string; note: string }>; error?: string }>;
+    listDocuments: (folderId?: string | number, searchQuery?: string) => Promise<{ success: boolean; data?: KbTeamDocument[]; error?: string }>;
   };
 }

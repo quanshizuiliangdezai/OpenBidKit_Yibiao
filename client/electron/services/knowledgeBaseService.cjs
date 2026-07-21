@@ -1044,21 +1044,13 @@ function createReport({ blocks, filteredBlocks, candidateItems, finalItems, matc
   };
 }
 
-function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore, syncService }) {
+function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore }) {
   const baseDir = getKnowledgeBaseDir(app);
   const activePreparations = new Set();
   const activeMatches = new Set();
 
   if (!knowledgeBaseStore) {
     throw new Error('知识库数据库服务尚未初始化');
-  }
-
-  // 删除后自动把软删意图推送到团队库，无需用户再手动点「同步到团队库」。
-  // 后台 fire-and-forget：失败静默（后台自动同步或用户手动同步会再次尝试），绝不阻塞删除响应。
-  function notifyTeamOfDeletion() {
-    if (syncService && typeof syncService.pushToTeam === 'function') {
-      Promise.resolve().then(() => syncService.pushToTeam()).catch(() => {});
-    }
   }
 
   function isDeveloperMode() {
@@ -2135,7 +2127,6 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       }
       fs.rmSync(fromRelative(baseDir, path.join('folders', folderId)), { recursive: true, force: true });
       knowledgeBaseStore.deleteFolder(folderId);
-      notifyTeamOfDeletion();
       return { success: true, message: `已删除文件夹“${folder.name}”及 ${documentsToDelete.length} 个文档` };
     },
 
@@ -2149,7 +2140,6 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       fs.rmSync(fromRelative(baseDir, document.document_dir), { recursive: true, force: true });
       fs.rmSync(getDebugLogPath(app, documentId), { force: true });
       knowledgeBaseStore.deleteDocument(documentId);
-      notifyTeamOfDeletion();
       return { success: true, message: `已删除文档“${document.file_name}”` };
     },
 
@@ -2304,6 +2294,77 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
 
     readAnalysis(documentId) {
       return knowledgeBaseStore.readAnalysis(documentId, { debugLogPath: isDeveloperMode() ? getDebugLogPath(app, documentId) : '' });
+    },
+
+    // ---- 方案 D：服务器文档的本地分析桥 ----
+
+    // 用服务器文档 ID 创建本地分析记录并启动分析管道。
+    // filePath 是从服务器下载到本地的临时文件路径。
+    async analyzeExternalFile(documentId, filePath, fileName, folderId, webContents) {
+      const ext = path.extname(filePath).toLowerCase();
+      if (!supportedExtensions.has(ext)) {
+        throw new Error(`不支持的文件类型：${ext}`);
+      }
+      const documentDir = path.join('folders', folderId || 'shared', 'documents', documentId).replace(/\\/g, '/');
+      const sourceName = `source${ext}`;
+      const document = {
+        id: documentId,
+        folder_id: folderId || 'shared',
+        file_name: fileName || path.basename(filePath),
+        document_dir: documentDir,
+        source_path: path.join(documentDir, sourceName).replace(/\\/g, '/'),
+        markdown_path: path.join(documentDir, 'content.md').replace(/\\/g, '/'),
+        status: 'pending',
+        progress: 0,
+        message: '等待处理',
+        item_count: 0,
+        block_count: 0,
+        filtered_block_count: 0,
+        candidate_item_count: 0,
+        discarded_block_count: 0,
+        system_discarded_after_retry_count: 0,
+        created_at: now(),
+        updated_at: now(),
+      };
+      const savedDocument = knowledgeBaseStore.createDocument(document);
+      emitProgress(webContents, savedDocument);
+      prepareDocument(documentId, filePath, webContents);
+      return savedDocument;
+    },
+
+    // 检查某个文档 ID 是否有本地分析记录，返回状态摘要。
+    getLocalDocumentStatus(documentId) {
+      const document = knowledgeBaseStore.getDocument(documentId);
+      if (!document) return null;
+      return {
+        id: document.id,
+        status: document.status,
+        progress: document.progress || 0,
+        message: document.message || '',
+        item_count: document.item_count || 0,
+        block_count: document.block_count || 0,
+        filtered_block_count: document.filtered_block_count || 0,
+        candidate_item_count: document.candidate_item_count || 0,
+        file_name: document.file_name,
+      };
+    },
+
+    // 删除某个文档 ID 的本地分析数据（不影响服务器数据）。
+    deleteLocalAnalysis(documentId) {
+      try {
+        const document = knowledgeBaseStore.getDocument(documentId);
+        if (!document) return { success: true, message: '无本地分析数据' };
+        // 删本地文件目录
+        const documentDir = fromRelative(baseDir, document.document_dir);
+        if (fs.existsSync(documentDir)) {
+          fs.rmSync(documentDir, { recursive: true, force: true });
+        }
+        // 删数据库记录
+        knowledgeBaseStore.deleteDocument(documentId);
+        return { success: true, message: '本地分析数据已清除' };
+      } catch (error) {
+        return { success: false, message: error?.message || '清除本地分析数据失败' };
+      }
     },
   };
 }

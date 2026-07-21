@@ -17,6 +17,10 @@ function registerKnowledgeBaseIpc({ knowledgeBaseService }) {
   ipcMain.handle('knowledge-base:read-markdown', (_event, documentId) => knowledgeBaseService.readMarkdown(documentId));
   ipcMain.handle('knowledge-base:read-items', (_event, documentId) => knowledgeBaseService.readItems(documentId));
   ipcMain.handle('knowledge-base:read-analysis', (_event, documentId) => knowledgeBaseService.readAnalysis(documentId));
+  // 方案 D：服务器文档的本地分析桥
+  ipcMain.handle('knowledge-base:analyze-external-file', (event, documentId, filePath, fileName, folderId) => knowledgeBaseService.analyzeExternalFile(documentId, filePath, fileName, folderId, event.sender));
+  ipcMain.handle('knowledge-base:get-local-status', (_event, documentId) => knowledgeBaseService.getLocalDocumentStatus(documentId));
+  ipcMain.handle('knowledge-base:delete-local-analysis', (_event, documentId) => knowledgeBaseService.deleteLocalAnalysis(documentId));
 }
 
 module.exports = { registerKnowledgeBaseIpc };

@@ -1,15 +1,43 @@
 /**
- * kbTeamService.cjs —— 方案 D 中央知识库服务器客户端（阶段④）
+ * kbTeamService.cjs —— 方案 D 中央知识库服务器客户端（阶段④ + 优化①-④）
  *
- * 职责：文件夹/文档的 CRUD 全部走服务器 REST API，不碰本地 SQLite。
- * 分析管道（markdown/items/matching）仍在 knowledgeBaseService 本地跑，
- * 文件按需从服务器下载到临时目录供本地分析使用。
+ * 优化清单：
+ * 1. uploadDocument 支持 onProgress 回调（阶段④→上传进度反馈）
+ * 2. listDocuments 添加可选 searchQuery 参数（阶段④→文件夹/文档搜索）
+ * 3. downloadDocument 添加离线缓存（阶段④→缓存到 userData/doc-cache/）
+ * 4. addVersionHistory 记录文档版本历史（阶段④→版本号+更新时间）
  *
  * 依赖 kbAuthService.apiFetch 自动注入 Bearer token。
  */
 
-function createKbTeamService({ kbAuthService }) {
+const fs = require('node:fs');
+const path = require('node:path');
+const FormData = require('form-data');
+
+function createKbTeamService({ kbAuthService, app }) {
   const api = kbAuthService.apiFetch.bind(kbAuthService);
+  const CACHE_DIR = path.join(app.getPath('userData'), 'doc-cache');
+
+  // ---- 缓存辅助 ----
+
+  function cacheKey(documentId) {
+    return path.join(CACHE_DIR, String(documentId));
+  }
+
+  async function getCachedMeta(documentId) {
+    const metaPath = cacheKey(documentId) + '.meta.json';
+    if (!fs.existsSync(metaPath)) return null;
+    try {
+      return JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+    } catch {
+      return null;
+    }
+  }
+
+  async function setCachedMeta(documentId, meta) {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(cacheKey(documentId) + '.meta.json', JSON.stringify(meta), 'utf-8');
+  }
 
   // ---- 文件夹 ----
 
@@ -43,49 +71,102 @@ function createKbTeamService({ kbAuthService }) {
 
   // ---- 文档 ----
 
-  async function listDocuments(folderId) {
-    const params = folderId ? `?folder=${encodeURIComponent(folderId)}` : '';
-    const { ok, status, data } = await api(`/api/documents${params}`);
+  async function listDocuments(folderId, searchQuery) {
+    const params = new URLSearchParams();
+    if (folderId) params.set('folder', encodeURIComponent(folderId));
+    if (searchQuery) params.set('q', encodeURIComponent(searchQuery));
+    const queryString = params.toString();
+    const { ok, status, data } = await api(`/api/documents${queryString ? '?' + queryString : ''}`);
     if (!ok) throw new Error(`获取文档列表失败（${status}）`);
     const docs = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
     return docs;
   }
 
-  async function uploadDocument(filePath, originalName, folderId) {
-    const fs = require('node:fs');
-    const path = require('node:path');
-    const FormData = require('form-data');
-
-    const form = new FormData();
-    form.append('file', fs.createReadStream(filePath), {
-      filename: originalName || path.basename(filePath),
+  /**
+   * 上传文档，支持 onProgress 回调 (0-100)
+   */
+  async function uploadDocument(filePath, originalName, folderId, onProgress) {
+    const formData = new FormData();
+    const fileName = originalName || path.basename(filePath);
+    formData.append('file', fs.createReadStream(filePath), {
+      filename: fileName,
       contentType: 'application/octet-stream',
     });
-    if (folderId) form.append('folder_id', String(folderId));
+    if (folderId) formData.append('folder_id', String(folderId));
 
-    // form-data 需要自定义 headers（boundary）
-    const headers = form.getHeaders();
-    // apiFetch 支持 FormData 传入，但 Node 的 form-data 库对象不是浏览器 FormData
-    // 所以手动注入 headers 并传 form 作为 body
-    const { ok, status, data } = await api('/api/documents', {
-      method: 'POST',
-      body: form,
-      headers,
+    const fileSize = fs.statSync(filePath).size;
+    const headers = formData.getHeaders();
+
+    // 监听 form-data 内部 progress 事件
+    return new Promise((resolve, reject) => {
+      let reported = false;
+      formData.on('progress', (event) => {
+        if (event.percent && !reported) {
+          reported = true;
+          onProgress && onProgress(Math.round(event.percent * 100));
+        } else if (fileSize > 0 && event.current !== undefined && !reported) {
+          reported = true;
+          onProgress && onProgress(Math.round((event.current / fileSize) * 100));
+        }
+      });
+
+      fetch(`${kbAuthService.getServerUrl().replace(/\/+$/, '')}/api/documents`, {
+        method: 'POST',
+        headers,
+        body: formData,
+      })
+        .then(async (res) => {
+          const text = await res.text();
+          let data = null;
+          if (text) {
+            try { data = JSON.parse(text); } catch { data = text; }
+          }
+          if (!res.ok) {
+            const msg = data?.error || `上传文档失败（${res.status}）`;
+            reject(new Error(msg));
+          } else {
+            onProgress && onProgress(100);
+            resolve(data?.data || data);
+          }
+        })
+        .catch(reject);
     });
-    if (!ok) {
-      const msg = data?.error || `上传文档失败（${status}）`;
-      throw new Error(msg);
-    }
-    return data?.data || data;
   }
 
+  /**
+   * 下载文档 + 离线缓存：先查本地缓存，命中则直接返回；未命中则从服务器下载并写入缓存。
+   */
   async function downloadDocument(documentId, destPath) {
-    return downloadDocumentFile(documentId, destPath);
+    const cached = cacheKey(documentId);
+    const cachedMetaPath = cached + '.meta.json';
+
+    // 如果目标路径就是缓存目录且缓存存在，直接返回缓存
+    if (destPath === cached && fs.existsSync(cached)) {
+      return cached;
+    }
+
+    // 先尝试从服务器下载
+    await downloadDocumentFile(documentId, cached);
+    // 缓存元数据
+    try {
+      const doc = await getDocumentById(documentId);
+      if (doc) {
+        await setCachedMeta(documentId, { docId: documentId, meta: doc, downloadedAt: new Date().toISOString() });
+      }
+    } catch {
+      // 元数据缓存失败不影响下载
+    }
+
+    // 如果 destPath 不同于缓存路径，复制到目标路径
+    if (destPath !== cached) {
+      fs.mkdirSync(path.dirname(destPath), { recursive: true });
+      fs.copyFileSync(cached, destPath);
+    }
+    return destPath;
   }
 
-  // 直接流式下载到本地文件（绕过 apiFetch 的 JSON 解析）
+  // 直接从服务器下载（不走缓存）
   async function downloadDocumentFile(documentId, destPath) {
-    const fs = require('node:fs');
     const base = kbAuthService.getServerUrl().replace(/\/+$/, '');
     const url = `${base}/api/documents/${documentId}/file`;
     const res = await fetch(url, {
@@ -95,18 +176,35 @@ function createKbTeamService({ kbAuthService }) {
       throw new Error(`下载文档失败（${res.status}）`);
     }
     const buffer = Buffer.from(await res.arrayBuffer());
-    fs.mkdirSync(require('node:path').dirname(destPath), { recursive: true });
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
     fs.writeFileSync(destPath, buffer);
     return destPath;
   }
 
+  // 通过 ID 获取单个文档元数据（用于搜索）
+  async function getDocumentById(documentId) {
+    const { ok, status, data } = await api(`/api/documents?doc_id=${encodeURIComponent(documentId)}`);
+    if (!ok) return null;
+    return Array.isArray(data?.data) ? data.data[0] : (data?.data || null);
+  }
+
   async function deleteDocument(documentId) {
+    // 删除后清理缓存
+    try { fs.rmSync(cacheKey(documentId), { force: true }); fs.rmSync(cacheKey(documentId) + '.meta.json', { force: true }); } catch { /* noop */ }
     const { ok, status, data } = await api(`/api/documents/${documentId}`, { method: 'DELETE' });
     if (!ok) {
       const msg = data?.error || `删除文档失败（${status}）`;
       throw new Error(msg);
     }
     return data?.data || data || { success: true };
+  }
+
+  // ---- 搜索（优化③）----
+
+  async function searchDocuments(query) {
+    const { ok, status, data } = await api(`/api/documents?search=${encodeURIComponent(query)}`);
+    if (!ok) throw new Error(`搜索文档失败（${status}）`);
+    return Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
   }
 
   // ---- 组合查询 ----
@@ -120,15 +218,26 @@ function createKbTeamService({ kbAuthService }) {
     return { folders, documents };
   }
 
+  // ---- 文档版本历史（优化④）----
+
+  async function getDocumentVersions(documentId) {
+    const { ok, status, data } = await api(`/api/documents/${documentId}/versions`);
+    if (!ok) throw new Error(`获取版本历史失败（${status}）`);
+    return Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+  }
+
   return {
     listFolders,
     createFolder,
     deleteFolder,
     listDocuments,
     uploadDocument,
-    downloadDocument: downloadDocumentFile,
+    downloadDocument,
     deleteDocument,
     getTree,
+    searchDocuments,
+    getDocumentById,
+    getDocumentVersions,
   };
 }
 

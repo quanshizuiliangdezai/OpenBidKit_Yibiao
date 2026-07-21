@@ -107,6 +107,9 @@ const bridge = {
     readMarkdown: (documentId) => ipcRenderer.invoke('knowledge-base:read-markdown', documentId),
     readItems: (documentId) => ipcRenderer.invoke('knowledge-base:read-items', documentId),
     readAnalysis: (documentId) => ipcRenderer.invoke('knowledge-base:read-analysis', documentId),
+    analyzeExternalFile: (documentId, filePath, fileName, folderId) => ipcRenderer.invoke('knowledge-base:analyze-external-file', documentId, filePath, fileName, folderId),
+    getLocalStatus: (documentId) => ipcRenderer.invoke('knowledge-base:get-local-status', documentId),
+    deleteLocalAnalysis: (documentId) => ipcRenderer.invoke('knowledge-base:delete-local-analysis', documentId),
     onEvent: (callback) => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('knowledge-base:event', listener);
@@ -186,17 +189,20 @@ const bridge = {
   systemFonts: {
     list: () => ipcRenderer.invoke('system-fonts:list'),
   },
-  sync: {
-    push: () => ipcRenderer.invoke('sync:push'),
-    pull: () => ipcRenderer.invoke('sync:pull'),
-    getAutoStatus: () => ipcRenderer.invoke('sync:get-auto-status'),
-    setAutoEnabled: (enabled) => ipcRenderer.invoke('sync:set-auto-enabled', enabled),
-    runNow: () => ipcRenderer.invoke('sync:auto-run-now'),
-    onStatus: (callback) => {
-      const listener = (_event, payload) => callback(payload);
-      ipcRenderer.on('sync:auto-status', listener);
-      return () => ipcRenderer.removeListener('sync:auto-status', listener);
-    },
+  kbAuth: {
+    login: (payload) => ipcRenderer.invoke('kb-auth:login', payload),
+    logout: () => ipcRenderer.invoke('kb-auth:logout'),
+    getStatus: () => ipcRenderer.invoke('kb-auth:get-status'),
+    me: () => ipcRenderer.invoke('kb-auth:me'),
+    setServer: (serverUrl) => ipcRenderer.invoke('kb-auth:set-server', serverUrl),
+  },
+  kbTeam: {
+    getTree: () => ipcRenderer.invoke('kb-team:get-tree'),
+    createFolder: (name, parentId) => ipcRenderer.invoke('kb-team:create-folder', name, parentId),
+    deleteFolder: (folderId) => ipcRenderer.invoke('kb-team:delete-folder', folderId),
+    deleteDocument: (documentId) => ipcRenderer.invoke('kb-team:delete-document', documentId),
+    uploadDocument: (folderId) => ipcRenderer.invoke('kb-team:upload-document', folderId),
+    downloadDocument: (documentId, originalName) => ipcRenderer.invoke('kb-team:download-document', documentId, originalName),
   },
 };
 

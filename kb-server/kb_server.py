@@ -292,6 +292,72 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 folders = [f for f in folders if f['parent_id'] == pid]
             return self._send(200, {'data': folders})
 
+        # 搜索文档（优化③）
+        if path == '/api/documents':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            folder = self._query_param('folder')
+            search_q = self._query_param('q') or self._query_param('search')
+            doc_id = self._query_param('doc_id')
+            # 按文档ID精确查找
+            if doc_id:
+                doc = kb_db.get_document(doc_id)
+                return self._send(200, {'data': [doc] if doc else []})
+            # 全文搜索
+            if search_q:
+                with kb_db._conn() as conn:
+                    query = f"%{search_q}%"
+                    docs = conn.execute(
+                        "SELECT id,folder_id,owner_id,title,file_name,file_size,mime_type,created_at "
+                        "FROM knowledge_documents WHERE title LIKE ? OR file_name LIKE ?",
+                        (query, query)).fetchall()
+                return self._send(200, {'data': [dict(r) for r in docs]})
+            # 按文件夹列出（原有逻辑）
+            if not folder:
+                return self._send(400, {'error': '缺少 folder 参数'})
+            return self._send(200, {'data': kb_db.list_documents(folder)})
+
+        # 文档版本历史（优化④）
+        m = re.match(r'^/api/documents/(\d+)/versions$', path)
+        if m:
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            # 简化版：返回文档版本信息
+            doc = kb_db.get_document(m.group(1))
+            return self._send(200, {'data': [{
+                'version': 1,
+                'created_at': doc['created_at'] if doc else '',
+                'note': '初始版本'
+            }]})
+
+        # 下载文档文件（流式）
+        m = re.match(r'^/api/documents/(\d+)/file$', path)
+        if m:
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            doc = kb_db.get_document(m.group(1))
+            if not doc:
+                return self._send(404, {'error': '文档不存在'})
+            full = os.path.join(kb_db.KB_DATA_DIR, doc['file_path'])
+            if not os.path.isfile(full):
+                return self._send(404, {'error': '文件已丢失'})
+            self._send_file(full, doc['file_name'], doc['mime_type'])
+            return
+
+        if path == '/api/folders':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            folders = kb_db.list_folders()
+            parent = self._query_param('parent')
+            if parent not in (None, ''):
+                pid = None if parent in ('0', 'null') else int(parent)
+                folders = [f for f in folders if f['parent_id'] == pid]
+            return self._send(200, {'data': folders})
+
         if path == '/api/documents':
             employee = self._auth()
             if not employee:

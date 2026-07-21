@@ -30,8 +30,10 @@ const { createSystemFontService } = require('../services/systemFontService.cjs')
 const { createTaskService } = require('../services/taskService.cjs');
 const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
 const { createTemplateStore } = require('../services/templateStore.cjs');
-const { createSyncService } = require('../services/syncService.cjs');
-const { registerSyncIpc } = require('./syncIpc.cjs');
+const { createKbAuthService } = require('../services/kbAuthService.cjs');
+const { createKbTeamService } = require('../services/kbTeamService.cjs');
+const { registerKbAuthIpc } = require('./kbAuthIpc.cjs');
+const { registerKbTeamIpc } = require('./kbTeamIpc.cjs');
 const { checkRequiredOnlineServices, getRequiredOnlineServiceStatus } = require('../services/requiredOnlineServices.cjs');
 const { initLocalImageRenderService } = require('../services/localImageRenderService.cjs');
 
@@ -117,8 +119,6 @@ const workspaceDatabaseChannels = [
   'templates:create',
   'templates:update',
   'templates:delete',
-  'sync:push',
-  'sync:pull',
 ];
 
 function clearWorkspaceDatabaseIpc() {
@@ -180,9 +180,7 @@ function registerWorkspaceDatabaseStatusIpc({ mainWindow }) {
 function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, updateStatus, mainWindow }) {
   const sqliteDatabase = createSqliteDatabase(app, { onStatus: updateStatus });
   const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
-  // syncService 必须在 knowledgeBaseService 之前创建：删除文档/文件夹后需要自动触发 push 软删意图。
-  const syncService = createSyncService({ app, db: sqliteDatabase.db, configStore });
-  const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore, syncService });
+  const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
   const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService });
   const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db });
   const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore });
@@ -197,23 +195,8 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   registerRejectionCheckIpc({ rejectionCheckStore });
   registerTemplateIpc({ templateStore });
   registerTaskIpc({ taskService });
-  registerSyncIpc({ syncService });
-  // 启动后台自动同步守护：每 30 秒先拉后推，把同步状态广播给前端。
-  // 依赖 mainWindow 存在；渲染进程销毁时跳过发送。
-  if (mainWindow) {
-    syncService.startAutoSync({
-      intervalMs: 30000,
-      onStatus: (status) => {
-        try {
-          if (!mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
-            mainWindow.webContents.send('sync:auto-status', status);
-          }
-        } catch { /* 渲染进程可能已销毁，忽略 */ }
-      },
-    });
-  }
   updateStatus({ phase: 'ready', ready: true, message: '本地数据库已就绪' });
-  return { sqliteDatabase, syncService };
+  return { sqliteDatabase };
 }
 
 function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow }) {
@@ -222,6 +205,8 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   initLocalImageRenderService({ configStore });
   const licenseService = createLicenseService({ app, configStore });
   const aiService = createAiService({ app, configStore });
+  const kbAuthService = createKbAuthService({ app });
+  const kbTeamService = createKbTeamService({ kbAuthService });
   const developerExpansionReplaceTestService = createDeveloperExpansionReplaceTestService({ aiService });
   const agentService = createAgentService({ app, configStore, mainWindow });
   const fileService = createFileService({ app, configStore });
@@ -305,6 +290,8 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerFileIpc({ fileService });
   registerExportIpc({ exportService });
   registerSystemFontIpc({ systemFontService });
+  registerKbAuthIpc({ kbAuthService });
+  registerKbTeamIpc({ kbTeamService, kbAuthService });
   registerPendingWorkspaceDatabaseIpc(databaseStatus.getStatus);
 
   setTimeout(() => {

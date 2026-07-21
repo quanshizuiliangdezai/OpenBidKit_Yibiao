@@ -1,9 +1,11 @@
-import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
-import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeBaseMigrationStatus, KnowledgeDocument, KnowledgeItem } from '../types';
-import type { AutoSyncStatus } from '../../../shared/types/ipc';
+import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../types';
+import type { KbAuthStatus, KbTeamDocument, KbTeamFolder } from '../../../shared/types/ipc';
+import KbLoginPanel from '../components/KbLoginPanel';
+import KbUserBar from '../components/KbUserBar';
 
 declare global {
   interface Window {
@@ -14,6 +16,39 @@ declare global {
 const emptyIndex: KnowledgeBaseIndex = { folders: [], documents: [] };
 const emptyDocuments: KnowledgeDocument[] = [];
 const documentRenderBatchSize = 80;
+
+// 方案 D：服务器类型适配到本地 KnowledgeDocument
+function adaptServerFolder(server: KbTeamFolder): KnowledgeFolder {
+  return {
+    id: String(server.id),
+    name: server.name,
+    created_at: server.created_at || '',
+    updated_at: server.created_at || '',
+  };
+}
+
+// 临时类型：getLocalStatus 返回的字段少于 KnowledgeDocument
+type LocalDocPartial = Pick<KnowledgeDocument, 'id' | 'status' | 'progress' | 'message' | 'item_count' | 'block_count' | 'filtered_block_count' | 'candidate_item_count' | 'file_name'>;
+
+function adaptServerDocument(
+  server: KbTeamDocument,
+  localStatus: LocalDocPartial | null,
+): KnowledgeDocument {
+  return {
+    id: String(server.id),
+    folder_id: String(server.folder_id || ''),
+    file_name: server.name || server.original_name || '未知文档',
+    status: localStatus?.status || 'pending',
+    progress: localStatus?.progress || 0,
+    message: localStatus?.message || '未分析',
+    item_count: localStatus?.item_count || 0,
+    block_count: localStatus?.block_count || 0,
+    filtered_block_count: localStatus?.filtered_block_count || 0,
+    candidate_item_count: localStatus?.candidate_item_count || 0,
+    created_at: server.created_at || '',
+    updated_at: server.created_at || '',
+  };
+}
 
 const statusLabels: Record<KnowledgeDocument['status'], string> = {
   pending: '等待处理',
@@ -30,15 +65,6 @@ const statusLabels: Record<KnowledgeDocument['status'], string> = {
 };
 
 type RenderDebugKind = 'item-source' | 'document-markdown' | 'document-items';
-type KnowledgeDropPosition = 'before' | 'after';
-type KnowledgeDragPayload =
-  | { kind: 'folder'; folderId: string }
-  | { kind: 'document'; documentId: string; folderId: string };
-
-interface KnowledgeDocumentDropTarget {
-  documentId: string;
-  position: KnowledgeDropPosition;
-}
 
 interface RenderDebugTrace {
   id: string;
@@ -296,30 +322,13 @@ type KnowledgeViewer = {
   mode: 'analysis' | 'items' | 'markdown';
 };
 
-function formatRelativeTime(iso: string | null): string {
-  if (!iso) return '';
-  const diff = Date.now() - new Date(iso).getTime();
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60) return `${sec}秒前`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}分钟前`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}小时前`;
-  const day = Math.floor(hr / 24);
-  return `${day}天前`;
-}
-
 function KnowledgeBasePage() {
   const [index, setIndex] = useState<KnowledgeBaseIndex>(emptyIndex);
   const [activeFolderId, setActiveFolderId] = useState('');
   const [listLoading, setListLoading] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [autoStatus, setAutoStatus] = useState<AutoSyncStatus | null>(null);
-  const lastPullRef = useRef<{ at: string | null; changes: number }>({ at: null, changes: 0 });
-  const [migrationRunning, setMigrationRunning] = useState(false);
-  const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
-  const [pendingMigrationStatus, setPendingMigrationStatus] = useState<KnowledgeBaseMigrationStatus | null>(null);
+  const [authStatus, setAuthStatus] = useState<KbAuthStatus | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [viewer, setViewer] = useState<KnowledgeViewer | null>(null);
   const [viewerLoading, setViewerLoading] = useState(false);
   const [viewerTrace, setViewerTrace] = useState<RenderDebugTrace | null>(null);
@@ -333,10 +342,6 @@ function KnowledgeBasePage() {
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [retryingDocumentIds, setRetryingDocumentIds] = useState<Set<string>>(() => new Set());
   const [visibleDocumentCount, setVisibleDocumentCount] = useState(documentRenderBatchSize);
-  const [dragPayload, setDragPayload] = useState<KnowledgeDragPayload | null>(null);
-  const [folderDropTargetId, setFolderDropTargetId] = useState<string | null>(null);
-  const [documentDropTarget, setDocumentDropTarget] = useState<KnowledgeDocumentDropTarget | null>(null);
-  const [dragSaving, setDragSaving] = useState(false);
   const autoMatchingIdsRef = useRef(new Set<string>());
   const documentParseNoticeIdsRef = useRef(new Set<string>());
   const viewerRequestIdRef = useRef(0);
@@ -364,8 +369,9 @@ function KnowledgeBasePage() {
     trackPageView(viewer ? `knowledge-base/viewer/${viewer.mode}` : 'knowledge-base/library');
   }, [viewer?.mode]);
 
+  // 方案 D：启动时检查登录状态
   useEffect(() => {
-    void loadInitialData();
+    void checkAuthAndLoad();
     window.addEventListener('focus', loadDeveloperMode);
     document.addEventListener('visibilitychange', loadDeveloperMode);
     const unsubscribe = window.yibiao?.knowledgeBase.onEvent(({ document }) => {
@@ -376,13 +382,14 @@ function KnowledgeBasePage() {
         documentParseNoticeIdsRef.current.add(document.id);
         showDocumentParseNotice(parseMessage);
       }
+      // 分析进度事件：更新本地 index 中的文档状态
       setIndex((prev) => ({
         ...prev,
         documents: prev.documents.some((item) => item.id === document.id)
-          ? prev.documents.map((item) => (item.id === document.id ? document : item))
-          : [...prev.documents, document],
+          ? prev.documents.map((item) => (item.id === document.id ? { ...item, status: document.status, progress: document.progress, message: document.message, item_count: document.item_count, block_count: document.block_count, filtered_block_count: document.filtered_block_count, candidate_item_count: document.candidate_item_count } : item))
+          : prev.documents,
       }));
-      setViewer((prev) => (prev?.document.id === document.id ? { ...prev, document } : prev));
+      setViewer((prev) => (prev?.document.id === document.id ? { ...prev, document: { ...prev.document, status: document.status, progress: document.progress, message: document.message, item_count: document.item_count } } : prev));
       setAnalysisSnapshot((prev) => (prev?.document.id === document.id ? { ...prev, document } : prev));
     });
     return () => {
@@ -391,37 +398,6 @@ function KnowledgeBasePage() {
       unsubscribe?.();
     };
   }, []);
-
-  // 订阅后台自动同步状态（先取一次初始状态，再监听推送）
-  useEffect(() => {
-    if (!window.yibiao?.sync) return undefined;
-    let cancelled = false;
-    let unsubscribe: (() => void) | undefined;
-    void (async () => {
-      try {
-        const s = await window.yibiao.sync.getAutoStatus();
-        if (s && !cancelled) setAutoStatus(s);
-      } catch { /* 忽略：同步服务尚未就绪 */ }
-      if (cancelled) return; // 组件已卸载，不再订阅，避免监听器泄漏
-      unsubscribe = window.yibiao.sync.onStatus((s) => {
-        if (!cancelled) setAutoStatus(s);
-      });
-    })();
-    return () => {
-      cancelled = true;
-      unsubscribe?.();
-    };
-  }, []);
-
-  // 当自动拉取带回了新文档/删除时，刷新本地列表，让其他人新增的内容实时出现
-  useEffect(() => {
-    if (!autoStatus) return;
-    const { lastPullAt, lastPullChanges } = autoStatus;
-    if (lastPullAt && lastPullChanges > 0 && lastPullRef.current.at !== lastPullAt) {
-      lastPullRef.current = { at: lastPullAt, changes: lastPullChanges };
-      void loadInitialData();
-    }
-  }, [autoStatus]);
 
   useEffect(() => {
     setVisibleDocumentCount(documentRenderBatchSize);
@@ -467,168 +443,50 @@ function KnowledgeBasePage() {
     }
   }, [viewer?.document.id, viewer?.document.status, viewer?.mode]);
 
-  const loadInitialData = async () => {
+  // 方案 D：检查登录状态并加载数据
+  const checkAuthAndLoad = async () => {
+    try {
+      setAuthLoading(true);
+      const status = await window.yibiao?.kbAuth.getStatus();
+      setAuthStatus(status);
+      if (status?.loggedIn) {
+        await loadTeamTree();
+      }
+    } catch (error) {
+      console.warn('检查团队库登录状态失败', error);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // 从服务器获取文件夹+文档列表，合并本地分析状态
+  const loadTeamTree = async () => {
     try {
       setListLoading(true);
-      const config = await window.yibiao?.config.load();
-      setDeveloperMode(Boolean(config?.developer_mode));
-      const migrationStatus = await window.yibiao?.knowledgeBase.getMigrationStatus();
-      let data: KnowledgeBaseIndex | undefined;
-      if (migrationStatus?.needsMigration) {
-        setPendingMigrationStatus(migrationStatus);
-        setMigrationDialogOpen(true);
-        data = await window.yibiao?.knowledgeBase.list();
-      } else {
-        data = await window.yibiao?.knowledgeBase.list();
-        if (migrationStatus?.cleanupPending) {
-          showToast(migrationStatus.message || '旧知识库 JSON 清理未完成，将在下次进入时继续处理', 'info');
+      const result = await window.yibiao?.kbTeam.getTree();
+      if (!result?.success || !result.data) {
+        if (result?.needLogin) {
+          setAuthStatus((prev) => prev ? { ...prev, loggedIn: false } : prev);
         }
+        return;
       }
-      if (data) {
-        setIndex(data);
-        setActiveFolderId((currentId) => (
-          data.folders.some((folder) => folder.id === currentId) ? currentId : data.folders[0]?.id || ''
-        ));
-      }
+      const { folders: serverFolders, documents: serverDocuments } = result.data;
+      // 为每个文档检查本地分析状态
+      const documents = await Promise.all(
+        serverDocuments.map(async (doc) => {
+          const localStatus = await window.yibiao?.knowledgeBase.getLocalStatus(doc.id);
+          return adaptServerDocument(doc, localStatus);
+        }),
+      );
+      const folders = serverFolders.map(adaptServerFolder);
+      setIndex({ folders, documents });
+      setActiveFolderId((currentId) => (
+        folders.some((folder) => folder.id === currentId) ? currentId : folders[0]?.id || ''
+      ));
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '读取知识库失败', 'error');
+      showToast(error instanceof Error ? error.message : '获取团队库失败', 'error');
     } finally {
-      setLoading(false);
       setListLoading(false);
-    }
-  };
-
-  const applyKnowledgeIndex = (data: KnowledgeBaseIndex) => {
-    setIndex(data);
-    setActiveFolderId((currentId) => (
-      data.folders.some((folder) => folder.id === currentId) ? currentId : data.folders[0]?.id || ''
-    ));
-  };
-
-  const clearDragState = () => {
-    setDragPayload(null);
-    setFolderDropTargetId(null);
-    setDocumentDropTarget(null);
-  };
-
-  const getDropPosition = (event: DragEvent<HTMLElement>): KnowledgeDropPosition => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
-  };
-
-  const startFolderDrag = (event: DragEvent<HTMLElement>, folderId: string) => {
-    if (migrationRunning || dragSaving) {
-      event.preventDefault();
-      return;
-    }
-    event.stopPropagation();
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', `folder:${folderId}`);
-    setDragPayload({ kind: 'folder', folderId });
-  };
-
-  const startDocumentDrag = (event: DragEvent<HTMLElement>, document: KnowledgeDocument) => {
-    if (migrationRunning || dragSaving || !canMoveKnowledgeDocument(document)) {
-      event.preventDefault();
-      return;
-    }
-    event.stopPropagation();
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', `document:${document.id}`);
-    setDragPayload({ kind: 'document', documentId: document.id, folderId: document.folder_id });
-  };
-
-  const handleFolderDragOver = (event: DragEvent<HTMLElement>, folderId: string) => {
-    if (!dragPayload || migrationRunning || dragSaving) return;
-    if (dragPayload.kind === 'folder' && dragPayload.folderId === folderId) return;
-    if (dragPayload.kind === 'document' && dragPayload.folderId === folderId) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-    setFolderDropTargetId(folderId);
-    setDocumentDropTarget(null);
-  };
-
-  const handleFolderDrop = async (event: DragEvent<HTMLElement>, folderId: string) => {
-    if (!dragPayload || migrationRunning || dragSaving) return;
-    event.preventDefault();
-    const payload = dragPayload;
-    const position = getDropPosition(event);
-    setDragSaving(true);
-    try {
-      const result = payload.kind === 'folder'
-        ? await window.yibiao?.knowledgeBase.reorderFolder(payload.folderId, folderId, position)
-        : await window.yibiao?.knowledgeBase.moveDocument(payload.documentId, folderId, null, 'after');
-      if (!result?.success || !result.index) {
-        throw new Error(result?.message || '拖拽操作失败');
-      }
-      applyKnowledgeIndex(result.index);
-      showToast(result.message, 'success');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '拖拽操作失败', 'error');
-    } finally {
-      setDragSaving(false);
-      clearDragState();
-    }
-  };
-
-  const handleDocumentDragOver = (event: DragEvent<HTMLElement>, document: KnowledgeDocument) => {
-    if (!dragPayload || dragPayload.kind !== 'document' || migrationRunning || dragSaving || dragPayload.documentId === document.id) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-    setFolderDropTargetId(null);
-    setDocumentDropTarget({ documentId: document.id, position: getDropPosition(event) });
-  };
-
-  const handleDocumentDrop = async (event: DragEvent<HTMLElement>, document: KnowledgeDocument) => {
-    if (!dragPayload || dragPayload.kind !== 'document' || migrationRunning || dragSaving || dragPayload.documentId === document.id) return;
-    event.preventDefault();
-    const position = getDropPosition(event);
-    setDragSaving(true);
-    try {
-      const result = await window.yibiao?.knowledgeBase.moveDocument(dragPayload.documentId, document.folder_id, document.id, position);
-      if (!result?.success || !result.index) {
-        throw new Error(result?.message || '文档排序失败');
-      }
-      applyKnowledgeIndex(result.index);
-      setActiveFolderId(document.folder_id);
-      showToast(result.message, 'success');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '文档排序失败', 'error');
-    } finally {
-      setDragSaving(false);
-      clearDragState();
-    }
-  };
-
-  const cancelMigration = () => {
-    if (migrationRunning) return;
-    setMigrationDialogOpen(false);
-    setPendingMigrationStatus(null);
-    showToast('已暂缓知识库迁移，下次进入知识库会继续提示', 'info');
-  };
-
-  const confirmMigration = async () => {
-    if (migrationRunning) return;
-    setMigrationRunning(true);
-    setLoading(true);
-    try {
-      const result = await window.yibiao?.knowledgeBase.migrateLegacy();
-      if (!result?.success) {
-        throw new Error(result?.message || '知识库迁移失败');
-      }
-      const data = result.index || await window.yibiao?.knowledgeBase.list();
-      if (!data) {
-        throw new Error('知识库迁移完成，但读取迁移结果失败');
-      }
-      applyKnowledgeIndex(data);
-      setPendingMigrationStatus(null);
-      setMigrationDialogOpen(false);
-      showToast(result.message || '知识库迁移完成', result.cleanupPending ? 'info' : 'success');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '知识库迁移失败', 'error');
-    } finally {
-      setMigrationRunning(false);
-      setLoading(false);
     }
   };
 
@@ -653,21 +511,31 @@ function KnowledgeBasePage() {
     }
   };
 
+  const handleLoginSuccess = (status: KbAuthStatus) => {
+    setAuthStatus(status);
+    void loadTeamTree();
+  };
+
+  const handleLogout = async () => {
+    await window.yibiao?.kbAuth.logout();
+    setAuthStatus(null);
+    setIndex(emptyIndex);
+    setViewer(null);
+  };
+
   const createFolder = async () => {
-    if (migrationRunning) {
-      showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
     const name = newFolderName.trim();
     if (!name) {
       showToast('请输入文件夹名称', 'info');
       return;
     }
-
     try {
       setCreatingFolder(true);
-      const folder = await window.yibiao?.knowledgeBase.createFolder(name.trim());
-      if (!folder) return;
+      const result = await window.yibiao?.kbTeam.createFolder(name);
+      if (!result?.success || !result.data) {
+        throw new Error(result?.error || '创建文件夹失败');
+      }
+      const folder = adaptServerFolder(result.data);
       setIndex((prev) => ({ ...prev, folders: [...prev.folders, folder] }));
       setActiveFolderId(folder.id);
       setNewFolderName('');
@@ -681,31 +549,40 @@ function KnowledgeBasePage() {
   };
 
   const uploadDocuments = async () => {
-    if (migrationRunning) {
-      showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
     if (!activeFolder) {
       showToast('请先创建文件夹', 'info');
       return;
     }
-
     try {
       setLoading(true);
-      const result = await window.yibiao?.knowledgeBase.uploadDocuments(activeFolder.id);
+      const result = await window.yibiao?.kbTeam.uploadDocument(activeFolder.id);
       if (!result?.success) {
-        const message = result?.message || '未选择文档';
-        if (isLibreOfficeRequiredMessage(message)) {
-          showDocumentParseNotice(message);
-          return;
+        if (result?.canceled) return;
+        throw new Error(result?.error || '上传文档失败');
+      }
+      if (result.uploaded?.length) {
+        // 为每个上传成功的文档下载并启动本地分析
+        for (const doc of result.uploaded) {
+          try {
+            const downloadResult = await window.yibiao?.kbTeam.downloadDocument(doc.id, doc.name || doc.original_name);
+            if (downloadResult?.success && downloadResult.data?.localPath) {
+              await window.yibiao?.knowledgeBase.analyzeExternalFile(
+                String(doc.id),
+                downloadResult.data.localPath,
+                doc.name || doc.original_name || 'document',
+                String(activeFolder.id),
+              );
+            }
+          } catch (analyzeError) {
+            console.warn(`文档 ${doc.id} 启动分析失败`, analyzeError);
+          }
         }
-        showToast(message, 'info');
-        return;
+        // 刷新列表
+        await loadTeamTree();
+        showToast(`已上传 ${result.uploaded.length} 个文档${result.errors?.length ? `，${result.errors.length} 个失败` : ''}`, 'success');
+      } else if (result.errors?.length) {
+        showToast(`上传失败：${result.errors.map((e) => e.file).join('、')}`, 'error');
       }
-      if (result.documents?.length) {
-        setIndex((prev) => ({ ...prev, documents: mergeDocuments(prev.documents, result.documents || []) }));
-      }
-      showToast(result.message, 'success');
     } catch (error) {
       const message = error instanceof Error ? error.message : '上传文档失败';
       if (isLibreOfficeRequiredMessage(message)) {
@@ -718,102 +595,19 @@ function KnowledgeBasePage() {
     }
   };
 
-  const syncToTeam = async () => {
-    if (!window.yibiao?.sync) return;
-    if (syncing) return;
-    try {
-      setSyncing(true);
-      const result = await window.yibiao.sync.push();
-      if (!result?.ok) {
-        showToast(result?.error || '同步到团队库失败', 'error');
-        return;
-      }
-      const parts = [`已同步 ${result.pushed_documents ?? 0} 篇文档到团队库`];
-      if ((result.deleted_documents ?? 0) > 0) {
-        parts.push(`删除 ${result.deleted_documents} 篇`);
-      }
-      showToast(parts.join('，'), 'success');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '同步到团队库失败', 'error');
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  const pullFromTeam = async () => {
-    if (!window.yibiao?.sync) return;
-    if (syncing) return;
-    try {
-      setSyncing(true);
-      const result = await window.yibiao.sync.pull();
-      if (!result?.ok) {
-        showToast(result?.error || '拉取团队库失败', 'error');
-        return;
-      }
-      const pullMsg = result.note
-        ? result.note
-        : `已拉取 ${result.merged_documents ?? 0} 篇新文档（跳过 ${result.skipped_documents ?? 0} 篇已有${(result.deleted_documents ?? 0) > 0 ? `，删除 ${result.deleted_documents} 篇` : ''}）`;
-      showToast(pullMsg, 'success');
-      const refreshed = await window.yibiao?.knowledgeBase.list();
-      if (refreshed) setIndex(refreshed);
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '拉取团队库失败', 'error');
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  const toggleAutoSync = async (enabled: boolean) => {
-    if (!window.yibiao?.sync) return;
-    try {
-      await window.yibiao.sync.setAutoEnabled(enabled);
-      const s = await window.yibiao.sync.getAutoStatus();
-      if (s) setAutoStatus(s);
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '切换自动同步失败', 'error');
-    }
-  };
-
-  const runAutoNow = async () => {
-    if (!window.yibiao?.sync) return;
-    try {
-      await window.yibiao.sync.runNow();
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '立即同步失败', 'error');
-    }
-  };
-
-  const renameFolder = async (folderId: string, currentName: string) => {
-    if (migrationRunning) {
-      showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
-    const name = window.prompt('请输入新的文件夹名称', currentName)?.trim();
-    if (!name || name === currentName) return;
-
-    try {
-      const folder = await window.yibiao?.knowledgeBase.renameFolder(folderId, name);
-      if (!folder) return;
-      setIndex((prev) => ({
-        ...prev,
-        folders: prev.folders.map((item) => (item.id === folder.id ? folder : item)),
-      }));
-      showToast('文件夹已重命名', 'success');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '重命名文件夹失败', 'error');
-    }
-  };
-
   const deleteFolder = async (folderId: string, folderName: string) => {
-    if (migrationRunning) {
-      showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
     const count = documentsByFolder.get(folderId)?.length || 0;
-    if (!window.confirm(`确定删除文件夹“${folderName}”吗？其中 ${count} 个文档也会一起删除。`)) return;
-
+    if (!window.confirm(`确定删除文件夹"${folderName}"吗？其中 ${count} 个文档也会一起删除。`)) return;
     try {
-      const result = await window.yibiao?.knowledgeBase.deleteFolder(folderId);
+      const result = await window.yibiao?.kbTeam.deleteFolder(folderId);
+      if (!result?.success) {
+        throw new Error(result?.error || '删除文件夹失败');
+      }
+      // 清除该文件夹下文档的本地分析数据
+      const folderDocs = index.documents.filter((doc) => doc.folder_id === folderId);
+      for (const doc of folderDocs) {
+        await window.yibiao?.knowledgeBase.deleteLocalAnalysis(doc.id);
+      }
       const folders = index.folders.filter((item) => item.id !== folderId);
       const documents = index.documents.filter((document) => document.folder_id !== folderId);
       setIndex({ folders, documents });
@@ -821,54 +615,52 @@ function KnowledgeBasePage() {
         setActiveFolderId(folders[0]?.id || '');
       }
       setViewer((prev) => (prev?.document.folder_id === folderId ? null : prev));
-      showToast(result?.message || '文件夹已删除', 'success');
+      showToast('文件夹已删除', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '删除文件夹失败', 'error');
     }
   };
 
   const deleteDocument = async (document: KnowledgeDocument) => {
-    if (migrationRunning) {
-      showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
-    if (!window.confirm(`确定删除文档“${document.file_name}”吗？`)) return;
-
+    if (!window.confirm(`确定删除文档"${document.file_name}"吗？`)) return;
     try {
-      const result = await window.yibiao?.knowledgeBase.deleteDocument(document.id);
+      const result = await window.yibiao?.kbTeam.deleteDocument(document.id);
+      if (!result?.success) {
+        throw new Error(result?.error || '删除文档失败');
+      }
+      await window.yibiao?.knowledgeBase.deleteLocalAnalysis(document.id);
       setIndex((prev) => ({ ...prev, documents: prev.documents.filter((item) => item.id !== document.id) }));
       setViewer((prev) => (prev?.document.id === document.id ? null : prev));
-      showToast(result?.message || '文档已删除（待同步到团队库）', 'success');
+      showToast('文档已删除', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '删除文档失败', 'error');
     }
   };
 
   const retryDocument = async (document: KnowledgeDocument) => {
-    if (migrationRunning) {
-      showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
-
     setRetryingDocumentIds((prev) => new Set(prev).add(document.id));
     try {
-      const result = await window.yibiao?.knowledgeBase.retryDocument(document.id);
-      if (result?.document) {
-        const updatedDocument = result.document;
-        setIndex((prev) => ({ ...prev, documents: mergeDocuments(prev.documents, [updatedDocument]) }));
-        setViewer((prev) => (prev?.document.id === updatedDocument.id ? { ...prev, document: updatedDocument } : prev));
-        setAnalysisSnapshot((prev) => (prev?.document.id === updatedDocument.id ? { ...prev, document: updatedDocument } : prev));
+      // 从服务器重新下载文件并重新分析
+      const downloadResult = await window.yibiao?.kbTeam.downloadDocument(document.id, document.file_name);
+      if (!downloadResult?.success || !downloadResult.data?.localPath) {
+        throw new Error(downloadResult?.error || '下载文档失败');
       }
-      if (!result?.success) {
-        const message = result?.message || '重试失败';
-        if (isLibreOfficeRequiredMessage(message)) {
-          showDocumentParseNotice(message);
-          return;
-        }
-        showToast(message, 'info');
-        return;
+      // 先清除旧的本地分析数据
+      await window.yibiao?.knowledgeBase.deleteLocalAnalysis(document.id);
+      // 重新创建本地分析记录并启动分析
+      const updatedDocument = await window.yibiao?.knowledgeBase.analyzeExternalFile(
+        document.id,
+        downloadResult.data.localPath,
+        document.file_name,
+        document.folder_id,
+      );
+      if (updatedDocument) {
+        setIndex((prev) => ({
+          ...prev,
+          documents: mergeDocuments(prev.documents, [updatedDocument]),
+        }));
       }
-      showToast(result.message || '已重新开始解析', 'success');
+      showToast('已重新开始解析', 'success');
     } catch (error) {
       const message = error instanceof Error ? error.message : '重试失败';
       if (isLibreOfficeRequiredMessage(message)) {
@@ -914,10 +706,6 @@ function KnowledgeBasePage() {
   };
 
   const openDocument = async (document: KnowledgeDocument, mode: KnowledgeViewer['mode']) => {
-    if (migrationRunning) {
-      showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
     if (mode === 'analysis' && !developerMode) {
       return;
     }
@@ -1010,10 +798,6 @@ function KnowledgeBasePage() {
   };
 
   const startMatching = async (targetDocument = viewer?.document, options?: { silent?: boolean }) => {
-    if (migrationRunning) {
-      if (!options?.silent) showToast('知识库迁移中，请稍候', 'info');
-      return;
-    }
     if (!targetDocument) return;
     try {
       setStartingMatching(true);
@@ -1033,15 +817,21 @@ function KnowledgeBasePage() {
     }
   };
 
-  const migrationDialog = pendingMigrationStatus ? (
-    <KnowledgeMigrationDialog
-      open={migrationDialogOpen}
-      status={pendingMigrationStatus}
-      running={migrationRunning}
-      onCancel={cancelMigration}
-      onConfirm={() => void confirmMigration()}
-    />
-  ) : null;
+  // 方案 D：未登录时显示登录面板
+  if (!authStatus?.loggedIn) {
+    return (
+      <div className="page-stack knowledge-page">
+        {authLoading ? (
+          <div className="knowledge-empty-box large">
+            <strong>正在检查登录状态...</strong>
+            <p>请稍候。</p>
+          </div>
+        ) : (
+          <KbLoginPanel onLoggedIn={handleLoginSuccess} />
+        )}
+      </div>
+    );
+  }
 
   if (viewer) {
     return (
@@ -1061,7 +851,6 @@ function KnowledgeBasePage() {
           onStartMatching={() => void startMatching()}
           onRefreshAnalysis={() => void loadAnalysis(viewer.document.id)}
         />
-        {migrationDialog}
       </>
     );
   }
@@ -1071,74 +860,16 @@ function KnowledgeBasePage() {
       <div className="page-stack knowledge-page">
         <section className="knowledge-workspace-bar">
         <div className="knowledge-breadcrumb">
-          <span>知识库</span>
+          <span>团队知识库</span>
           <strong>{activeFolder?.name || '未选择文件夹'}</strong>
           <small>{index.folders.length} 个文件夹 / {index.documents.length} 个文档</small>
         </div>
         <div className="knowledge-toolbar-actions">
-          <button type="button" className="secondary-action" onClick={() => setShowCreateFolder((value) => !value)} disabled={migrationRunning || listLoading}>新建文件夹</button>
-          <button type="button" className="primary-action" onClick={uploadDocuments} disabled={loading || migrationRunning || !activeFolder}>
-            {migrationRunning ? '迁移中...' : loading ? '处理中...' : '上传文档'}
+          {authStatus && <KbUserBar status={authStatus} onLogout={() => void handleLogout()} />}
+          <button type="button" className="secondary-action" onClick={() => setShowCreateFolder((value) => !value)} disabled={listLoading}>新建文件夹</button>
+          <button type="button" className="primary-action" onClick={uploadDocuments} disabled={loading || !activeFolder}>
+            {loading ? '处理中...' : '上传文档'}
           </button>
-          {autoStatus ? (
-            <span
-              title={autoStatus.status === 'error' ? autoStatus.lastError || '' : autoStatus.message}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '4px 10px',
-                borderRadius: 999,
-                fontSize: 12,
-                lineHeight: '16px',
-                whiteSpace: 'nowrap',
-                border: '1px solid',
-                borderColor:
-                  autoStatus.status === 'error' ? '#f5c2c2'
-                  : autoStatus.status === 'syncing' ? '#cfe3ff'
-                  : '#c9ebd1',
-                color:
-                  autoStatus.status === 'error' ? '#b42318'
-                  : autoStatus.status === 'syncing' ? '#1d4ed8'
-                  : '#15803d',
-                background:
-                  autoStatus.status === 'error' ? '#fef3f2'
-                  : autoStatus.status === 'syncing' ? '#eff6ff'
-                  : '#f0fdf4',
-              }}
-            >
-              <span
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  background:
-                    autoStatus.status === 'error' ? '#b42318'
-                    : autoStatus.status === 'syncing' ? '#1d4ed8'
-                    : '#15803d',
-                }}
-              />
-              {autoStatus.status === 'syncing'
-                ? '同步中…'
-                : autoStatus.status === 'error'
-                ? '同步失败'
-                : autoStatus.lastSuccessAt
-                ? `已同步 · ${formatRelativeTime(autoStatus.lastSuccessAt)}`
-                : '自动同步已开启'}
-            </span>
-          ) : null}
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#475467', userSelect: 'none' }}>
-            <input
-              type="checkbox"
-              checked={autoStatus?.enabled !== false}
-              disabled={!autoStatus}
-              onChange={(e) => void toggleAutoSync(e.target.checked)}
-            />
-            自动同步
-          </label>
-          <button type="button" className="secondary-action" onClick={runAutoNow} disabled={autoStatus?.running || migrationRunning || listLoading}>立即同步</button>
-          <button type="button" className="secondary-action" onClick={syncToTeam} disabled={syncing || migrationRunning || listLoading}>同步到团队库</button>
-          <button type="button" className="secondary-action" onClick={pullFromTeam} disabled={syncing || migrationRunning || listLoading}>拉取团队库</button>
         </div>
       </section>
 
@@ -1155,9 +886,8 @@ function KnowledgeBasePage() {
             value={newFolderName}
             onChange={(event) => setNewFolderName(event.target.value)}
             placeholder="输入文件夹名称"
-            disabled={migrationRunning}
           />
-          <button type="submit" className="primary-action" disabled={creatingFolder || migrationRunning}>{creatingFolder ? '创建中...' : '创建'}</button>
+          <button type="submit" className="primary-action" disabled={creatingFolder}>{creatingFolder ? '创建中...' : '创建'}</button>
           <button
             type="button"
             className="secondary-action"
@@ -1179,40 +909,27 @@ function KnowledgeBasePage() {
           </div>
           {listLoading ? (
             <div className="knowledge-empty-box">
-              <strong>正在读取知识库...</strong>
+              <strong>正在读取团队库...</strong>
               <p>请稍候，正在加载文件夹和文档列表。</p>
             </div>
           ) : index.folders.length ? (
             <div className="knowledge-folder-list">
               {index.folders.map((folder) => {
                 const count = documentsByFolder.get(folder.id)?.length || 0;
-                const dragging = dragPayload?.kind === 'folder' && dragPayload.folderId === folder.id;
-                const dropTarget = folderDropTargetId === folder.id;
                 return (
                   <article
                     key={folder.id}
-                    className={`knowledge-folder-card ${folder.id === activeFolder?.id ? 'is-active' : ''}${dragging ? ' is-dragging' : ''}${dropTarget ? ' is-drop-target' : ''}`}
-                    onDragOver={(event) => handleFolderDragOver(event, folder.id)}
-                    onDrop={(event) => { void handleFolderDrop(event, folder.id); }}
+                    className={`knowledge-folder-card ${folder.id === activeFolder?.id ? 'is-active' : ''}`}
                   >
                     <div className="knowledge-folder-row">
-                      <span
-                        className="knowledge-drag-handle"
-                        draggable={!migrationRunning && !dragSaving}
-                        onDragStart={(event) => startFolderDrag(event, folder.id)}
-                        onDragEnd={clearDragState}
-                        title="拖拽排序"
-                        aria-hidden="true"
-                      >⋮⋮</span>
-                      <button type="button" className="knowledge-folder-main" onClick={() => startTransition(() => setActiveFolderId(folder.id))} disabled={migrationRunning}>
+                      <button type="button" className="knowledge-folder-main" onClick={() => startTransition(() => setActiveFolderId(folder.id))}>
                         <span aria-hidden="true">F</span>
                         <strong>{folder.name}</strong>
-                        <small>{dropTarget && dragPayload?.kind === 'document' ? '松开移动到此文件夹' : `${count} 个文档`}</small>
+                        <small>{count} 个文档</small>
                       </button>
                     </div>
                     <div className="knowledge-folder-actions">
-                      <button type="button" onClick={() => void renameFolder(folder.id, folder.name)} disabled={migrationRunning}>重命名</button>
-                      <button type="button" className="is-danger" onClick={() => void deleteFolder(folder.id, folder.name)} disabled={migrationRunning}>删除</button>
+                      <button type="button" className="is-danger" onClick={() => void deleteFolder(folder.id, folder.name)}>删除</button>
                     </div>
                   </article>
                 );
@@ -1221,7 +938,7 @@ function KnowledgeBasePage() {
           ) : (
             <div className="knowledge-empty-box">
               <strong>还没有文件夹</strong>
-              <p>先创建一个文件夹，再上传历史资料。</p>
+              <p>先创建一个文件夹，再上传文档。</p>
             </div>
           )}
         </aside>
@@ -1234,33 +951,20 @@ function KnowledgeBasePage() {
 
           {listLoading ? (
             <div className="knowledge-empty-box large">
-              <strong>正在读取知识库...</strong>
+              <strong>正在读取团队库...</strong>
               <p>文档列表加载完成后会自动显示。</p>
             </div>
           ) : documents.length ? (
             <div className="knowledge-document-list">
               {visibleDocuments.map((document) => {
                 const retrying = retryingDocumentIds.has(document.id);
-                const canDragDocument = canMoveKnowledgeDocument(document) && !migrationRunning && !dragSaving;
-                const dragging = dragPayload?.kind === 'document' && dragPayload.documentId === document.id;
-                const dropTarget = documentDropTarget?.documentId === document.id ? ` is-drop-${documentDropTarget.position}` : '';
                 return (
                   <article
-                    className={`knowledge-document-card${dragging ? ' is-dragging' : ''}${dropTarget}`}
+                    className="knowledge-document-card"
                     key={document.id}
-                    onDragOver={(event) => handleDocumentDragOver(event, document)}
-                    onDrop={(event) => { void handleDocumentDrop(event, document); }}
                   >
                     <div className="knowledge-document-title">
                       <div className="knowledge-document-title-main">
-                        <span
-                          className="knowledge-drag-handle"
-                          draggable={canDragDocument}
-                          onDragStart={(event) => startDocumentDrag(event, document)}
-                          onDragEnd={clearDragState}
-                          title={canDragDocument ? '拖拽排序或移动到文件夹' : '处理中，暂不可拖动'}
-                          aria-hidden="true"
-                        >⋮⋮</span>
                         <div className="knowledge-document-name">
                           <strong>{document.file_name}</strong>
                           {developerMode && <code className="knowledge-entity-id">文档ID：{document.id}</code>}
@@ -1278,15 +982,15 @@ function KnowledgeBasePage() {
                       <span>{document.block_count || 0} 个 block</span>
                     </div>
                     <div className="knowledge-document-actions">
-                      {developerMode && <button type="button" onClick={() => void openDocument(document, 'analysis')} disabled={migrationRunning || !canOpenAnalysis(document)}>分析调试</button>}
-                      <button type="button" onClick={() => void openDocument(document, 'items')} disabled={migrationRunning || document.status !== 'success'}>查看条目</button>
-                      <button type="button" onClick={() => void openDocument(document, 'markdown')} disabled={migrationRunning || !canOpenMarkdown(document)}>查看 Markdown</button>
+                      {developerMode && <button type="button" onClick={() => void openDocument(document, 'analysis')} disabled={!canOpenAnalysis(document)}>分析调试</button>}
+                      <button type="button" onClick={() => void openDocument(document, 'items')} disabled={document.status !== 'success'}>查看条目</button>
+                      <button type="button" onClick={() => void openDocument(document, 'markdown')} disabled={!canOpenMarkdown(document)}>查看 Markdown</button>
                       {document.status === 'error' && (
-                        <button type="button" className="is-retry" onClick={() => void retryDocument(document)} disabled={migrationRunning || retrying}>
+                        <button type="button" className="is-retry" onClick={() => void retryDocument(document)} disabled={retrying}>
                           {retrying ? '重试中...' : '重试'}
                         </button>
                       )}
-                      <button type="button" className="is-danger" onClick={() => void deleteDocument(document)} disabled={migrationRunning}>删除</button>
+                      <button type="button" className="is-danger" onClick={() => void deleteDocument(document)}>删除</button>
                     </div>
                   </article>
                 );
@@ -1301,76 +1005,13 @@ function KnowledgeBasePage() {
           ) : (
             <div className="knowledge-empty-box large">
               <strong>当前文件夹暂无文档</strong>
-              <p>支持上传 .doc、.docx、.wps、.pdf、.md、.xls、.xlsx 文档。</p>
+              <p>支持上传 .doc、.docx、.pdf、.md、.xls、.xlsx 文档。</p>
             </div>
           )}
         </main>
         </section>
       </div>
-      {migrationDialog}
     </>
-  );
-}
-
-interface KnowledgeMigrationDialogProps {
-  open: boolean;
-  status: KnowledgeBaseMigrationStatus;
-  running: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}
-
-function KnowledgeMigrationDialog({ open, status, running, onCancel, onConfirm }: KnowledgeMigrationDialogProps) {
-  const { total, completed, skipped } = getMigrationCounts(status);
-
-  return (
-    <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onCancel()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="content-regenerate-modal" />
-        <Dialog.Content className="knowledge-migration-card">
-          <div className="knowledge-migration-head">
-            <span className="section-kicker">数据迁移</span>
-            <Dialog.Title>知识库数据迁移</Dialog.Title>
-            <Dialog.Description>知识库已升级为本地数据库管理，读写更高效，大量知识库也不卡</Dialog.Description>
-          </div>
-
-          <div className="knowledge-migration-body">
-                        <section className={`knowledge-migration-warning${skipped ? ' is-warning' : ''}`}>
-              <strong>迁移规则</strong>
-              <p>本次只迁移状态为“已完成”的文档；未完成或处理中的文档会被丢弃，不会迁移到新版本知识库。</p>
-            </section>
-            <section className="knowledge-migration-lead">
-              <strong>进行中文档处理方式</strong>
-              <p>如果旧版知识库里还有未处理完成的文档，请先重新安装v2.4版本，将所有知识库文档解析为“已完成”状态后，再更新至v2.5以上版本执行迁移。</p>
-            </section>
-
-
-
-            <div className="knowledge-migration-stats" aria-label="旧知识库迁移统计">
-              <div>
-                <span>旧文档总数</span>
-                <strong>{total}</strong>
-              </div>
-              <div>
-                <span>可迁移：已完成</span>
-                <strong>{completed}</strong>
-              </div>
-              <div className={skipped ? 'is-warning' : ''}>
-                <span>将跳过：未完成/处理中</span>
-                <strong>{skipped}</strong>
-              </div>
-            </div>
-          </div>
-
-          <div className="content-regenerate-actions knowledge-migration-actions">
-            <button type="button" className="secondary-action" onClick={onCancel} disabled={running}>暂不迁移</button>
-            <button type="button" className="primary-action" onClick={onConfirm} disabled={running}>
-              {running ? '迁移中...' : '开始迁移'}
-            </button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
   );
 }
 
@@ -1805,17 +1446,6 @@ function canOpenAnalysis(document: KnowledgeDocument) {
 
 function canOpenMarkdown(document: KnowledgeDocument) {
   return !['pending', 'copying'].includes(document.status);
-}
-
-function canMoveKnowledgeDocument(document: KnowledgeDocument) {
-  return ['ready_for_matching', 'success', 'error'].includes(document.status);
-}
-
-function getMigrationCounts(status: KnowledgeBaseMigrationStatus) {
-  const total = Math.max(0, Number(status.legacyDocumentCount || 0));
-  const skipped = Math.max(0, Number(status.legacySkippedDocumentCount || 0));
-  const completed = Math.max(0, Number(status.legacyCompletedDocumentCount ?? Math.max(0, total - skipped)));
-  return { total, completed, skipped };
 }
 
 function mergeDocuments(prev: KnowledgeDocument[], next: KnowledgeDocument[]) {
