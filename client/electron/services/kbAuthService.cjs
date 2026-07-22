@@ -117,6 +117,75 @@ function createKbAuthService({ app }) {
     write({ serverUrl: getServerUrl(), token: null, employee: null });
   }
 
+  // 自助注册：创建 pending 账号，不写入登录令牌（注册后需管理员审核）。
+  async function register({ username, password, display_name, department, serverUrl }) {
+    const base = (serverUrl || getServerUrl() || DEFAULT_SERVER_URL).replace(/\/+$/, '');
+    const res = await fetch(`${base}/api/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, display_name, department }),
+    });
+    const text = await res.text();
+    let payload = null;
+    if (text) {
+      try { payload = JSON.parse(text); } catch { payload = { error: text }; }
+    }
+    if (!res.ok || !payload?.success) {
+      const message = payload?.error || (res.status === 400 ? '注册失败，请检查填写内容' : `注册失败（${res.status}）`);
+      throw new Error(message);
+    }
+    return { success: true };
+  }
+
+  // ===== 管理员操作（需已登录且为 admin，apiFetch 自动注入 Bearer token）=====
+
+  async function listEmployees() {
+    const { ok, status, data } = await apiFetch('/api/admin/employees');
+    if (!ok) throw new Error(data?.error || `获取员工列表失败（${status}）`);
+    return data?.data || [];
+  }
+
+  async function listPending() {
+    const { ok, status, data } = await apiFetch('/api/admin/pending');
+    if (!ok) throw new Error(data?.error || `获取待审核列表失败（${status}）`);
+    return data?.data || [];
+  }
+
+  async function review(user_id, action, reject_reason) {
+    const { ok, status, data } = await apiFetch('/api/admin/review', {
+      method: 'POST',
+      body: { user_id, action, reject_reason },
+    });
+    if (!ok) throw new Error(data?.error || `审核失败（${status}）`);
+    return data || {};
+  }
+
+  async function resetPassword(user_id, new_password) {
+    const { ok, status, data } = await apiFetch('/api/admin/reset-password', {
+      method: 'POST',
+      body: { user_id, new_password },
+    });
+    if (!ok) throw new Error(data?.error || `重置密码失败（${status}）`);
+    return data || {};
+  }
+
+  async function setEmployeeStatus(user_id, status) {
+    const { ok, status: st, data } = await apiFetch('/api/admin/set-status', {
+      method: 'POST',
+      body: { user_id, status },
+    });
+    if (!ok) throw new Error(data?.error || `更新状态失败（${st}）`);
+    return data || {};
+  }
+
+  async function deleteEmployee(user_id) {
+    const { ok, status, data } = await apiFetch(`/api/admin/employees/${user_id}`, {
+      method: 'DELETE',
+    });
+    if (!ok) throw new Error(data?.error || `删除账号失败（${status}）`);
+    return data || {};
+  }
+
   async function getMe() {
     if (!isLoggedIn()) return null;
     const { ok, status, data } = await apiFetch('/api/me');
@@ -159,9 +228,16 @@ function createKbAuthService({ app }) {
     apiFetch,
     login,
     logout,
+    register,
     getMe,
     setServerUrl,
     getStatus,
+    listEmployees,
+    listPending,
+    review,
+    resetPassword,
+    setEmployeeStatus,
+    deleteEmployee,
   };
 }
 

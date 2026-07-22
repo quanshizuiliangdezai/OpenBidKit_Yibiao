@@ -579,6 +579,13 @@ export interface YibiaoBridge {
     getStatus: () => Promise<KbAuthStatus>;
     me: () => Promise<KbAuthEmployee | null>;
     setServer: (serverUrl: string) => Promise<{ success: boolean; serverUrl: string }>;
+    register: (payload: { username: string; password: string; display_name?: string; department?: string; serverUrl?: string }) => Promise<{ success: boolean; error?: string }>;
+    listEmployees: () => Promise<{ success: boolean; data?: KbAuthEmployee[]; error?: string }>;
+    listPending: () => Promise<{ success: boolean; data?: KbAuthEmployee[]; error?: string }>;
+    review: (payload: { user_id: string | number; action: 'approve' | 'reject'; reject_reason?: string }) => Promise<{ success: boolean; error?: string; message?: string }>;
+    resetPassword: (payload: { user_id: string | number; new_password: string }) => Promise<{ success: boolean; error?: string; message?: string }>;
+    setStatus: (payload: { user_id: string | number; status: string }) => Promise<{ success: boolean; error?: string; message?: string }>;
+    deleteEmployee: (payload: { user_id: string | number }) => Promise<{ success: boolean; error?: string; message?: string }>;
   };
   kbTeam: {
     getTree: () => Promise<{ success: boolean; data?: KbTeamTree; error?: string; needLogin?: boolean }>;

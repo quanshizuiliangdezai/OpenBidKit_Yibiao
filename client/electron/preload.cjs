@@ -195,6 +195,13 @@ const bridge = {
     getStatus: () => ipcRenderer.invoke('kb-auth:get-status'),
     me: () => ipcRenderer.invoke('kb-auth:me'),
     setServer: (serverUrl) => ipcRenderer.invoke('kb-auth:set-server', serverUrl),
+    register: (payload) => ipcRenderer.invoke('kb-auth:register', payload),
+    listEmployees: () => ipcRenderer.invoke('kb-auth:list-employees'),
+    listPending: () => ipcRenderer.invoke('kb-auth:list-pending'),
+    review: (payload) => ipcRenderer.invoke('kb-auth:review', payload),
+    resetPassword: (payload) => ipcRenderer.invoke('kb-auth:reset-password', payload),
+    setStatus: (payload) => ipcRenderer.invoke('kb-auth:set-status', payload),
+    deleteEmployee: (payload) => ipcRenderer.invoke('kb-auth:delete-employee', payload),
   },
   kbTeam: {
     getTree: () => ipcRenderer.invoke('kb-team:get-tree'),
