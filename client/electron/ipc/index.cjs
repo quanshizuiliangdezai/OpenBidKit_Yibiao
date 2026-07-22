@@ -206,7 +206,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const licenseService = createLicenseService({ app, configStore });
   const aiService = createAiService({ app, configStore });
   const kbAuthService = createKbAuthService({ app });
-  const kbTeamService = createKbTeamService({ kbAuthService });
+  const kbTeamService = createKbTeamService({ kbAuthService, app });
   const developerExpansionReplaceTestService = createDeveloperExpansionReplaceTestService({ aiService });
   const agentService = createAgentService({ app, configStore, mainWindow });
   const fileService = createFileService({ app, configStore });
