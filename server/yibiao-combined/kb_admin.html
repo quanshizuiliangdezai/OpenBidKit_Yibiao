@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>易标知识库 · 管理员审核</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #f4f6fb; color: #1f2a44; margin: 0; padding: 24px; }
+  .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.06); padding: 24px; max-width: 900px; margin: 0 auto; }
+  h2 { margin-top: 0; color: #1f5fd6; }
+  input { padding: 10px 12px; border: 1px solid #d4dbe8; border-radius: 8px; font-size: 14px; width: 220px; margin-right: 8px; }
+  button { padding: 10px 16px; border: none; border-radius: 8px; background: #1f5fd6; color: #fff; font-size: 14px; cursor: pointer; }
+  button:hover { background: #174bb0; }
+  button.approve { background: #1aa260; }
+  button.reject { background: #d9534f; }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #eef1f7; font-size: 14px; }
+  th { background: #f7f9fc; color: #5b6b8c; }
+  .tag { padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+  .tag.pending { background: #fff4e0; color: #c77700; }
+  .tag.approved { background: #e6f7ee; color: #1aa260; }
+  .tag.rejected { background: #fdecec; color: #d9534f; }
+  .tag.disabled { background: #eef1f7; color: #7a869a; }
+  #msg { color: #d9534f; margin-top: 8px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>易标知识库 · 管理员控制台</h2>
+  <p style="color:#5b6b8c;font-size:13px;margin-top:-6px">审核注册申请 · 重置密码 · 启用/禁用账号 · 删除账号</p>
+
+  <div id="login">
+    <div class="row">
+      <input id="u" placeholder="管理员用户名">
+      <input id="p" type="password" placeholder="密码">
+      <button onclick="login()">登录</button>
+    </div>
+    <div id="msg"></div>
+  </div>
+
+  <div id="panel" class="hidden">
+    <div class="row">
+      <button onclick="loadPending()">待审核申请</button>
+      <button onclick="loadAll()">全部员工</button>
+    </div>
+    <div id="hint" style="color:#5b6b8c;font-size:13px;margin-bottom:8px"></div>
+    <table id="tbl">
+      <thead><tr><th>ID</th><th>用户名</th><th>姓名</th><th>部门</th><th>状态</th><th>操作</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+let TOKEN = '';
+
+async function login() {
+  const u = document.getElementById('u').value.trim();
+  const p = document.getElementById('p').value;
+  const msg = document.getElementById('msg');
+  msg.textContent = '';
+  const r = await fetch('/api/login', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ username: u, password: p })
+  });
+  const j = await r.json();
+  if (!r.ok) { msg.textContent = j.error || '登录失败'; return; }
+  if (j.data.role !== 'admin') { msg.textContent = '该账号不是管理员'; return; }
+  TOKEN = j.data.token;
+  document.getElementById('login').classList.add('hidden');
+  document.getElementById('panel').classList.remove('hidden');
+  loadAll();
+}
+
+async function loadPending() {
+  document.getElementById('hint').textContent = '仅显示待审核申请';
+  const r = await fetch('/api/admin/pending', { headers: { Authorization: 'Bearer ' + TOKEN } });
+  const j = await r.json();
+  render(j.data || []);
+}
+
+async function loadAll() {
+  document.getElementById('hint').textContent = '全部员工';
+  const r = await fetch('/api/admin/employees', { headers: { Authorization: 'Bearer ' + TOKEN } });
+  const j = await r.json();
+  render(j.data || [], true);
+}
+
+function render(list, showAll) {
+  const tb = document.querySelector('#tbl tbody');
+  tb.innerHTML = '';
+  if (!list.length) { tb.innerHTML = '<tr><td colspan="6" style="color:#999">暂无数据</td></tr>'; return; }
+  list.forEach(e => {
+    const tr = document.createElement('tr');
+    const statusMap = { pending: ['pending', '待审核'], approved: ['approved', '已通过'], rejected: ['rejected', '已拒绝'], disabled: ['disabled', '已禁用'] };
+    const [cls, txt] = statusMap[e.status] || ['pending', e.status];
+    let action = '';
+    if (e.status === 'pending') {
+      action = '<button class="approve" onclick="review(' + e.id + ', \'approve\')">通过</button> '
+             + '<button class="reject" onclick="review(' + e.id + ', \'reject\')">拒绝</button>';
+    } else {
+      const next = e.status === 'approved' ? 'disabled' : 'approved';
+      const nextTxt = e.status === 'approved' ? '禁用' : '启用';
+      action = '<button onclick="resetPwd(' + e.id + ', \'' + esc(e.display_name) + '\')">重置密码</button> '
+             + '<button class="reject" onclick="toggleStatus(' + e.id + ', \'' + next + '\')">' + nextTxt + '</button> ';
+      if (e.role === 'admin') {
+        action += '<span style="color:#999">管理员</span>';
+      } else {
+        action += '<button class="reject" onclick="delEmp(' + e.id + ', \'' + esc(e.display_name) + '\')">删除</button>';
+      }
+    }
+    tr.innerHTML = '<td>' + e.id + '</td><td>' + esc(e.username) + '</td><td>' + esc(e.display_name)
+      + '</td><td>' + esc(e.department || '') + '</td><td><span class="tag ' + cls + '">' + txt + '</span></td><td>' + action + '</td>';
+    tb.appendChild(tr);
+  });
+}
+
+async function review(id, action) {
+  await fetch('/api/admin/review', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN},
+    body: JSON.stringify({ user_id: id, action })
+  });
+  loadAll();
+}
+
+async function resetPwd(id, name) {
+  const np = prompt('为「' + name + '」设置新密码（至少 6 位）：');
+  if (!np) return;
+  if (np.length < 6) { alert('密码至少 6 位'); return; }
+  const r = await fetch('/api/admin/reset-password', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN},
+    body: JSON.stringify({ user_id: id, new_password: np })
+  });
+  const j = await r.json();
+  if (!r.ok) { alert(j.error || '重置失败'); return; }
+  alert('密码已重置，请通知该用户使用新密码重新登录');
+  loadAll();
+}
+
+async function toggleStatus(id, status) {
+  const r = await fetch('/api/admin/set-status', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN},
+    body: JSON.stringify({ user_id: id, status })
+  });
+  const j = await r.json();
+  if (!r.ok) { alert(j.error || '操作失败'); return; }
+  loadAll();
+}
+
+async function delEmp(id, name) {
+  if (!confirm('确认删除账号「' + name + '」？\n该账号及其知识库文件夹、文档将被一并删除，且不可恢复。')) return;
+  const r = await fetch('/api/admin/employees/' + id, {
+    method: 'DELETE',
+    headers: { Authorization: 'Bearer ' + TOKEN }
+  });
+  const j = await r.json();
+  if (!r.ok) { alert(j.error || '删除失败'); return; }
+  loadAll();
+}
+
+function esc(s) {
+  return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+</script>
+</body>
+</html>
