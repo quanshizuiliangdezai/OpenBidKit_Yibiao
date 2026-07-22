@@ -1012,6 +1012,17 @@ function KnowledgeBasePage() {
           )}
         </main>
         </section>
+        {showAdmin && (
+          <Dialog.Root open={showAdmin} onOpenChange={(open) => !open && setShowAdmin(false)}>
+            <Dialog.Portal>
+              <Dialog.Overlay className="kb-admin-overlay" />
+              <Dialog.Content className="kb-admin-dialog">
+                <Dialog.Title className="kb-admin-sr-only">用户管理</Dialog.Title>
+                <KbAdminPanel status={authStatus} onClose={() => setShowAdmin(false)} />
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
+        )}
       </div>
     </>
   );
@@ -1420,17 +1431,6 @@ function KnowledgeAnalysisView({ document, snapshot, startingMatching, onStartMa
             ) : <div className="knowledge-empty-box"><strong>暂无舍弃记录</strong><p>完成段落匹配和补漏后会显示。</p></div>}
           </div>
         </section>
-        {showAdmin && (
-          <Dialog.Root open={showAdmin} onOpenChange={(open) => !open && setShowAdmin(false)}>
-            <Dialog.Portal>
-              <Dialog.Overlay className="kb-admin-overlay" />
-              <Dialog.Content className="kb-admin-dialog">
-                <Dialog.Title className="kb-admin-sr-only">用户管理</Dialog.Title>
-                <KbAdminPanel status={authStatus} onClose={() => setShowAdmin(false)} />
-              </Dialog.Content>
-            </Dialog.Portal>
-          </Dialog.Root>
-        )}
       </div>
     </div>
   );

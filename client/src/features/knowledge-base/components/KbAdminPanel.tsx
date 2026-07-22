@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { KbAuthEmployee, KbAuthStatus } from '../../../shared/types/ipc';
 
 interface KbAdminPanelProps {
@@ -120,7 +120,7 @@ function KbAdminPanel({ status, onClose }: KbAdminPanelProps) {
   const renderActions = (e: KbAuthEmployee) => {
     const isSelf = String(e.id) === String(myId);
     const st = e.status || 'pending';
-    const buttons: JSX.Element[] = [];
+    const buttons: ReactNode[] = [];
     if (st === 'pending' || st === 'rejected') {
       buttons.push(<button key="approve" className="kb-admin-approve" onClick={() => approve(e)}>通过</button>);
     }
