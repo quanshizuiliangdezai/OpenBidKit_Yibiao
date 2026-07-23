@@ -163,7 +163,29 @@
   flex: 1;
   flex-direction: column;
   gap: 5px;
+  min-height: 0;
   margin-top: 20px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+}
+
+.sidebar-nav::-webkit-scrollbar {
+  width: 5px;
+}
+
+.sidebar-nav::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-nav::-webkit-scrollbar-thumb {
+  background: rgba(139, 152, 174, 0.35);
+  border-radius: 999px;
+}
+
+.sidebar-nav::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 152, 174, 0.55);
 }
 
 /* [346-432] nav-item/settings-trigger + nav-icon + nav-copy + sidebar-footer */
