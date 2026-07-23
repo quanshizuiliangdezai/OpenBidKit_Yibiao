@@ -26,7 +26,8 @@ export type SectionId =
   | 'developer-agent-test'
   | 'settings'
   | 'account-list'
-  | 'permission-list';
+  | 'permission-list'
+  | 'plugin-manager';
 
 export interface AppMenuNotice {
   message: string;

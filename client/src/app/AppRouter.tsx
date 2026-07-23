@@ -13,6 +13,7 @@ import DuplicateCheckPage from '../features/duplicate-check/pages/DuplicateCheck
 import KnowledgeBasePage from '../features/knowledge-base/pages/KnowledgeBasePage';
 import RejectionCheckPage from '../features/rejection-check/pages/RejectionCheckPage';
 import ResourcesPage from '../features/resources/pages/ResourcesPage';
+import PluginsPage from '../features/plugins/pages/PluginsPage';
 import SettingsPage from '../features/settings/pages/SettingsPage';
 import AccountListPage from '../features/settings/pages/AccountListPage';
 import PermissionListPage from '../features/settings/pages/PermissionListPage';
@@ -56,6 +57,8 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <KnowledgeBasePage />;
     case 'resources':
       return <ResourcesPage />;
+    case 'plugin-manager':
+      return <PluginsPage />;
     case 'duplicate-check':
       return <DuplicateCheckPage />;
     case 'rejection-check':

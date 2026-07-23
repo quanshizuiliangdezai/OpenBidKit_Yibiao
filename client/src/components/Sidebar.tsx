@@ -38,6 +38,7 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'developer-expansion-replace-test': FlaskIcon,
   'developer-opencode-agent-test': FlaskIcon,
   'developer-agent-test': FlaskIcon,
+  'plugin-manager': PluginIcon,
   settings: GearIcon,
   'account-list': UserIcon,
   'permission-list': KeyIcon,
@@ -411,6 +412,17 @@ function KeyIcon(props: SVGProps<SVGSVGElement>) {
       <path d="M10.6 10.6 19 19" />
       <path d="M15.5 15.5 18 13" />
       <path d="M18 18 20.5 15.5" />
+    </svg>
+  );
+}
+
+function PluginIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
+      <path d="M12 22a2 2 0 0 0 2-2V12" />
+      <path d="M5 12H2a10 10 0 0 0 20 0h-3" />
+      <circle cx="12" cy="5" r="3" />
+
     </svg>
   );
 }

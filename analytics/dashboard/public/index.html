@@ -55,6 +55,7 @@
       <button class="tab-button" type="button" data-tab-button="notice">公告管理</button>
       <button class="tab-button" type="button" data-tab-button="license">授权管理</button>
       <button class="tab-button" type="button" data-tab-button="resources">资源管理</button>
+      <button class="tab-button" type="button" data-tab-button="plugins">插件管理</button>
     </nav>
 
     <section id="tab-overview" class="tab-panel" data-tab-panel="overview">
@@ -428,6 +429,46 @@
 
         <div id="resourcesStatus" class="notice-status"></div>
         <div id="resourcesTable" class="resource-table-wrap"></div>
+      </section>
+    </section>
+
+    <section id="tab-plugins" class="tab-panel" data-tab-panel="plugins">
+      <section class="panel section">
+        <div class="section-head">
+          <h2>插件管理</h2>
+          <div class="section-actions">
+            <button id="loadPluginsButton" class="secondary-button" type="button" onclick="window.location.reload()">刷新插件列表</button>
+            <button id="newPluginButton" class="secondary-button" type="button" onclick="document.getElementById('pluginForm').scrollIntoView({ behavior: 'smooth' })">新增插件</button>
+          </div>
+        </div>
+
+        <form id="pluginForm" class="plugin-form" autocomplete="off">
+          <input id="pluginId" type="hidden" />
+          <label class="plugin-field-wide">
+            GitHub 仓库地址 *
+            <input id="pluginRepository" maxlength="300" placeholder="例如：https://github.com/FB208/OpenBidKit-plugin-pet" required />
+            <small>自动读取 Tag 对应的 manifest.json、最新正式 Release 和安装包地址。</small>
+          </label>
+          <label>
+            状态
+            <select id="pluginEnabled">
+              <option value="true" selected>启用</option>
+              <option value="false">停用</option>
+            </select>
+          </label>
+          <label>
+            排序
+            <input id="pluginSortOrder" type="number" value="1" />
+          </label>
+
+          <div class="plugin-actions">
+            <button id="resetPluginButton" class="secondary-button" type="button">清空表单</button>
+            <button id="savePluginButton" type="submit">保存并同步</button>
+          </div>
+        </form>
+
+        <div id="pluginsStatus" class="notice-status"></div>
+        <div id="pluginsTable" class="plugin-table-wrap"></div>
       </section>
     </section>
 
