@@ -120,6 +120,7 @@ export interface KnowledgeDocument {
   sort_order?: number;
   created_at: string;
   updated_at: string;
+  uploaded_by_name?: string;
   error?: string;
 }
 

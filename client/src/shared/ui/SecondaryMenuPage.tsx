@@ -1,5 +1,6 @@
 import type { AppMenuItem, AppSubMenuItem, SectionId } from '../types/navigation';
 import { useToast } from './ToastProvider';
+import { useAuth } from '../auth/AuthContext';
 
 interface SecondaryMenuPageProps {
   menuItem: AppMenuItem;
@@ -7,7 +8,10 @@ interface SecondaryMenuPageProps {
 }
 
 function SecondaryMenuPage({ menuItem, onNavigate }: SecondaryMenuPageProps) {
-  const children = menuItem.children ?? [];
+  const auth = useAuth();
+  const children = (menuItem.children ?? []).filter(
+    (item) => !item.requiredPermission || auth.hasPermission(item.requiredPermission),
+  );
   const { showToast } = useToast();
 
   const handleItemClick = (item: AppSubMenuItem) => {

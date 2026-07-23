@@ -1,0 +1,496 @@
+/* ============================================================
+ * 全局登录门禁 (ClientLoginGate) + 账户列表 / 权限列表 页面
+ * 复用设计令牌：--yb-primary / --yb-text / --yb-border-soft 等
+ * ============================================================ */
+
+/* ---------- 全局登录门禁 ---------- */
+.client-login-splash {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  color: var(--yb-text-soft);
+  font-size: 15px;
+}
+
+.client-login-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(33, 116, 253, 0.16), transparent 46%),
+    radial-gradient(circle at 78% 82%, rgba(91, 84, 211, 0.14), transparent 44%),
+    linear-gradient(135deg, #f4f8ff, #eef3fb);
+}
+
+.client-login-card {
+  width: min(420px, 100%);
+  padding: 28px;
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border);
+  border-radius: 24px;
+  box-shadow: var(--yb-shadow-lg);
+}
+
+.client-login-brand {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 18px;
+}
+
+.client-login-brand strong {
+  color: var(--yb-text);
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.client-login-brand span {
+  color: var(--yb-text-soft);
+  font-size: 13px;
+}
+
+.client-login-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  margin-bottom: 18px;
+  background: var(--yb-bg);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 999px;
+}
+
+.client-login-tabs button {
+  flex: 1;
+  min-height: 38px;
+  padding: 0 16px;
+  color: var(--yb-text-soft);
+  font-weight: 700;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  transition: background var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease;
+}
+
+.client-login-tabs button.is-active {
+  color: var(--yb-primary);
+  background: var(--yb-surface);
+  box-shadow: var(--yb-shadow-xs);
+}
+
+.client-login-form {
+  display: grid;
+  gap: 14px;
+}
+
+.client-login-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.client-login-form input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  color: var(--yb-text);
+  background: #eef3fa;
+  border: 1px solid #ccd6e3;
+  border-radius: 14px;
+  outline: none;
+}
+
+.client-login-form input:focus {
+  background: #ffffff;
+  border-color: rgba(33, 116, 253, 0.58);
+  box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.12);
+}
+
+.client-login-submit {
+  min-height: 46px;
+  margin-top: 4px;
+  color: #ffffff;
+  font-weight: 800;
+  background: var(--yb-primary);
+  border: 0;
+  border-radius: 14px;
+  transition: opacity var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
+}
+
+.client-login-submit:hover:not(:disabled) {
+  opacity: 0.92;
+  transform: translateY(-1px);
+}
+
+.client-login-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.client-login-hint {
+  margin: 0;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  line-height: 1.6;
+  background: rgba(33, 116, 253, 0.06);
+  border: 1px solid rgba(33, 116, 253, 0.12);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+/* ---------- 账户列表 / 权限列表 公共 ---------- */
+.account-list-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px 36px 8px;
+}
+
+.account-list-desc {
+  flex: 1;
+  margin: 0;
+  max-width: 760px;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.account-add-button {
+  flex: 0 0 auto;
+}
+
+.account-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 36px 18px;
+}
+
+.account-filter-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 16px;
+  color: var(--yb-text-soft);
+  font-weight: 700;
+  background: var(--yb-bg);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 999px;
+  transition: color var(--yb-duration-fast) ease, background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease;
+}
+
+.account-filter-tab em {
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 1px 8px;
+  color: var(--yb-text-muted);
+  background: rgba(152, 162, 179, 0.16);
+  border-radius: 999px;
+}
+
+.account-filter-tab.is-active {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.1);
+  border-color: rgba(33, 116, 253, 0.18);
+}
+
+.account-filter-tab.is-active em {
+  color: var(--yb-primary-deep);
+  background: rgba(33, 116, 253, 0.16);
+}
+
+.account-table-wrap {
+  padding: 0 36px 18px;
+}
+
+.account-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.account-table th,
+.account-table td {
+  padding: 14px 12px;
+  text-align: left;
+  font-size: 13px;
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.account-table th:nth-child(1) { width: 14%; }
+.account-table th:nth-child(2) { width: 14%; }
+.account-table th:nth-child(3) { width: 14%; }
+.account-table th:nth-child(4) { width: 8%; }
+.account-table th:nth-child(5) { width: 18%; }
+.account-table th:nth-child(6) { width: 10%; }
+.account-table th:nth-child(7) { width: 22%; }
+
+.account-table th {
+  color: var(--yb-text-muted);
+  font-weight: 700;
+}
+
+.account-table td {
+  color: var(--yb-text);
+}
+
+.account-group-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.account-group-tag {
+  padding: 2px 9px;
+  color: var(--yb-primary-deep);
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(33, 116, 253, 0.1);
+  border: 1px solid rgba(33, 116, 253, 0.14);
+  border-radius: 999px;
+}
+
+.account-group-none {
+  color: var(--yb-text-muted);
+}
+
+/* ---------- 对话框表单（添加成员 / 新建分组 / 重置密码）---------- */
+.account-form {
+  display: grid;
+  gap: 14px;
+}
+
+.account-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.account-form input,
+.account-form select {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  color: var(--yb-text);
+  background: #eef3fa;
+  border: 1px solid #ccd6e3;
+  border-radius: 14px;
+  outline: none;
+}
+
+.account-form input:focus,
+.account-form select:focus {
+  background: #ffffff;
+  border-color: rgba(33, 116, 253, 0.58);
+  box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.12);
+}
+
+.account-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.account-form-error {
+  margin: 0;
+  color: #c83220;
+  font-size: 13px;
+}
+
+/* ---------- 权限分组卡片 ---------- */
+.permission-group-list {
+  display: grid;
+  gap: 14px;
+  padding: 0 36px 24px;
+}
+
+.permission-group-card {
+  padding: 18px 20px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 18px;
+  box-shadow: var(--yb-shadow-xs);
+}
+
+.permission-group-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.permission-group-head strong {
+  color: var(--yb-text);
+  font-size: 16px;
+}
+
+.permission-group-head p {
+  margin: 4px 0 0;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.permission-group-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.permission-group-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.permission-group-block {
+  display: grid;
+  gap: 7px;
+}
+
+.permission-group-label {
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* ---------- 权限编辑对话框 ---------- */
+.permission-edit-dialog {
+  width: min(880px, calc(100vw - 40px));
+}
+
+.permission-edit-body {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 20px;
+  min-height: 0;
+  max-height: min(520px, calc(100vh - 240px));
+  overflow: auto;
+}
+
+.permission-edit-col {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.permission-check-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.permission-check {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(248, 250, 253, 0.8);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color var(--yb-duration-fast) ease, background var(--yb-duration-fast) ease;
+}
+
+.permission-check.is-checked {
+  border-color: rgba(33, 116, 253, 0.32);
+  background: rgba(33, 116, 253, 0.06);
+}
+
+.permission-check input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: var(--yb-primary);
+}
+
+.permission-check-text {
+  display: grid;
+  gap: 2px;
+}
+
+.permission-check-text strong {
+  color: var(--yb-text);
+  font-size: 14px;
+}
+
+.permission-check-text small {
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.permission-member-search {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 14px;
+  color: var(--yb-text);
+  background: #eef3fa;
+  border: 1px solid #ccd6e3;
+  border-radius: 12px;
+  outline: none;
+}
+
+.permission-member-search:focus {
+  background: #ffffff;
+  border-color: rgba(33, 116, 253, 0.58);
+  box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.12);
+}
+
+.permission-member-list {
+  display: grid;
+  gap: 6px;
+  min-height: 0;
+  overflow: auto;
+  max-height: 360px;
+  padding-right: 4px;
+}
+
+.permission-member-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: rgba(248, 250, 253, 0.8);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.permission-member-row.is-checked {
+  border-color: rgba(33, 116, 253, 0.32);
+  background: rgba(33, 116, 253, 0.06);
+}
+
+.permission-member-row input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--yb-primary);
+}
+
+.permission-member-row span {
+  display: grid;
+}
+
+.permission-member-row strong {
+  color: var(--yb-text);
+  font-size: 13px;
+}
+
+.permission-member-row small {
+  color: var(--yb-text-soft);
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .permission-edit-body,
+  .permission-group-meta,
+  .account-form-row {
+    grid-template-columns: 1fr;
+  }
+}

@@ -3,6 +3,7 @@ import { useState, type ComponentType, type ReactElement, type SVGProps } from '
 import { getAppMenuItems, getParentMenuItemBySection } from '../app/menuConfig';
 import type { AppMenuItem, SectionId } from '../shared/types/navigation';
 import { useToast } from '../shared/ui';
+import { useAuth } from '../shared/auth/AuthContext';
 import logoUrl from '../../assets/icon_256.png';
 
 interface SidebarProps {
@@ -38,7 +39,8 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'developer-opencode-agent-test': FlaskIcon,
   'developer-agent-test': FlaskIcon,
   settings: GearIcon,
-  account: UserIcon,
+  'account-list': UserIcon,
+  'permission-list': KeyIcon,
 };
 
 const USER_GUIDE_URL = 'https://wiki.agnet.top/';
@@ -46,7 +48,19 @@ const USER_GUIDE_URL = 'https://wiki.agnet.top/';
 function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const { showToast } = useToast();
-  const menuItems = getAppMenuItems(developerMode);
+  const auth = useAuth();
+  const menuItems = getAppMenuItems(developerMode)
+    .map((item) => {
+      if (item.children?.length) {
+        const children = item.children.filter(
+          (child) => !child.requiredPermission || auth.hasPermission(child.requiredPermission),
+        );
+        return children.length ? { ...item, children } : null;
+      }
+      if (item.requiredPermission && !auth.hasPermission(item.requiredPermission)) return null;
+      return item;
+    })
+    .filter((item): item is AppMenuItem => item !== null);
   const activeParent = getParentMenuItemBySection(activeSection, developerMode);
 
   const handleMenuItemClick = (item: AppMenuItem) => {
@@ -318,6 +332,17 @@ function UserIcon(props: SVGProps<SVGSVGElement>) {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
       <circle cx="12" cy="8" r="3.6" />
       <path d="M5 19.5c0-3.6 3.1-5.5 7-5.5s7 1.9 7 5.5" />
+    </svg>
+  );
+}
+
+function KeyIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
+      <circle cx="8" cy="8" r="3.8" />
+      <path d="M10.6 10.6 19 19" />
+      <path d="M15.5 15.5 18 13" />
+      <path d="M18 18 20.5 15.5" />
     </svg>
   );
 }

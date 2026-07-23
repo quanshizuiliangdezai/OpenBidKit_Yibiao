@@ -186,6 +186,72 @@ function createKbAuthService({ app }) {
     return data || {};
   }
 
+  // ===== 权限分组（RBAC）=====
+
+  async function listPermissions() {
+    const { ok, status, data } = await apiFetch('/api/permissions');
+    if (!ok) throw new Error(data?.error || `获取权限目录失败（${status}）`);
+    return data?.data || [];
+  }
+
+  async function listGroups() {
+    const { ok, status, data } = await apiFetch('/api/admin/groups');
+    if (!ok) throw new Error(data?.error || `获取权限分组失败（${status}）`);
+    return data?.data || [];
+  }
+
+  async function createGroup({ name, description }) {
+    const { ok, status, data } = await apiFetch('/api/admin/groups', {
+      method: 'POST',
+      body: { name, description },
+    });
+    if (!ok) throw new Error(data?.error || `创建分组失败（${status}）`);
+    return data?.data || {};
+  }
+
+  async function deleteGroup(group_id) {
+    const { ok, status, data } = await apiFetch(`/api/admin/groups/${group_id}`, {
+      method: 'DELETE',
+    });
+    if (!ok) throw new Error(data?.error || `删除分组失败（${status}）`);
+    return data || {};
+  }
+
+  async function setGroupPermissions(group_id, permissions) {
+    const { ok, status, data } = await apiFetch(`/api/admin/groups/${group_id}/permissions`, {
+      method: 'PUT',
+      body: { permissions },
+    });
+    if (!ok) throw new Error(data?.error || `保存分组权限失败（${status}）`);
+    return data || {};
+  }
+
+  async function addGroupMember(group_id, employee_id) {
+    const { ok, status, data } = await apiFetch(`/api/admin/groups/${group_id}/members`, {
+      method: 'POST',
+      body: { employee_id },
+    });
+    if (!ok) throw new Error(data?.error || `加入分组失败（${status}）`);
+    return data || {};
+  }
+
+  async function removeGroupMember(group_id, employee_id) {
+    const { ok, status, data } = await apiFetch(`/api/admin/groups/${group_id}/members/${employee_id}`, {
+      method: 'DELETE',
+    });
+    if (!ok) throw new Error(data?.error || `移出分组失败（${status}）`);
+    return data || {};
+  }
+
+  async function adminCreateEmployee({ username, password, display_name, department, role, status }) {
+    const { ok, status: st, data } = await apiFetch('/api/admin/employees', {
+      method: 'POST',
+      body: { username, password, display_name, department, role, status },
+    });
+    if (!ok) throw new Error(data?.error || `创建账号失败（${st}）`);
+    return data || {};
+  }
+
   async function getMe() {
     if (!isLoggedIn()) return null;
     const { ok, status, data } = await apiFetch('/api/me');
@@ -238,6 +304,14 @@ function createKbAuthService({ app }) {
     resetPassword,
     setEmployeeStatus,
     deleteEmployee,
+    listPermissions,
+    listGroups,
+    createGroup,
+    deleteGroup,
+    setGroupPermissions,
+    addGroupMember,
+    removeGroupMember,
+    adminCreateEmployee,
   };
 }
 

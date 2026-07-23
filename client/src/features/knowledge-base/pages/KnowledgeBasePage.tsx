@@ -6,7 +6,6 @@ import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeDocument, 
 import type { KbAuthStatus, KbTeamDocument, KbTeamFolder } from '../../../shared/types/ipc';
 import KbLoginPanel from '../components/KbLoginPanel';
 import KbUserBar from '../components/KbUserBar';
-import KbAdminPanel from '../components/KbAdminPanel';
 
 declare global {
   interface Window {
@@ -48,6 +47,7 @@ function adaptServerDocument(
     candidate_item_count: localStatus?.candidate_item_count || 0,
     created_at: server.created_at || '',
     updated_at: server.created_at || '',
+    uploaded_by_name: server.uploaded_by_name,
   };
 }
 
@@ -329,7 +329,6 @@ function KnowledgeBasePage() {
   const [listLoading, setListLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [authStatus, setAuthStatus] = useState<KbAuthStatus | null>(null);
-  const [showAdmin, setShowAdmin] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [viewer, setViewer] = useState<KnowledgeViewer | null>(null);
   const [viewerLoading, setViewerLoading] = useState(false);
@@ -867,7 +866,7 @@ function KnowledgeBasePage() {
           <small>{index.folders.length} 个文件夹 / {index.documents.length} 个文档</small>
         </div>
         <div className="knowledge-toolbar-actions">
-          {authStatus && <KbUserBar status={authStatus} onLogout={() => void handleLogout()} onManage={authStatus.employee?.role === 'admin' ? () => setShowAdmin(true) : undefined} />}
+          {authStatus && <KbUserBar status={authStatus} onLogout={() => void handleLogout()} />}
           <button type="button" className="secondary-action" onClick={() => setShowCreateFolder((value) => !value)} disabled={listLoading}>新建文件夹</button>
           <button type="button" className="primary-action" onClick={uploadDocuments} disabled={loading || !activeFolder}>
             {loading ? '处理中...' : '上传文档'}
@@ -982,6 +981,7 @@ function KnowledgeBasePage() {
                       <span>{document.item_count || 0} 条知识</span>
                       <span>{document.candidate_item_count || 0} 个候选</span>
                       <span>{document.block_count || 0} 个 block</span>
+                      <span>上传人：{document.uploaded_by_name || '未知'}</span>
                     </div>
                     <div className="knowledge-document-actions">
                       {developerMode && <button type="button" onClick={() => void openDocument(document, 'analysis')} disabled={!canOpenAnalysis(document)}>分析调试</button>}
@@ -1012,17 +1012,6 @@ function KnowledgeBasePage() {
           )}
         </main>
         </section>
-        {showAdmin && (
-          <Dialog.Root open={showAdmin} onOpenChange={(open) => !open && setShowAdmin(false)}>
-            <Dialog.Portal>
-              <Dialog.Overlay className="kb-admin-overlay" />
-              <Dialog.Content className="kb-admin-dialog">
-                <Dialog.Title className="kb-admin-sr-only">用户管理</Dialog.Title>
-                <KbAdminPanel status={authStatus} onClose={() => setShowAdmin(false)} />
-              </Dialog.Content>
-            </Dialog.Portal>
-          </Dialog.Root>
-        )}
       </div>
     </>
   );

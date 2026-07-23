@@ -375,6 +375,20 @@ export interface KbAuthStatus {
   employee: KbAuthEmployee | null;
 }
 
+export interface KbPermissionDef {
+  key: string;
+  label: string;
+  description?: string;
+}
+
+export interface KbPermissionGroup {
+  id: string | number;
+  name: string;
+  description?: string | null;
+  permissions: string[];
+  members: Array<{ id: string | number; display_name?: string; username?: string }>;
+}
+
 export interface KbAuthLoginPayload {
   username: string;
   password: string;
@@ -601,6 +615,14 @@ export interface YibiaoBridge {
     resetPassword: (payload: { user_id: string | number; new_password: string }) => Promise<{ success: boolean; error?: string; message?: string }>;
     setStatus: (payload: { user_id: string | number; status: string }) => Promise<{ success: boolean; error?: string; message?: string }>;
     deleteEmployee: (payload: { user_id: string | number }) => Promise<{ success: boolean; error?: string; message?: string }>;
+    listPermissions: () => Promise<{ success: boolean; data?: KbPermissionDef[]; error?: string }>;
+    listGroups: () => Promise<{ success: boolean; data?: KbPermissionGroup[]; error?: string }>;
+    createGroup: (payload: { name: string; description?: string }) => Promise<{ success: boolean; data?: KbPermissionGroup; error?: string }>;
+    deleteGroup: (payload: { group_id: string | number }) => Promise<{ success: boolean; error?: string }>;
+    setGroupPermissions: (payload: { group_id: string | number; permissions: string[] }) => Promise<{ success: boolean; error?: string }>;
+    addGroupMember: (payload: { group_id: string | number; employee_id: string | number }) => Promise<{ success: boolean; error?: string }>;
+    removeGroupMember: (payload: { group_id: string | number; employee_id: string | number }) => Promise<{ success: boolean; error?: string }>;
+    adminCreateEmployee: (payload: { username: string; password: string; display_name: string; department?: string; role?: string; status?: string }) => Promise<{ success: boolean; error?: string; message?: string }>;
   };
   kbTeam: {
     getTree: () => Promise<{ success: boolean; data?: KbTeamTree; error?: string; needLogin?: boolean }>;

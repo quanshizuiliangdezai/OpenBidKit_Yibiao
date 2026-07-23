@@ -237,6 +237,56 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 k: doc[k] for k in ('id', 'folder_id', 'owner_id', 'title',
                                     'file_name', 'file_size', 'mime_type', 'created_at')}})
 
+        m = re.match(r'^/api/admin/groups/(\d+)/members$', path)
+        if m:
+            admin = self._is_admin()
+            if not admin:
+                return self._send(403, {'error': '需要管理员权限'})
+            ok, err = kb_db.add_employee_group(data.get('employee_id'), m.group(1))
+            if not ok:
+                return self._send(400, {'error': err})
+            return self._send(200, {'success': True})
+
+        if path == '/api/admin/groups':
+            admin = self._is_admin()
+            if not admin:
+                return self._send(403, {'error': '需要管理员权限'})
+            g, err = kb_db.create_permission_group(data.get('name', ''), data.get('description'))
+            if err:
+                return self._send(400, {'error': err})
+            return self._send(200, {'success': True, 'data': g})
+
+        if path == '/api/admin/employees':
+            admin = self._is_admin()
+            if not admin:
+                return self._send(403, {'error': '需要管理员权限'})
+            ok, err = kb_db.admin_create_employee(
+                data.get('username', ''), data.get('password', ''),
+                data.get('display_name', ''), data.get('department'),
+                data.get('role', 'employee'), data.get('status', 'approved'))
+            if not ok:
+                return self._send(400, {'error': err})
+            return self._send(200, {'success': True, 'message': '账户已创建'})
+
+        return self._send(404, {'error': '接口不存在'})
+
+    def do_PUT(self):
+        path = urlparse(self.path).path
+        ctype = self.headers.get('Content-Type', '')
+        data = {}
+        if 'application/json' in ctype:
+            data = self._read_json()
+            if data is None:
+                return self._send(400, {'error': '请求体不是合法 JSON'})
+        m = re.match(r'^/api/admin/groups/(\d+)/permissions$', path)
+        if m:
+            admin = self._is_admin()
+            if not admin:
+                return self._send(403, {'error': '需要管理员权限'})
+            ok, err = kb_db.set_group_permissions(m.group(1), data.get('permissions', []))
+            if not ok:
+                return self._send(400, {'error': err})
+            return self._send(200, {'success': True})
         return self._send(404, {'error': '接口不存在'})
 
     def do_GET(self):
@@ -265,6 +315,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not self._is_admin():
                 return self._send(403, {'error': '需要管理员权限'})
             return self._send(200, {'data': kb_db.list_employees()})
+
+        if path == '/api/permissions':
+            e = self._auth()
+            if not e:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            return self._send(200, {'data': [
+                {'key': k, 'label': lbl, 'description': desc}
+                for k, lbl, desc in kb_db.PERMISSION_CATALOG
+            ]})
+
+        if path == '/api/admin/groups':
+            if not self._is_admin():
+                return self._send(403, {'error': '需要管理员权限'})
+            return self._send(200, {'data': kb_db.list_permission_groups()})
 
         # 下载文档文件（流式）
         m = re.match(r'^/api/documents/(\d+)/file$', path)
@@ -362,6 +426,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not ok:
                 return self._send(400, {'error': err})
             return self._send(200, {'success': True, 'message': '文档已删除'})
+
+        m = re.match(r'^/api/admin/groups/(\d+)/members/(\d+)$', path)
+        if m:
+            admin = self._is_admin()
+            if not admin:
+                return self._send(403, {'error': '需要管理员权限'})
+            ok, err = kb_db.remove_employee_group(m.group(2), m.group(1))
+            if not ok:
+                return self._send(400, {'error': err})
+            return self._send(200, {'success': True})
+
+        m = re.match(r'^/api/admin/groups/(\d+)$', path)
+        if m:
+            admin = self._is_admin()
+            if not admin:
+                return self._send(403, {'error': '需要管理员权限'})
+            ok, err = kb_db.delete_permission_group(m.group(1))
+            if not ok:
+                return self._send(400, {'error': err})
+            return self._send(200, {'success': True})
 
         return self._send(404, {'error': '接口不存在'})
 

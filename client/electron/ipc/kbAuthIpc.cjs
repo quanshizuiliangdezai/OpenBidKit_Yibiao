@@ -83,6 +83,70 @@ function registerKbAuthIpc({ kbAuthService }) {
       return { success: false, error: error?.message || '删除账号失败' };
     }
   });
+
+  ipcMain.handle('kb-auth:list-permissions', async () => {
+    try {
+      return { success: true, data: await kbAuthService.listPermissions() };
+    } catch (error) {
+      return { success: false, error: error?.message || '获取权限目录失败' };
+    }
+  });
+
+  ipcMain.handle('kb-auth:list-groups', async () => {
+    try {
+      return { success: true, data: await kbAuthService.listGroups() };
+    } catch (error) {
+      return { success: false, error: error?.message || '获取权限分组失败' };
+    }
+  });
+
+  ipcMain.handle('kb-auth:create-group', async (_event, payload) => {
+    try {
+      return { success: true, data: await kbAuthService.createGroup(payload || {}) };
+    } catch (error) {
+      return { success: false, error: error?.message || '创建分组失败' };
+    }
+  });
+
+  ipcMain.handle('kb-auth:delete-group', async (_event, payload) => {
+    try {
+      return { success: true, ...(await kbAuthService.deleteGroup(payload?.group_id)) };
+    } catch (error) {
+      return { success: false, error: error?.message || '删除分组失败' };
+    }
+  });
+
+  ipcMain.handle('kb-auth:set-group-permissions', async (_event, payload) => {
+    try {
+      return { success: true, ...(await kbAuthService.setGroupPermissions(payload?.group_id, payload?.permissions)) };
+    } catch (error) {
+      return { success: false, error: error?.message || '保存分组权限失败' };
+    }
+  });
+
+  ipcMain.handle('kb-auth:add-group-member', async (_event, payload) => {
+    try {
+      return { success: true, ...(await kbAuthService.addGroupMember(payload?.group_id, payload?.employee_id)) };
+    } catch (error) {
+      return { success: false, error: error?.message || '加入分组失败' };
+    }
+  });
+
+  ipcMain.handle('kb-auth:remove-group-member', async (_event, payload) => {
+    try {
+      return { success: true, ...(await kbAuthService.removeGroupMember(payload?.group_id, payload?.employee_id)) };
+    } catch (error) {
+      return { success: false, error: error?.message || '移出分组失败' };
+    }
+  });
+
+  ipcMain.handle('kb-auth:admin-create-employee', async (_event, payload) => {
+    try {
+      return { success: true, ...(await kbAuthService.adminCreateEmployee(payload || {})) };
+    } catch (error) {
+      return { success: false, error: error?.message || '创建账号失败' };
+    }
+  });
 }
 
 module.exports = { registerKbAuthIpc };

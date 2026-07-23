@@ -25,7 +25,8 @@ export type SectionId =
   | 'developer-opencode-agent-test'
   | 'developer-agent-test'
   | 'settings'
-  | 'account';
+  | 'account-list'
+  | 'permission-list';
 
 export interface AppMenuNotice {
   message: string;
@@ -38,6 +39,7 @@ export interface AppSubMenuItem {
   label: string;
   description: string;
   icon?: 'document' | 'expand' | 'briefcase' | 'compare' | 'shield' | 'code' | 'prompt' | 'file' | 'export' | 'tool';
+  requiredPermission?: string;
   notice?: AppMenuNotice;
 }
 
@@ -46,5 +48,6 @@ export interface AppMenuItem {
   label: string;
   description: string;
   children?: AppSubMenuItem[];
+  requiredPermission?: string;
   notice?: AppMenuNotice;
 }

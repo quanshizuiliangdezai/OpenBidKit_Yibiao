@@ -14,7 +14,8 @@ import KnowledgeBasePage from '../features/knowledge-base/pages/KnowledgeBasePag
 import RejectionCheckPage from '../features/rejection-check/pages/RejectionCheckPage';
 import ResourcesPage from '../features/resources/pages/ResourcesPage';
 import SettingsPage from '../features/settings/pages/SettingsPage';
-import AccountPage from '../features/settings/pages/AccountPage';
+import AccountListPage from '../features/settings/pages/AccountListPage';
+import PermissionListPage from '../features/settings/pages/PermissionListPage';
 import TechnicalPlanHome from '../features/technical-plan/pages/TechnicalPlanHome';
 import SecondaryMenuPage from '../shared/ui/SecondaryMenuPage';
 
@@ -79,8 +80,10 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <AgentTestPage />;
     case 'settings':
       return <SettingsPage onDeveloperModeChange={onDeveloperModeChange} />;
-    case 'account':
-      return <AccountPage />;
+    case 'account-list':
+      return <AccountListPage />;
+    case 'permission-list':
+      return <PermissionListPage />;
     default:
       return null;
   }
