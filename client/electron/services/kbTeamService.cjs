@@ -12,7 +12,6 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const FormData = require('form-data');
 
 function createKbTeamService({ kbAuthService, app }) {
   const api = kbAuthService.apiFetch.bind(kbAuthService);
@@ -84,53 +83,35 @@ function createKbTeamService({ kbAuthService, app }) {
 
   /**
    * 上传文档，支持 onProgress 回调 (0-100)
+   * 使用 Node.js 原生 FormData + Blob，兼容内置 fetch。
    */
   async function uploadDocument(filePath, originalName, folderId, onProgress) {
-    const formData = new FormData();
     const fileName = originalName || path.basename(filePath);
-    formData.append('file', fs.createReadStream(filePath), {
-      filename: fileName,
-      contentType: 'application/octet-stream',
-    });
+    const fileBuffer = fs.readFileSync(filePath);
+    const blob = new Blob([fileBuffer], { type: 'application/octet-stream' });
+    const formData = new FormData();
+    formData.append('file', blob, fileName);
     if (folderId) formData.append('folder_id', String(folderId));
 
-    const fileSize = fs.statSync(filePath).size;
-    const headers = formData.getHeaders();
-
-    // 监听 form-data 内部 progress 事件
-    return new Promise((resolve, reject) => {
-      let reported = false;
-      formData.on('progress', (event) => {
-        if (event.percent && !reported) {
-          reported = true;
-          onProgress && onProgress(Math.round(event.percent * 100));
-        } else if (fileSize > 0 && event.current !== undefined && !reported) {
-          reported = true;
-          onProgress && onProgress(Math.round((event.current / fileSize) * 100));
-        }
-      });
-
-      fetch(`${kbAuthService.getServerUrl().replace(/\/+$/, '')}/api/documents`, {
-        method: 'POST',
-        headers,
-        body: formData,
-      })
-        .then(async (res) => {
-          const text = await res.text();
-          let data = null;
-          if (text) {
-            try { data = JSON.parse(text); } catch { data = text; }
-          }
-          if (!res.ok) {
-            const msg = data?.error || `上传文档失败（${res.status}）`;
-            reject(new Error(msg));
-          } else {
-            onProgress && onProgress(100);
-            resolve(data?.data || data);
-          }
-        })
-        .catch(reject);
+    const token = kbAuthService.getToken();
+    const base = kbAuthService.getServerUrl().replace(/\/+$/, '');
+    const res = await fetch(`${base}/api/documents`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
     });
+
+    onProgress && onProgress(100);
+
+    const text = await res.text();
+    let data = null;
+    if (text) {
+      try { data = JSON.parse(text); } catch { data = text; }
+    }
+    if (!res.ok) {
+      throw new Error(data?.error || `上传文档失败（${res.status}）`);
+    }
+    return data?.data || data;
   }
 
   /**
