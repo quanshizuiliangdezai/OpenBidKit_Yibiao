@@ -1827,6 +1827,32 @@ function createAiService({ app, configStore }) {
       };
     },
 
+    async testTextModel(config) {
+      const currentConfig = configStore.load();
+      const trackedConfig = {
+        ...config,
+        analytics_client_id: config.analytics_client_id || currentConfig.analytics_client_id,
+        analytics_created_at: config.analytics_created_at || currentConfig.analytics_created_at,
+      };
+
+      try {
+        const content = await chatWithConfig(app, trackedConfig, {
+          messages: [{ role: 'user', content: 'hi' }],
+          temperature: 0,
+          timeout_ms: 30000,
+          timeout_message: '文本模型测试超时，请检查 Base URL、API Key 或模型名称',
+          logTitle: '文本模型测试',
+        });
+        const reply = (content || '').trim();
+        if (!reply) {
+          return { success: false, message: '文本模型测试失败：模型返回内容为空' };
+        }
+        return { success: true, message: `测试成功：${reply.slice(0, 160)}` };
+      } catch (error) {
+        return { success: false, message: error.message || '文本模型测试失败' };
+      }
+    },
+
     async testImageModel(config) {
       const currentConfig = configStore.load();
       const trackedConfig = {

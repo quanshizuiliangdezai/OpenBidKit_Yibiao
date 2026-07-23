@@ -916,19 +916,15 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     try {
       setTestingTextModel(true);
       const config = createClientConfig();
-      const result = await window.yibiao?.config.save(config);
-      if (result?.success) {
+      const saveResult = await window.yibiao?.config.save(config);
+      if (saveResult?.success) {
         setSavedConfig(config);
       }
-      const content = await window.yibiao?.ai.chat({
-        messages: [{ role: 'user', content: 'hi' }],
-        temperature: 0,
-        timeout_ms: 30000,
-        timeout_message: '文本模型测试超时，请检查 Base URL、API Key 或模型名称',
-        logTitle: '文本模型测试',
-      });
-      const reply = (content || '').trim();
-      showToast(reply ? `测试成功：${reply.slice(0, 160)}` : '测试成功', 'success');
+      const result = await window.yibiao?.ai.testTextModel(config);
+      if (!result?.success) {
+        throw new Error(result?.message || '文本模型测试失败');
+      }
+      showToast(result.message || '文本模型测试成功', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '测试失败', 'error');
     } finally {

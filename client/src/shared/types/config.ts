@@ -33,6 +33,11 @@ export interface ModelListResult {
   models: string[];
 }
 
+export interface TextModelTestResult {
+  success: boolean;
+  message: string;
+}
+
 export interface ImageModelTestResult {
   success: boolean;
   message: string;
