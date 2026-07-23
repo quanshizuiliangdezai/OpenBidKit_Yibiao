@@ -18,6 +18,11 @@ const AUTH_FILE_NAME = 'kb_auth.json';
 function createKbAuthService({ app }) {
   const authPath = path.join(app.getPath('userData'), AUTH_FILE_NAME);
   let cache = null;
+  // 401 未授权回调：由主进程注册，用于通知渲染进程会话已失效（重新弹出门禁）
+  let unauthorizedHandler = null;
+  function onUnauthorized(fn) {
+    unauthorizedHandler = typeof fn === 'function' ? fn : null;
+  }
 
   function read() {
     if (cache) return cache;
@@ -88,6 +93,10 @@ function createKbAuthService({ app }) {
     const text = await res.text();
     if (text) {
       try { data = JSON.parse(text); } catch { data = text; }
+    }
+    // 令牌失效：通知上层，便于渲染进程重新弹出门禁
+    if (res.status === 401 && unauthorizedHandler) {
+      try { unauthorizedHandler(); } catch { /* 忽略回调异常 */ }
     }
     return { ok: res.ok, status: res.status, data };
   }
@@ -304,6 +313,7 @@ function createKbAuthService({ app }) {
     getEmployee,
     isLoggedIn,
     apiFetch,
+    onUnauthorized,
     login,
     logout,
     register,

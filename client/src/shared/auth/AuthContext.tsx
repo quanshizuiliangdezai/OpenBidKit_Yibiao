@@ -30,6 +30,7 @@ export interface AuthContextValue {
   login: (username: string, password: string, serverUrl?: string) => Promise<void>;
   logout: () => void;
   refresh: () => Promise<void>;
+  sessionExpired: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -55,6 +56,7 @@ function readEmployee(raw: unknown): AuthEmployee | null {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [employee, setEmployee] = useState<AuthEmployee | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   async function loadMe(): Promise<boolean> {
     try {
@@ -89,6 +91,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // 令牌失效（401）时，由主进程通知，清空登录态以重新弹出门禁
+  useEffect(() => {
+    const off = window.yibiao?.kbAuth.onSessionExpired?.(() => {
+      setEmployee(null);
+      setSessionExpired(true);
+    });
+    return () => {
+      off?.();
+    };
+  }, []);
+
   const isAdmin = employee?.role === 'admin';
   const permissions = useMemo(() => {
     if (!employee) return [];
@@ -109,6 +122,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error(result?.error || '登录失败');
     }
     const ok = await loadMe();
+    if (ok) setSessionExpired(false);
     if (!ok) {
       // /api/me 异常时回退：使用 login 已写入的 employee（可能无 id，但可凭 username 进入客户端）
       const st = await window.yibiao.kbAuth.getStatus();
@@ -126,6 +140,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function logout() {
     window.yibiao.kbAuth.logout();
     setEmployee(null);
+    setSessionExpired(false);
   }
 
   async function refresh() {
@@ -143,6 +158,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     login,
     logout,
     refresh,
+    sessionExpired,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

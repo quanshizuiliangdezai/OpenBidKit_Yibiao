@@ -609,6 +609,7 @@ export interface YibiaoBridge {
     me: () => Promise<KbAuthEmployee | null>;
     setServer: (serverUrl: string) => Promise<{ success: boolean; serverUrl: string }>;
     register: (payload: { username: string; password: string; display_name?: string; department?: string; serverUrl?: string }) => Promise<{ success: boolean; error?: string }>;
+    onSessionExpired: (callback: (payload: unknown) => void) => () => void;
     listEmployees: () => Promise<{ success: boolean; data?: KbAuthEmployee[]; error?: string }>;
     listPending: () => Promise<{ success: boolean; data?: KbAuthEmployee[]; error?: string }>;
     review: (payload: { user_id: string | number; action: 'approve' | 'reject'; reject_reason?: string }) => Promise<{ success: boolean; error?: string; message?: string }>;

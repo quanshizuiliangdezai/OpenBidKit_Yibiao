@@ -7,6 +7,7 @@ const DEFAULT_SERVER = 'http://59.49.48.147:15004';
 export function ClientLoginGate() {
   const auth = useAuth();
   const { showToast } = useToast();
+  const sessionExpired = auth.sessionExpired;
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -34,13 +35,14 @@ export function ClientLoginGate() {
     if (busy) return;
     setBusy(true);
     try {
-      await window.yibiao.kbAuth.register({
+      const result = await window.yibiao.kbAuth.register({
         username: username.trim(),
         password,
         display_name: displayName.trim(),
         department: department.trim(),
         serverUrl: serverUrl.trim(),
       });
+      if (!result?.success) throw new Error(result?.error || '注册失败');
       showToast('注册申请已提交，请等待管理员审核后再登录', 'success');
       setMode('login');
     } catch (error) {
@@ -57,6 +59,10 @@ export function ClientLoginGate() {
           <strong>易标 · 投标工具箱</strong>
           <span>请登录以使用全部功能</span>
         </div>
+
+        {sessionExpired ? (
+          <div className="client-login-expired">登录已过期，请重新登录以继续。</div>
+        ) : null}
 
         <div className="client-login-tabs">
           <button

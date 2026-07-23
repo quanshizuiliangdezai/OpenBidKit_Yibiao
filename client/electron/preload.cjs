@@ -196,6 +196,11 @@ const bridge = {
     me: () => ipcRenderer.invoke('kb-auth:me'),
     setServer: (serverUrl) => ipcRenderer.invoke('kb-auth:set-server', serverUrl),
     register: (payload) => ipcRenderer.invoke('kb-auth:register', payload),
+    onSessionExpired: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('kb-auth:session-expired', listener);
+      return () => ipcRenderer.removeListener('kb-auth:session-expired', listener);
+    },
     listEmployees: () => ipcRenderer.invoke('kb-auth:list-employees'),
     listPending: () => ipcRenderer.invoke('kb-auth:list-pending'),
     review: (payload) => ipcRenderer.invoke('kb-auth:review', payload),

@@ -4,8 +4,8 @@ import { trackPageView } from '../../../shared/analytics/analytics';
 import { isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../types';
 import type { KbAuthStatus, KbTeamDocument, KbTeamFolder } from '../../../shared/types/ipc';
-import KbLoginPanel from '../components/KbLoginPanel';
 import KbUserBar from '../components/KbUserBar';
+import { useAuth } from '../../../shared/auth/AuthContext';
 
 declare global {
   interface Window {
@@ -349,6 +349,7 @@ function KnowledgeBasePage() {
   const viewerTraceRef = useRef<RenderDebugTrace | null>(null);
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
+  const auth = useAuth();
 
   const activeFolder = index.folders.find((folder) => folder.id === activeFolderId) || index.folders[0];
   const documentsByFolder = useMemo(() => {
@@ -467,7 +468,11 @@ function KnowledgeBasePage() {
       const result = await window.yibiao?.kbTeam.getTree();
       if (!result?.success || !result.data) {
         if (result?.needLogin) {
-          setAuthStatus((prev) => prev ? { ...prev, loggedIn: false } : prev);
+          // 会话失效：统一交给全局登录门禁处理
+          showToast('登录已过期，请重新登录', 'error');
+          void auth.logout();
+        } else if (result?.error) {
+          showToast(result.error, 'error');
         }
         return;
       }
@@ -512,13 +517,8 @@ function KnowledgeBasePage() {
     }
   };
 
-  const handleLoginSuccess = (status: KbAuthStatus) => {
-    setAuthStatus(status);
-    void loadTeamTree();
-  };
-
   const handleLogout = async () => {
-    await window.yibiao?.kbAuth.logout();
+    await auth.logout();
     setAuthStatus(null);
     setIndex(emptyIndex);
     setViewer(null);
@@ -818,18 +818,15 @@ function KnowledgeBasePage() {
     }
   };
 
-  // 方案 D：未登录时显示登录面板
-  if (!authStatus?.loggedIn) {
+  // 登录态由全局 ClientLoginGate 统一管控；本页仅在已登录时渲染。
+  // 会话失效时由全局门禁接管（见 AuthContext.onSessionExpired）。
+  if (authLoading || !authStatus?.loggedIn) {
     return (
       <div className="page-stack knowledge-page">
-        {authLoading ? (
-          <div className="knowledge-empty-box large">
-            <strong>正在检查登录状态...</strong>
-            <p>请稍候。</p>
-          </div>
-        ) : (
-          <KbLoginPanel onLoggedIn={handleLoginSuccess} />
-        )}
+        <div className="knowledge-empty-box large">
+          <strong>正在加载团队知识库...</strong>
+          <p>请稍候。</p>
+        </div>
       </div>
     );
   }

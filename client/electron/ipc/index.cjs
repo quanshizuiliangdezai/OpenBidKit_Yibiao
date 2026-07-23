@@ -207,6 +207,12 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const aiService = createAiService({ app, configStore });
   const kbAuthService = createKbAuthService({ app });
   const kbTeamService = createKbTeamService({ kbAuthService, app });
+  // 令牌失效时通知渲染进程，重新弹出门禁
+  kbAuthService.onUnauthorized(() => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send('kb-auth:session-expired');
+    }
+  });
   const developerExpansionReplaceTestService = createDeveloperExpansionReplaceTestService({ aiService });
   const agentService = createAgentService({ app, configStore, mainWindow, aiService });
   const fileService = createFileService({ app, configStore });
