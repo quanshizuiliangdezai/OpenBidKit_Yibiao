@@ -208,7 +208,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const kbAuthService = createKbAuthService({ app });
   const kbTeamService = createKbTeamService({ kbAuthService, app });
   const developerExpansionReplaceTestService = createDeveloperExpansionReplaceTestService({ aiService });
-  const agentService = createAgentService({ app, configStore, mainWindow });
+  const agentService = createAgentService({ app, configStore, mainWindow, aiService });
   const fileService = createFileService({ app, configStore });
   const exportService = createExportService({ configStore });
   const systemFontService = createSystemFontService();
