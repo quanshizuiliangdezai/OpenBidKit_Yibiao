@@ -109,8 +109,20 @@ function createKbAuthService({ app }) {
       throw new Error(message);
     }
     const data = payload.data || {};
-    write({ serverUrl: base, token: data.token || null, employee: data.employee || null });
-    return { success: true, employee: data.employee || null };
+    // 服务端把用户信息平铺在 data 中（token/role/display_name/username），
+    // 也可能嵌套在 data.employee。统一归一化为 employee 对象，确保 isLoggedIn() 为真，
+    // 以便后续 getMe() 能拉取 /api/me 的完整信息（含 id / groups / permissions）。
+    const src = (data.employee && typeof data.employee === 'object') ? data.employee : data;
+    const employee = {
+      id: src.id ?? null,
+      username: src.username ?? null,
+      display_name: src.display_name ?? null,
+      role: src.role ?? 'employee',
+      status: src.status ?? null,
+      department: src.department ?? null,
+    };
+    write({ serverUrl: base, token: data.token || null, employee });
+    return { success: true, employee };
   }
 
   function logout() {

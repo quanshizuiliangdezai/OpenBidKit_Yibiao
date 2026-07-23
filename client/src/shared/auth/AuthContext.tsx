@@ -37,7 +37,9 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 function readEmployee(raw: unknown): AuthEmployee | null {
   if (!raw || typeof raw !== 'object') return null;
   const e = raw as Record<string, unknown>;
-  if (!e.id && e.id !== 0) return null;
+  // 优先用 id；缺失时退化为 username 作为身份标识，保证登录态可用
+  const id = (e.id !== undefined && e.id !== null && e.id !== '') ? e.id : (e.username ?? null);
+  if (id === null || id === undefined || id === '') return null;
   return {
     id: e.id as string | number,
     username: String(e.username || ''),
@@ -102,8 +104,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const hasPermission = (key: string) => isAdmin || permissions.includes(key);
 
   async function login(username: string, password: string, serverUrl?: string) {
-    await window.yibiao.kbAuth.login({ username, password, serverUrl });
-    await loadMe();
+    const result = await window.yibiao.kbAuth.login({ username, password, serverUrl });
+    if (!result || !result.success) {
+      throw new Error(result?.error || '登录失败');
+    }
+    const ok = await loadMe();
+    if (!ok) {
+      // /api/me 异常时回退：使用 login 已写入的 employee（可能无 id，但可凭 username 进入客户端）
+      const st = await window.yibiao.kbAuth.getStatus();
+      if (st?.employee) {
+        const parsed = readEmployee(st.employee);
+        if (parsed) {
+          setEmployee(parsed);
+          return;
+        }
+      }
+      throw new Error('登录成功但获取用户信息失败，请重试');
+    }
   }
 
   function logout() {
