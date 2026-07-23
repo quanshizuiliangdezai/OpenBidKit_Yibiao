@@ -134,9 +134,77 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
       <div className="sidebar-footer">
         {collapsed ? wrapTooltip('使用文档', renderUserGuideButton()) : renderUserGuideButton()}
         {collapsed ? wrapTooltip('设置', renderSettingsButton(activeSection, onSectionChange)) : renderSettingsButton(activeSection, onSectionChange)}
+        {renderUserCard(auth.employee, () => {
+          if (window.confirm('确定要退出当前账号吗？退出后需重新登录才能使用。')) {
+            auth.logout();
+          }
+        }, collapsed)}
       </div>
     </aside>
   );
+}
+
+const ROLE_LABEL: Record<string, string> = {
+  admin: '管理员',
+  employee: '员工',
+};
+
+function getInitials(name: string) {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return '?';
+  // 中文取首字，英文/数字取首字符
+  const first = Array.from(trimmed)[0] || '?';
+  return first.toUpperCase();
+}
+
+function renderUserCard(
+  employee: { display_name?: string; username?: string; role?: string; department?: string | null } | null,
+  onLogout: () => void,
+  collapsed: boolean,
+) {
+  if (!employee) return null;
+  const displayName = (employee.display_name || employee.username || '未命名').trim();
+  const roleKey = employee.role === 'admin' ? 'admin' : 'employee';
+  const roleLabel = ROLE_LABEL[roleKey] || '员工';
+  const dept = (employee.department || '').toString().trim();
+  const subtitle = dept ? `${roleLabel} · ${dept}` : roleLabel;
+  const initials = getInitials(displayName);
+  const card = (
+    <div className="sidebar-user-card" data-collapsed={collapsed ? 'true' : 'false'}>
+      <span className="sidebar-user-avatar" aria-hidden="true">{initials}</span>
+      <div className="sidebar-user-info">
+        <strong title={displayName}>{displayName}</strong>
+        <small title={subtitle}>{subtitle}</small>
+      </div>
+      {wrapTooltip(
+        '退出登录',
+        <button
+          type="button"
+          className="sidebar-user-logout"
+          onClick={onLogout}
+          aria-label="退出登录"
+        >
+          <LogoutIcon />
+        </button>,
+      )}
+    </div>
+  );
+  if (collapsed) {
+    return (
+      <Tooltip.Root>
+        <Tooltip.Trigger asChild>
+          <div className="sidebar-user-collapsed-wrap">{card}</div>
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content className="tooltip-content" side="right" align="center" sideOffset={12}>
+            {`${displayName} · ${roleLabel}${dept ? `（${dept}）` : ''}`}
+            <Tooltip.Arrow className="tooltip-arrow" />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    );
+  }
+  return card;
 }
 
 async function openExternalUrl(url: string) {
@@ -362,6 +430,16 @@ function ChevronIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" {...props}>
       <path d="m14 7-5 5 5 5" />
+    </svg>
+  );
+}
+
+function LogoutIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M15 3.5h3.5a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H15" />
+      <path d="M10 17l-5-5 5-5" />
+      <path d="M5 12h11" />
     </svg>
   );
 }

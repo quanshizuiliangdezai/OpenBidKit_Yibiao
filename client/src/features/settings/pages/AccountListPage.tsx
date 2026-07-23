@@ -58,6 +58,18 @@ export default function AccountListPage() {
   const [resetError, setResetError] = useState('');
   const [resetting, setResetting] = useState(false);
 
+  const [editTarget, setEditTarget] = useState<EmployeeRow | null>(null);
+  const [editForm, setEditForm] = useState<{
+    display_name: string;
+    department: string;
+    role: string;
+    status: string;
+    group_ids: Array<string | number>;
+  }>({ display_name: '', department: '', role: 'employee', status: 'approved', group_ids: [] });
+  const [editError, setEditError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [groupOptions, setGroupOptions] = useState<Array<{ id: string | number; name: string }>>([]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -157,12 +169,59 @@ export default function AccountListPage() {
     }
   };
 
+  const openEdit = async (e: EmployeeRow) => {
+    setEditTarget(e);
+    setEditForm({
+      display_name: e.display_name || '',
+      department: e.department || '',
+      role: e.role,
+      status: e.status || 'approved',
+      group_ids: (e.groups || []).map((g) => g.id),
+    });
+    setEditError('');
+    try {
+      const res = await window.yibiao.kbAuth.listGroups();
+      if (res?.success) setGroupOptions(res.data || []);
+    } catch {
+      // 分组列表获取失败不阻断编辑
+    }
+  };
+
+  const saveEdit = async () => {
+    if (!editTarget) return;
+    if (!editForm.display_name.trim()) {
+      setEditError('姓名不能为空');
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await window.yibiao.kbAuth.updateEmployee({
+        user_id: editTarget.id,
+        fields: {
+          display_name: editForm.display_name.trim(),
+          department: editForm.department.trim() || null,
+          role: editForm.role,
+          status: editForm.status,
+          group_ids: editForm.group_ids,
+        },
+      });
+      if (!res?.success) throw new Error(res?.error || '操作失败');
+      flash(`已更新 ${editForm.display_name}`);
+      setEditTarget(null);
+      await load();
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : '操作失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const remove = async (e: EmployeeRow) => {
     if (String(e.id) === String(myId)) {
       flash('不能删除当前登录账号', true);
       return;
     }
-    if (!window.confirm(`确定删除 ${e.display_name || e.username}？其名下文件夹与文档将一并删除。`)) return;
+    if (!window.confirm(`确定删除 ${e.display_name || e.username}？其名下知识库文档与文件夹将保留并解绑，仅删除账号本身。`)) return;
     try {
       const res = await window.yibiao.kbAuth.deleteEmployee({ user_id: e.id });
       if (!res?.success) throw new Error(res?.error || '操作失败');
@@ -227,6 +286,7 @@ export default function AccountListPage() {
         onClick: () => void toggleStatus(e),
       });
     }
+    buttons.push({ key: 'edit', label: '编辑', className: 'kb-admin-edit', onClick: () => void openEdit(e) });
     if (!isSelf && e.role !== 'admin') {
       buttons.push({ key: 'delete', label: '删除', className: 'kb-admin-delete', onClick: () => void remove(e) });
     }
@@ -394,6 +454,80 @@ export default function AccountListPage() {
               <div className="content-regenerate-actions">
                 <button type="button" className="secondary-action" onClick={() => setResetTarget(null)}>取消</button>
                 <button type="submit" className="primary-action" disabled={resetting}>{resetting ? '保存中…' : '保存新密码'}</button>
+              </div>
+            </form>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={Boolean(editTarget)} onOpenChange={(open) => !open && setEditTarget(null)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="content-regenerate-card">
+            <div className="content-regenerate-card-head">
+              <Dialog.Title>编辑成员</Dialog.Title>
+              <Dialog.Description>
+                修改 {editTarget ? (editTarget.display_name || editTarget.username) : ''} 的资料、角色、状态与所属分组。
+              </Dialog.Description>
+            </div>
+            <form className="account-form" onSubmit={(ev) => { ev.preventDefault(); void saveEdit(); }}>
+              <label>
+                姓名 / 显示名
+                <input value={editForm.display_name} onChange={(ev) => setEditForm({ ...editForm, display_name: ev.target.value })} placeholder="例如 张三" required />
+              </label>
+              <label>
+                部门（选填）
+                <input value={editForm.department} onChange={(ev) => setEditForm({ ...editForm, department: ev.target.value })} placeholder="例如 商务部" />
+              </label>
+              <div className="account-form-row">
+                <label>
+                  角色（权限）
+                  <select value={editForm.role} onChange={(ev) => setEditForm({ ...editForm, role: ev.target.value })}>
+                    <option value="employee">员工</option>
+                    <option value="admin">管理员</option>
+                  </select>
+                </label>
+                <label>
+                  状态
+                  <select value={editForm.status} onChange={(ev) => setEditForm({ ...editForm, status: ev.target.value })}>
+                    <option value="approved">已通过</option>
+                    <option value="pending">待审核</option>
+                    <option value="disabled">已禁用</option>
+                    <option value="rejected">已拒绝</option>
+                  </select>
+                </label>
+              </div>
+              <div className="account-form-groups">
+                <span className="account-form-label">权限分组</span>
+                {groupOptions.length === 0 ? (
+                  <p className="account-form-hint">暂无分组，请先在「权限管理」页面创建分组。</p>
+                ) : (
+                  <div className="account-group-checks">
+                    {groupOptions.map((g) => (
+                      <label key={g.id} className="account-group-check">
+                        <input
+                          type="checkbox"
+                          checked={editForm.group_ids.includes(g.id)}
+                          onChange={(ev) => {
+                            const id = g.id;
+                            setEditForm((prev) => ({
+                              ...prev,
+                              group_ids: ev.target.checked
+                                ? [...prev.group_ids, id]
+                                : prev.group_ids.filter((x) => x !== id),
+                            }));
+                          }}
+                        />
+                        {g.name}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {editError ? <p className="account-form-error">{editError}</p> : null}
+              <div className="content-regenerate-actions">
+                <button type="button" className="secondary-action" onClick={() => setEditTarget(null)}>取消</button>
+                <button type="submit" className="primary-action" disabled={saving}>{saving ? '保存中…' : '保存'}</button>
               </div>
             </form>
           </Dialog.Content>

@@ -616,6 +616,7 @@ export interface YibiaoBridge {
     resetPassword: (payload: { user_id: string | number; new_password: string }) => Promise<{ success: boolean; error?: string; message?: string }>;
     setStatus: (payload: { user_id: string | number; status: string }) => Promise<{ success: boolean; error?: string; message?: string }>;
     deleteEmployee: (payload: { user_id: string | number }) => Promise<{ success: boolean; error?: string; message?: string }>;
+    updateEmployee: (payload: { user_id: string | number; fields: { display_name?: string; department?: string | null; role?: string; status?: string; group_ids?: Array<string | number> } }) => Promise<{ success: boolean; error?: string; message?: string }>;
     listPermissions: () => Promise<{ success: boolean; data?: KbPermissionDef[]; error?: string }>;
     listGroups: () => Promise<{ success: boolean; data?: KbPermissionGroup[]; error?: string }>;
     createGroup: (payload: { name: string; description?: string }) => Promise<{ success: boolean; data?: KbPermissionGroup; error?: string }>;

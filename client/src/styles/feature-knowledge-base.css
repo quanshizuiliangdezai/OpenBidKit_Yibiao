@@ -1392,3 +1392,4 @@
 .kb-admin-reset { color: var(--yb-primary); border-color: rgba(33, 116, 253, 0.3) !important; }
 .kb-admin-toggle { color: #b45309; border-color: rgba(245, 158, 11, 0.3) !important; }
 .kb-admin-delete { color: #dc2626; border-color: rgba(220, 38, 38, 0.3) !important; }
+.kb-admin-edit { color: var(--yb-primary-deep, #1f4fb0); border-color: rgba(33, 116, 253, 0.3) !important; }

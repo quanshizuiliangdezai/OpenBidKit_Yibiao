@@ -316,6 +316,60 @@
   font-size: 13px;
 }
 
+/* ---------- 编辑成员：权限分组多选 ---------- */
+.account-form-groups {
+  display: grid;
+  gap: 8px;
+}
+
+.account-form-label {
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.account-form-hint {
+  margin: 0;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  background: rgba(152, 162, 179, 0.1);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.account-group-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.account-group-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  color: var(--yb-text);
+  font-size: 13px;
+  font-weight: 600;
+  background: #eef3fa;
+  border: 1px solid #ccd6e3;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color var(--yb-duration-fast) ease, background var(--yb-duration-fast) ease;
+}
+
+.account-group-check:hover {
+  border-color: rgba(33, 116, 253, 0.4);
+}
+
+.account-group-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--yb-primary);
+}
+
 /* ---------- 权限分组卡片 ---------- */
 .permission-group-list {
   display: grid;

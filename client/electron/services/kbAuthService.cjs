@@ -207,6 +207,16 @@ function createKbAuthService({ app }) {
     return data || {};
   }
 
+  // 管理员修改员工资料（display_name / department / role / status / group_ids）
+  async function adminUpdateEmployee(user_id, fields) {
+    const { ok, status, data } = await apiFetch(`/api/admin/employees/${user_id}`, {
+      method: 'PUT',
+      body: fields,
+    });
+    if (!ok) throw new Error(data?.error || `更新账号失败（${status}）`);
+    return data || {};
+  }
+
   // ===== 权限分组（RBAC）=====
 
   async function listPermissions() {
@@ -326,6 +336,7 @@ function createKbAuthService({ app }) {
     resetPassword,
     setEmployeeStatus,
     deleteEmployee,
+    adminUpdateEmployee,
     listPermissions,
     listGroups,
     createGroup,

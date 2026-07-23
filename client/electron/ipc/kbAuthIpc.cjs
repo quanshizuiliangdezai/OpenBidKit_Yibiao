@@ -84,6 +84,14 @@ function registerKbAuthIpc({ kbAuthService }) {
     }
   });
 
+  ipcMain.handle('kb-auth:update-employee', async (_event, payload) => {
+    try {
+      return { success: true, ...(await kbAuthService.adminUpdateEmployee(payload?.user_id, payload?.fields)) };
+    } catch (error) {
+      return { success: false, error: error?.message || '更新账号失败' };
+    }
+  });
+
   ipcMain.handle('kb-auth:list-permissions', async () => {
     try {
       return { success: true, data: await kbAuthService.listPermissions() };

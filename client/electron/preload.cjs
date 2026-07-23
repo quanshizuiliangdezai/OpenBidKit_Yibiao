@@ -207,6 +207,7 @@ const bridge = {
     resetPassword: (payload) => ipcRenderer.invoke('kb-auth:reset-password', payload),
     setStatus: (payload) => ipcRenderer.invoke('kb-auth:set-status', payload),
     deleteEmployee: (payload) => ipcRenderer.invoke('kb-auth:delete-employee', payload),
+    updateEmployee: (payload) => ipcRenderer.invoke('kb-auth:update-employee', payload),
     listPermissions: () => ipcRenderer.invoke('kb-auth:list-permissions'),
     listGroups: () => ipcRenderer.invoke('kb-auth:list-groups'),
     createGroup: (payload) => ipcRenderer.invoke('kb-auth:create-group', payload),
