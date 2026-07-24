@@ -286,7 +286,9 @@ def get_session(token):
             e = conn.execute("SELECT * FROM employees WHERE id=?", (s['employee_id'],)).fetchone()
             if not e or e['status'] != 'approved':
                 return None
-            return e
+            # 返回 dict 而非 sqlite3.Row：server.py 多处依赖 employee.get('role') 等 .get() 访问，
+            # Row 对象无 .get() 方法会抛 AttributeError 导致 500（见 _personal_documents 等）。
+            return dict(e)
         finally:
             conn.close()
 
