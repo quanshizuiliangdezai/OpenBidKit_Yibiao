@@ -1612,3 +1612,41 @@
   justify-content: flex-end;
   gap: 10px;
 }
+
+.knowledge-folder-context-menu {
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  padding: 6px;
+  background: #ffffff;
+  border: 1px solid rgba(208, 213, 222, 0.92);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(23, 32, 51, 0.18);
+}
+
+.knowledge-folder-context-menu button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 8px 12px;
+  color: var(--yb-text);
+  font-size: 13px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.knowledge-folder-context-menu button:hover {
+  background: rgba(33, 116, 253, 0.08);
+}
+
+.knowledge-folder-context-menu button.is-danger {
+  color: #d93025;
+}
+
+.knowledge-folder-context-menu button.is-danger:hover {
+  background: rgba(217, 48, 37, 0.08);
+}

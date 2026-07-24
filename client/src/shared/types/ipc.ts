@@ -673,6 +673,8 @@ export interface YibiaoBridge {
     searchDocuments: (keyword: string) => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
     createFolder: (name: string, parentId?: string | null) => Promise<{ success: boolean; data?: KbTeamFolder; error?: string }>;
     uploadDocument: (folderId: string) => Promise<{ success: boolean; data?: { uploaded: Array<{ file: string; doc: KbTeamDocument }>; failed: Array<{ file: string; error: string }>; canceled: boolean }; error?: string }>;
+    deleteFolder: (folderId: string) => Promise<{ success: boolean; data?: unknown; error?: string }>;
+    moveFolder: (folderId: string, parentId?: string | null) => Promise<{ success: boolean; data?: unknown; error?: string }>;
     importToTeam: (documentIds: Array<string | number>, targetTeamFolderId: string | number) => Promise<{ success: boolean; data?: { created: Array<{ document_id: string | number; remote_id: number }>; failed: Array<{ document_id: string | number; error: string }> }; error?: string }>;
     importFromTeam: (documentIds: Array<string | number>) => Promise<{ success: boolean; data?: { synced: Array<{ id: number; ok: boolean; msg: string }> }; error?: string }>;
   },

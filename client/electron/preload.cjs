@@ -235,6 +235,8 @@ const bridge = {
     searchDocuments: (keyword) => ipcRenderer.invoke('kb-personal:search', keyword),
     createFolder: (name, parentId) => ipcRenderer.invoke('kb-personal:create-folder', name, parentId),
     uploadDocument: (folderId) => ipcRenderer.invoke('kb-personal:upload-document', folderId),
+    deleteFolder: (folderId) => ipcRenderer.invoke('kb-personal:delete-folder', folderId),
+    moveFolder: (folderId, parentId) => ipcRenderer.invoke('kb-personal:move-folder', folderId, parentId),
     importToTeam: (documentIds, targetTeamFolderId) => ipcRenderer.invoke('kb-personal:import-to-team', documentIds, targetTeamFolderId),
     importFromTeam: (documentIds) => ipcRenderer.invoke('kb-personal:import-from-team', documentIds),
   },

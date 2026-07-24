@@ -107,6 +107,26 @@ function registerKbPersonalIpc({ kbAuthService, app }) {
     }
   });
 
+  // 删除文件夹
+  ipcMain.handle('kb-personal:delete-folder', async (_event, folderId) => {
+    try {
+      const result = await personalService.deleteFolder(folderId);
+      return { success: true, data: result };
+    } catch (err) {
+      return { error: err.message || '删除文件夹失败' };
+    }
+  });
+
+  // 移动文件夹
+  ipcMain.handle('kb-personal:move-folder', async (_event, folderId, parentId) => {
+    try {
+      const result = await personalService.moveFolder(folderId, parentId);
+      return { success: true, data: result };
+    } catch (err) {
+      return { error: err.message || '移动文件夹失败' };
+    }
+  });
+
   // 个人库 → 团队库
   ipcMain.handle('kb-personal:import-to-team', async (_event, documentIds, targetTeamFolderId) => {
     try {

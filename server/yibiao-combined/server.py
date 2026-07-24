@@ -676,7 +676,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             if err:
                 return self._send(400, {'error': err})
             audit_event(
-                account_id=employee['id'], account_name=owner,
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
                 role=employee.get('role'), action='doc', target_type='personal_document',
                 target_id=doc.get('id'),
                 detail='个人库上传文档: %s (%.1fKB)' % (doc['file_name'], len(f['data']) / 1024),
@@ -731,7 +731,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 ok, msg = self._sync_team_to_master(did, employee)
                 synced.append({'id': did, 'ok': bool(ok), 'msg': msg})
             audit_event(
-                account_id=employee['id'], account_name=owner,
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
                 role=employee.get('role'), action='import', target_type='document',
                 detail='团队库→个人库: %d 篇' % len(synced), ip=_client_ip(self))
             return self._send(200, {'success': True, 'synced': synced})
@@ -959,6 +959,101 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         return {'id': doc_id, 'folder_id': folder_id, 'title': filename,
                 'file_name': filename, 'file_size': len(data), 'created_at': now,
                 'owner_id': owner_id, 'owner_name': owner_name}, None
+
+    def _personal_delete_folder(self, folder_id, employee):
+        """个人库删除文件夹：递归删除子文件夹及其文档，并清理物理文件。"""
+        folder_id = str(folder_id)
+        with _MASTER_LOCK:
+            conn = _master_db_conn()
+            if conn is None:
+                return False, '个人库不可用'
+            try:
+                self._ensure_owner_cols(conn)
+                row = conn.execute(
+                    "SELECT folder_id, name, owner_id FROM knowledge_folders WHERE folder_id=?",
+                    (folder_id,)).fetchone()
+                if not row:
+                    return False, '文件夹不存在'
+                if employee and employee.get('role') != 'admin' and row['owner_id'] is not None and row['owner_id'] != employee['id']:
+                    return False, '只能删除自己创建的个人文件夹'
+                # 递归收集自身及所有子文件夹
+                ids = {folder_id}
+                frontier = [folder_id]
+                while frontier:
+                    placeholders = ','.join('?' * len(frontier))
+                    rows = conn.execute(
+                        "SELECT folder_id FROM knowledge_folders WHERE parent_id IN (%s)" % placeholders,
+                        frontier).fetchall()
+                    frontier = []
+                    for r in rows:
+                        fid = r[0]
+                        if fid not in ids:
+                            ids.add(fid)
+                            frontier.append(fid)
+                ids_list = list(ids)
+                placeholders = ','.join('?' * len(ids_list))
+                docs = conn.execute(
+                    "SELECT document_id, folder_id FROM knowledge_documents WHERE folder_id IN (%s)" % placeholders,
+                    ids_list).fetchall()
+                for doc in docs:
+                    doc_dir = self._personal_doc_dir(doc['folder_id'], doc['document_id'])
+                    if os.path.isdir(doc_dir):
+                        shutil.rmtree(doc_dir, ignore_errors=True)
+                conn.execute("DELETE FROM knowledge_documents WHERE folder_id IN (%s)" % placeholders, ids_list)
+                conn.execute("DELETE FROM knowledge_folders WHERE folder_id IN (%s)" % placeholders, ids_list)
+                conn.commit()
+                return True, row['name']
+            finally:
+                conn.close()
+
+    def _personal_move_folder(self, folder_id, new_parent_id, employee):
+        """个人库移动文件夹：修改 parent_id，并防止循环嵌套。"""
+        folder_id = str(folder_id)
+        new_parent_id = str(new_parent_id) if new_parent_id not in (None, '', '0', 'null') else None
+        with _MASTER_LOCK:
+            conn = _master_db_conn()
+            if conn is None:
+                return False, '个人库不可用'
+            try:
+                self._ensure_parent_col(conn)
+                self._ensure_owner_cols(conn)
+                row = conn.execute(
+                    "SELECT folder_id, owner_id FROM knowledge_folders WHERE folder_id=?",
+                    (folder_id,)).fetchone()
+                if not row:
+                    return False, '文件夹不存在'
+                if employee and employee.get('role') != 'admin' and row['owner_id'] is not None and row['owner_id'] != employee['id']:
+                    return False, '只能移动自己创建的个人文件夹'
+                if new_parent_id:
+                    parent = conn.execute(
+                        "SELECT folder_id FROM knowledge_folders WHERE folder_id=?",
+                        (new_parent_id,)).fetchone()
+                    if not parent:
+                        return False, '目标父文件夹不存在'
+                    # 防止移动到自身或子文件夹下
+                    descendants = set()
+                    frontier = [folder_id]
+                    while frontier:
+                        placeholders = ','.join('?' * len(frontier))
+                        rows = conn.execute(
+                            "SELECT folder_id FROM knowledge_folders WHERE parent_id IN (%s)" % placeholders,
+                            frontier).fetchall()
+                        frontier = []
+                        for r in rows:
+                            fid = r[0]
+                            if fid not in descendants:
+                                descendants.add(fid)
+                                frontier.append(fid)
+                    if new_parent_id == folder_id or new_parent_id in descendants:
+                        return False, '不能将文件夹移动到自身或其子文件夹下'
+                now = datetime.datetime.now().isoformat()
+                conn.execute(
+                    "UPDATE knowledge_folders SET parent_id=?, updated_at=? WHERE folder_id=?",
+                    (new_parent_id, now, folder_id))
+                conn.commit()
+                return True, None
+            finally:
+                conn.close()
 
     def _sync_team_to_master(self, doc_id, employee=None):
         """团队库文档 → 当前用户的个人库（写入 master.sqlite '团队库导入' 文件夹）。"""
@@ -1204,6 +1299,17 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 detail='删除文档: %s' % (doc.get('title') or doc.get('file_name') or m.group(1)),
                 ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '文档已删除'})
+        m = re.match(r'^/api/personal/folders/([^/]+)$', path)
+        if m:
+            folder_id = m.group(1)
+            ok, err_or_name = self._personal_delete_folder(folder_id, employee)
+            if not ok:
+                return self._send(400, {'error': err_or_name})
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                role=employee.get('role'), action='folder', target_type='personal_folder', target_id=folder_id,
+                detail='删除个人文件夹: %s' % err_or_name, ip=_client_ip(self))
+            return self._send(200, {'success': True, 'message': '文件夹已删除'})
         m = re.match(r'^/api/admin/groups/(\d+)/members/(\d+)$', path)
         if m:
             admin = self._is_admin()
@@ -1251,6 +1357,18 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             data = self._read_json()
             if data is None:
                 return self._send(400, {'error': '请求体不是合法 JSON'})
+        m = re.match(r'^/api/personal/folders/([^/]+)$', path)
+        if m:
+            folder_id = m.group(1)
+            new_parent_id = data.get('parent_id')
+            ok, err = self._personal_move_folder(folder_id, new_parent_id, employee)
+            if not ok:
+                return self._send(400, {'error': err})
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                role=employee.get('role'), action='folder', target_type='personal_folder', target_id=folder_id,
+                detail='移动个人文件夹到: %s' % (new_parent_id or '根目录'), ip=_client_ip(self))
+            return self._send(200, {'success': True, 'message': '文件夹已移动'})
         m = re.match(r'^/api/admin/groups/(\d+)/permissions$', path)
         if m:
             admin = self._is_admin()

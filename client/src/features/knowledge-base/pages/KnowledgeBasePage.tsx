@@ -1,4 +1,4 @@
-import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type MouseEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
@@ -364,6 +364,11 @@ function KnowledgeBasePage() {
   const [newFolderName, setNewFolderName] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [createAsSubfolder, setCreateAsSubfolder] = useState(false);
+  const [newFolderParentId, setNewFolderParentId] = useState<string | null>(null);
+  const [folderMenu, setFolderMenu] = useState<{ folder: KnowledgeFolder; x: number; y: number } | null>(null);
+  const [showMoveFolder, setShowMoveFolder] = useState(false);
+  const [moveFolderTarget, setMoveFolderTarget] = useState<KnowledgeFolder | null>(null);
+  const [selectedMoveParentId, setSelectedMoveParentId] = useState<string>('');
   const [syncing, setSyncing] = useState(false);
   const [showSyncToTeam, setShowSyncToTeam] = useState(false);
   const [teamFolderOptions, setTeamFolderOptions] = useState<KnowledgeFolder[]>([]);
@@ -448,6 +453,18 @@ function KnowledgeBasePage() {
   useEffect(() => {
     setSelectedDocumentIds(new Set());
   }, [activeFolderId, kbTab]);
+
+  // 点击或滚动时关闭文件夹右键菜单
+  useEffect(() => {
+    if (!folderMenu) return undefined;
+    const close = () => setFolderMenu(null);
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
+    };
+  }, [folderMenu]);
 
   useEffect(() => {
     if (visibleDocumentCount >= documents.length) return undefined;
@@ -607,7 +624,7 @@ function KnowledgeBasePage() {
       showToast('请输入文件夹名称', 'info');
       return;
     }
-    const parentId = createAsSubfolder && activeFolder ? activeFolder.id : undefined;
+    const parentId = newFolderParentId || (createAsSubfolder && activeFolder ? activeFolder.id : undefined);
     try {
       setCreatingFolder(true);
       const result = kbTab === 'team'
@@ -621,6 +638,7 @@ function KnowledgeBasePage() {
       setActiveFolderId(folder.id);
       setNewFolderName('');
       setCreateAsSubfolder(false);
+      setNewFolderParentId(null);
       setShowCreateFolder(false);
       showToast(parentId ? '子文件夹已创建' : '文件夹已创建', 'success');
     } catch (error) {
@@ -722,8 +740,8 @@ function KnowledgeBasePage() {
     }
   };
 
-  const uploadDocuments = async () => {
-    if (!activeFolder) {
+  const uploadDocuments = async (targetFolder = activeFolder) => {
+    if (!targetFolder) {
       showToast('请先创建文件夹', 'info');
       return;
     }
@@ -731,7 +749,7 @@ function KnowledgeBasePage() {
       setLoading(true);
       // 个人库：批量上传，服务器已带分析状态，无需本地分析
       if (kbTab === 'personal') {
-        const result = await window.yibiao?.kbPersonal.uploadDocument(activeFolder.id);
+        const result = await window.yibiao?.kbPersonal.uploadDocument(targetFolder.id);
         if (!result?.success) {
           if (result?.data?.canceled) return;
           throw new Error(result?.error || '上传文档失败');
@@ -746,7 +764,7 @@ function KnowledgeBasePage() {
         }
         return;
       }
-      const result = await window.yibiao?.kbTeam.uploadDocument(activeFolder.id);
+      const result = await window.yibiao?.kbTeam.uploadDocument(targetFolder.id);
       if (!result?.success) {
         if (result?.canceled) return;
         throw new Error(result?.error || '上传文档失败');
@@ -761,7 +779,7 @@ function KnowledgeBasePage() {
                 String(doc.id),
                 downloadResult.data.localPath,
                 doc.name || doc.original_name || 'document',
-                String(activeFolder.id),
+                String(targetFolder.id),
               );
             }
           } catch (analyzeError) {
@@ -790,14 +808,18 @@ function KnowledgeBasePage() {
     const count = documentsByFolder.get(folderId)?.length || 0;
     if (!window.confirm(`确定删除文件夹"${folderName}"吗？其中 ${count} 个文档也会一起删除。`)) return;
     try {
-      const result = await window.yibiao?.kbTeam.deleteFolder(folderId);
+      const result = kbTab === 'team'
+        ? await window.yibiao?.kbTeam.deleteFolder(folderId)
+        : await window.yibiao?.kbPersonal.deleteFolder(folderId);
       if (!result?.success) {
         throw new Error(result?.error || '删除文件夹失败');
       }
-      // 清除该文件夹下文档的本地分析数据
-      const folderDocs = index.documents.filter((doc) => doc.folder_id === folderId);
-      for (const doc of folderDocs) {
-        await window.yibiao?.knowledgeBase.deleteLocalAnalysis(doc.id);
+      // 团队库需清除该文件夹下文档的本地分析数据
+      if (kbTab === 'team') {
+        const folderDocs = index.documents.filter((doc) => doc.folder_id === folderId);
+        for (const doc of folderDocs) {
+          await window.yibiao?.knowledgeBase.deleteLocalAnalysis(doc.id);
+        }
       }
       const folders = index.folders.filter((item) => item.id !== folderId);
       const documents = index.documents.filter((document) => document.folder_id !== folderId);
@@ -827,6 +849,26 @@ function KnowledgeBasePage() {
       showToast(error instanceof Error ? error.message : '删除文档失败', 'error');
     }
   };
+
+  const moveFolder = async (folderId: string, targetParentId: string) => {
+    try {
+      const result = await window.yibiao?.kbPersonal.moveFolder(folderId, targetParentId || null);
+      if (!result?.success) {
+        throw new Error(result?.error || '移动文件夹失败');
+      }
+      await loadPersonalTree();
+      showToast('文件夹已移动', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '移动文件夹失败', 'error');
+    }
+  };
+
+  const openFolderContextMenu = (event: MouseEvent<HTMLElement>, folder: KnowledgeFolder) => {
+    event.preventDefault();
+    setFolderMenu({ folder, x: event.clientX, y: event.clientY });
+  };
+
+  const closeFolderMenu = () => setFolderMenu(null);
 
   const retryDocument = async (document: KnowledgeDocument) => {
     setRetryingDocumentIds((prev) => new Set(prev).add(document.id));
@@ -1060,8 +1102,8 @@ function KnowledgeBasePage() {
           {authStatus && <KbUserBar status={authStatus} onLogout={() => void handleLogout()} />}
           {kbTab === 'team' && (
             <>
-              <button type="button" className="secondary-action" onClick={() => setShowCreateFolder((value) => !value)} disabled={listLoading}>新建文件夹</button>
-              <button type="button" className="primary-action" onClick={uploadDocuments} disabled={loading || !activeFolder}>
+              <button type="button" className="secondary-action" onClick={() => { setNewFolderParentId(null); setCreateAsSubfolder(false); setShowCreateFolder((value) => !value); }} disabled={listLoading}>新建文件夹</button>
+              <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading || !activeFolder}>
                 {loading ? '处理中...' : '上传文档'}
               </button>
               <button type="button" className="sync-action" onClick={() => void syncFromTeam()} disabled={syncing || selectedDocumentIds.size === 0}>
@@ -1071,8 +1113,8 @@ function KnowledgeBasePage() {
           )}
           {kbTab === 'personal' && (
             <>
-              <button type="button" className="secondary-action" onClick={() => setShowCreateFolder((value) => !value)} disabled={listLoading}>新建文件夹</button>
-              <button type="button" className="primary-action" onClick={uploadDocuments} disabled={loading || !activeFolder}>
+              <button type="button" className="secondary-action" onClick={() => { setNewFolderParentId(null); setCreateAsSubfolder(false); setShowCreateFolder((value) => !value); }} disabled={listLoading}>新建文件夹</button>
+              <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading || !activeFolder}>
                 {loading ? '处理中...' : '上传文档'}
               </button>
               <button type="button" className="sync-action" onClick={() => void openSyncToTeam()} disabled={syncing || selectedDocumentIds.size === 0}>
@@ -1097,7 +1139,11 @@ function KnowledgeBasePage() {
             onChange={(event) => setNewFolderName(event.target.value)}
             placeholder="输入文件夹名称"
           />
-          {index.folders.length > 0 && (
+          {newFolderParentId ? (
+            <span className="knowledge-subfolder-check">
+              将在「{index.folders.find((f) => f.id === newFolderParentId)?.name || '选定文件夹'}」下创建子文件夹
+            </span>
+          ) : index.folders.length > 0 && (
             <label className="knowledge-subfolder-check" title={activeFolder ? `将创建为「${activeFolder.name}」的子文件夹` : ''}>
               <input
                 type="checkbox"
@@ -1114,6 +1160,8 @@ function KnowledgeBasePage() {
             className="secondary-action"
             onClick={() => {
               setNewFolderName('');
+              setCreateAsSubfolder(false);
+              setNewFolderParentId(null);
               setShowCreateFolder(false);
             }}
           >
@@ -1179,6 +1227,9 @@ function KnowledgeBasePage() {
                   <article
                     key={folder.id}
                     className={`knowledge-folder-card ${folder.id === activeFolder?.id ? 'is-active' : ''} ${folder.parent_id ? 'is-child' : ''}`}
+                    onContextMenu={(event) => {
+                      if (kbTab === 'personal') openFolderContextMenu(event, folder);
+                    }}
                   >
                     <div className="knowledge-folder-row">
                       <button type="button" className="knowledge-folder-main" onClick={() => startTransition(() => setActiveFolderId(folder.id))}>
@@ -1294,6 +1345,115 @@ function KnowledgeBasePage() {
         </main>
         </section>
       </div>
+
+      {folderMenu && (
+        <div
+          className="knowledge-folder-context-menu"
+          style={{ position: 'fixed', left: folderMenu.x, top: folderMenu.y, zIndex: 1000 }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              closeFolderMenu();
+              setNewFolderParentId(folderMenu.folder.id);
+              setCreateAsSubfolder(false);
+              setShowCreateFolder(true);
+            }}
+          >
+            新建子文件夹
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              closeFolderMenu();
+              void uploadDocuments(folderMenu.folder);
+            }}
+          >
+            上传文档
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              closeFolderMenu();
+              setMoveFolderTarget(folderMenu.folder);
+              setSelectedMoveParentId('');
+              setShowMoveFolder(true);
+            }}
+          >
+            移动到...
+          </button>
+          <button
+            type="button"
+            className="is-danger"
+            onClick={(event) => {
+              event.stopPropagation();
+              closeFolderMenu();
+              void deleteFolder(folderMenu.folder.id, folderMenu.folder.name);
+            }}
+          >
+            删除文件夹
+          </button>
+        </div>
+      )}
+
+      <Dialog.Root open={showMoveFolder} onOpenChange={(open) => !open && setShowMoveFolder(false)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="knowledge-sync-modal" />
+          <Dialog.Content className="knowledge-sync-dialog-card">
+            <div className="knowledge-sync-head">
+              <Dialog.Title className="knowledge-sync-title">移动文件夹</Dialog.Title>
+              <Dialog.Description className="knowledge-sync-desc">
+                选择「{moveFolderTarget?.name}」的新位置，不选则移动到根目录。
+              </Dialog.Description>
+            </div>
+            <div className="knowledge-sync-folder-list">
+              <label className={`knowledge-sync-folder ${selectedMoveParentId === '' ? 'is-active' : ''}`}>
+                <input
+                  type="radio"
+                  name="move-folder-parent"
+                  value=""
+                  checked={selectedMoveParentId === ''}
+                  onChange={() => setSelectedMoveParentId('')}
+                />
+                <span>根目录</span>
+              </label>
+              {index.folders
+                .filter((folder) => folder.id !== moveFolderTarget?.id)
+                .map((folder) => (
+                  <label key={folder.id} className={`knowledge-sync-folder ${selectedMoveParentId === folder.id ? 'is-active' : ''}`}>
+                    <input
+                      type="radio"
+                      name="move-folder-parent"
+                      value={folder.id}
+                      checked={selectedMoveParentId === folder.id}
+                      onChange={() => setSelectedMoveParentId(folder.id)}
+                    />
+                    <span>{folder.name}</span>
+                  </label>
+                ))}
+            </div>
+            <div className="knowledge-sync-actions">
+              <button type="button" className="secondary-action" onClick={() => setShowMoveFolder(false)}>取消</button>
+              <button
+                type="button"
+                className="primary-action"
+                onClick={() => {
+                  if (moveFolderTarget) {
+                    void moveFolder(moveFolderTarget.id, selectedMoveParentId);
+                  }
+                  setShowMoveFolder(false);
+                }}
+              >
+                移动
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </>
   );
 }

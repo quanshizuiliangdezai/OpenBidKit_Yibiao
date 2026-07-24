@@ -115,6 +115,29 @@ function createKbPersonalService({ app, kbAuthService }) {
     return data?.data;
   }
 
+  /** 个人库删除文件夹 */
+  async function deleteFolder(folderId) {
+    const res = await fetch(`${baseUrl()}/api/personal/folders/${encodeURIComponent(folderId)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error || `删除文件夹失败（${res.status}）`);
+    return data;
+  }
+
+  /** 个人库移动文件夹（parentId 为空表示移动到根目录） */
+  async function moveFolder(folderId, parentId) {
+    const res = await fetch(`${baseUrl()}/api/personal/folders/${encodeURIComponent(folderId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ parent_id: parentId || null }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error || `移动文件夹失败（${res.status}）`);
+    return data;
+  }
+
   /** 个人库文档 → 团队库（documentIds: string[]，targetTeamFolderId: 团队库目标文件夹） */
   async function importToTeam(documentIds, targetTeamFolderId) {
     const res = await fetch(`${baseUrl()}/api/import/personal`, {
@@ -149,6 +172,8 @@ function createKbPersonalService({ app, kbAuthService }) {
     searchDocuments,
     createFolder,
     uploadDocument,
+    deleteFolder,
+    moveFolder,
     importToTeam,
     importFromTeam,
   };
