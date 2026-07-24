@@ -48,6 +48,36 @@ def log(msg):
         pass
 
 
+# ---------------- 审计日志写入 ----------------
+def audit_event(account_id=None, account_name='', account_type='employee',
+                role='', action='', target_type='', target_id='',
+                detail='', ip=''):
+    """向 kb.sqlite 的 operation_log 表追加一条审计记录。静默失败，不影响主流程。"""
+    try:
+        import sqlite3 as _sql
+        conn = _sql.connect(kb_db.DB_PATH)
+        ts = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
+        conn.execute(
+            """INSERT INTO operation_log
+               (account_id, account_name, account_type, role, action,
+                target_type, target_id, detail, ip, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (account_id or 0, account_name or '', account_type or 'employee',
+             role or '', action or '', target_type or '',
+             str(target_id) if target_id else '', detail or '',
+             ip or '', ts))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def _client_ip(handler):
+    """从请求中提取客户端 IP（优先 X-Forwarded-For，回退 peer）。"""
+    xff = handler.headers.get('X-Forwarded-For', '')
+    return xff.split(',')[0].strip() if xff else handler.client_address[0]
+
+
 # ============================================================
 # 同步端点辅助函数 (原 yibiao-http-server/server.py)
 # ============================================================
@@ -266,6 +296,21 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 with open(dest, 'wb') as f:
                     f.write(zip_content)
                 log('upload received: %s (%d bytes)' % (zip_name, len(zip_content)))
+                # 尝试从 zip manifest 提取用户名用于审计
+                sync_user = 'unknown'
+                try:
+                    with zipfile.ZipFile(zip_content) as zf:
+                        for n in zf.namelist():
+                            if 'manifest' in n.lower():
+                                m = json.loads(zf.read(n))
+                                sync_user = m.get('username', 'unknown')
+                                break
+                except Exception:
+                    pass
+                audit_event(
+                    account_name=sync_user, account_type='sync_client',
+                    action='sync_push', detail='同步推送: %s (%d bytes)' % (zip_name, len(zip_content)),
+                    ip=_client_ip(self))
                 self._send_json(200, {'ok': True, 'received': zip_name, 'size': len(zip_content)})
             else:
                 self._send_json(400, {'error': '未找到 zip 文件'})
@@ -425,12 +470,19 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             ok, err = kb_db.register(data.get('username', ''), data.get('password', ''), data.get('display_name', ''), data.get('department'))
             if not ok:
                 return self._send(400, {'error': err})
+            audit_event(
+                account_name=data.get('username'), action='register',
+                detail='注册成功，等待审核', ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '注册成功，等待管理员审核'})
 
         if path == '/api/login':
             res, err = kb_db.authenticate(data.get('username', ''), data.get('password', ''))
             if err:
                 return self._send(401, {'error': err})
+            audit_event(
+                account_id=res.get('id'), account_name=res.get('username') or res.get('display_name'),
+                role=res.get('role'), action='login',
+                detail='登录成功', ip=_client_ip(self))
             return self._send(200, {'success': True, 'data': res})
 
         if path == '/api/admin/review':
@@ -440,6 +492,11 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             ok, err = kb_db.review(data.get('user_id'), data.get('action'), admin['id'], data.get('reject_reason'))
             if not ok:
                 return self._send(400, {'error': err})
+            audit_event(
+                account_id=admin['id'], account_name=admin.get('display_name') or admin['username'],
+                role='admin', action='admin', target_type='employee', target_id=data.get('user_id'),
+                detail='审核%s: %s' % (data.get('action', ''), data.get('reject_reason') or ''),
+                ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '审核完成'})
 
         if path == '/api/admin/reset-password':
@@ -449,6 +506,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             ok, err = kb_db.reset_password(data.get('user_id'), data.get('new_password'))
             if not ok:
                 return self._send(400, {'error': err})
+            audit_event(
+                account_id=admin['id'], account_name=admin.get('display_name') or admin['username'],
+                role='admin', action='admin', target_type='employee', target_id=data.get('user_id'),
+                detail='重置密码', ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '密码已重置'})
 
         if path == '/api/admin/set-status':
@@ -458,6 +519,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             ok, err = kb_db.set_employee_status(data.get('user_id'), data.get('status'))
             if not ok:
                 return self._send(400, {'error': err})
+            audit_event(
+                account_id=admin['id'], account_name=admin.get('display_name') or admin['username'],
+                role='admin', action='admin', target_type='employee', target_id=data.get('user_id'),
+                detail='状态改为 %s' % (data.get('status') or ''), ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '状态已更新'})
 
         if path == '/api/admin/employees':
@@ -470,6 +535,11 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 data.get('role', 'employee'), data.get('status', 'approved'))
             if not ok:
                 return self._send(400, {'error': err})
+            audit_event(
+                account_id=admin['id'], account_name=admin.get('display_name') or admin['username'],
+                role='admin', action='admin', target_type='employee',
+                detail='创建账号 %s (角色=%s)' % (data.get('username', ''), data.get('role', 'employee')),
+                ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '账户已创建'})
         m = re.match(r'^/api/admin/groups/(\d+)/members$', path)
         if m:
@@ -487,6 +557,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             g, err = kb_db.create_permission_group(data.get('name', ''), data.get('description'))
             if err:
                 return self._send(400, {'error': err})
+            audit_event(
+                account_id=admin['id'], account_name=admin.get('display_name') or admin['username'],
+                role='admin', action='group', target_type='group', target_id=g.get('id') if g else '',
+                detail='创建权限分组: %s' % (data.get('name', '')), ip=_client_ip(self))
             return self._send(200, {'success': True, 'data': g})
 
         if path == '/api/folders':
@@ -501,6 +575,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             folder, ferr = kb_db.create_folder(name, parent_id, employee['id'])
             if ferr:
                 return self._send(400, {'error': ferr})
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                role=employee.get('role'), action='folder', target_type='folder', target_id=folder.get('id'),
+                detail='创建文件夹: %s' % name, ip=_client_ip(self))
             return self._send(200, {'success': True, 'data': folder})
 
         if path == '/api/documents':
@@ -523,6 +601,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             doc, derr = kb_db.upload_document(folder_id, employee['id'], title, f['filename'], f.get('content_type', 'application/octet-stream'), f['data'])
             if derr:
                 return self._send(400, {'error': derr})
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                role=employee.get('role'), action='doc', target_type='document', target_id=doc.get('id'),
+                detail='上传文档: %s (%.1fKB)' % (title, (len(f['data']) / 1024)), ip=_client_ip(self))
             return self._send(200, {'success': True, 'data': {k: doc[k] for k in ('id', 'folder_id', 'owner_id', 'title', 'file_name', 'file_size', 'mime_type', 'created_at')}})
 
         return self._send(404, {'error': '接口不存在'})
@@ -812,6 +894,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             ok, err = kb_db.delete_folder(m.group(1))
             if not ok:
                 return self._send(400, {'error': err})
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                role=employee.get('role'), action='folder', target_type='folder', target_id=m.group(1),
+                detail='删除文件夹: %s' % (folder.get('name') or m.group(1)), ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '文件夹已删除'})
         m = re.match(r'^/api/documents/(\d+)$', path)
         if m:
@@ -823,6 +909,11 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             ok, err = kb_db.delete_document(m.group(1))
             if not ok:
                 return self._send(400, {'error': err})
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                role=employee.get('role'), action='doc', target_type='document', target_id=m.group(1),
+                detail='删除文档: %s' % (doc.get('title') or doc.get('file_name') or m.group(1)),
+                ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '文档已删除'})
         m = re.match(r'^/api/admin/groups/(\d+)/members/(\d+)$', path)
         if m:
@@ -841,6 +932,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             ok, err = kb_db.delete_permission_group(m.group(1))
             if not ok:
                 return self._send(400, {'error': err})
+            audit_event(
+                account_id=admin['id'], account_name=admin.get('display_name') or admin['username'],
+                role='admin', action='group', target_type='group', target_id=m.group(1),
+                detail='删除权限分组', ip=_client_ip(self))
             return self._send(200, {'success': True})
         m = re.match(r'^/api/admin/employees/(\d+)$', path)
         if m:
@@ -852,6 +947,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             ok, err = kb_db.delete_employee(m.group(1))
             if not ok:
                 return self._send(400, {'error': err})
+            audit_event(
+                account_id=admin['id'], account_name=admin.get('display_name') or admin['username'],
+                role='admin', action='admin', target_type='employee', target_id=m.group(1),
+                detail='删除账号', ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '账号已删除（其名下知识库文档与文件夹已保留）'})
         return self._send(404, {'error': '接口不存在'})
 
@@ -871,6 +970,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             ok, err = kb_db.set_group_permissions(m.group(1), data.get('permissions', []))
             if not ok:
                 return self._send(400, {'error': err})
+            audit_event(
+                account_id=admin['id'], account_name=admin.get('display_name') or admin['username'],
+                role='admin', action='group', target_type='group', target_id=m.group(1),
+                detail='更新权限: %d 项' % len(data.get('permissions', [])), ip=_client_ip(self))
             return self._send(200, {'success': True})
         m = re.match(r'^/api/admin/employees/(\d+)$', path)
         if m:
@@ -883,6 +986,11 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             ok, err = kb_db.update_employee(m.group(1), data)
             if not ok:
                 return self._send(400, {'error': err})
+            audit_event(
+                account_id=admin['id'], account_name=admin.get('display_name') or admin['username'],
+                role='admin', action='admin', target_type='employee', target_id=m.group(1),
+                detail='更新账号: %s' % (', '.join('%s=%s' % (k, v) for k, v in data.items() if k != 'password')),
+                ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '账号已更新'})
         return self._send(404, {'error': '接口不存在'})
 
