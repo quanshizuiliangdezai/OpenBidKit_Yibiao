@@ -36,6 +36,7 @@ const { createKbAuthService } = require('../services/kbAuthService.cjs');
 const { createKbTeamService } = require('../services/kbTeamService.cjs');
 const { registerKbAuthIpc } = require('./kbAuthIpc.cjs');
 const { registerKbTeamIpc } = require('./kbTeamIpc.cjs');
+const { registerKbPersonalIpc } = require('./kbPersonalIpc.cjs');
 const { checkRequiredOnlineServices, getRequiredOnlineServiceStatus } = require('../services/requiredOnlineServices.cjs');
 const { initLocalImageRenderService } = require('../services/localImageRenderService.cjs');
 
@@ -314,6 +315,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerSystemFontIpc({ systemFontService });
   registerKbAuthIpc({ kbAuthService });
   registerKbTeamIpc({ kbTeamService, kbAuthService });
+  registerKbPersonalIpc({ kbAuthService, app });
   registerPluginIpc(ipcMain, app, {
     taskService: null,
     technicalPlanStore: null,

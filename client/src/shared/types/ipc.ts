@@ -667,6 +667,10 @@ export interface YibiaoBridge {
   },
   kbPersonal: {
     getTree: () => Promise<{ success: boolean; data?: KbTeamTree; error?: string; needLogin?: boolean }>;
+    listFolders: () => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
+    listDocuments: (folderId: string) => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
+    downloadDocument: (documentId: string, destPath: string) => Promise<{ success: boolean; data?: string; error?: string }>;
+    search: (keyword: string) => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
   },
 }
 

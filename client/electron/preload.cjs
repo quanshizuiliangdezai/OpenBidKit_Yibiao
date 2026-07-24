@@ -227,6 +227,13 @@ const bridge = {
     uploadDocument: (folderId) => ipcRenderer.invoke('kb-team:upload-document', folderId),
     downloadDocument: (documentId, originalName) => ipcRenderer.invoke('kb-team:download-document', documentId, originalName),
   },
+  kbPersonal: {
+    getTree: () => ipcRenderer.invoke('kb-personal:get-tree'),
+    listFolders: () => ipcRenderer.invoke('kb-personal:list-folders'),
+    listDocuments: (folderId) => ipcRenderer.invoke('kb-personal:list-documents', folderId),
+    downloadDocument: (documentId, destPath) => ipcRenderer.invoke('kb-personal:download-document', documentId, destPath),
+    searchDocuments: (keyword) => ipcRenderer.invoke('kb-personal:search', keyword),
+  },
   plugins: {
     getAvailablePlugins: () => ipcRenderer.invoke('plugins:getAvailablePlugins'),
     install: (pluginId) => ipcRenderer.invoke('plugins:install', pluginId),
