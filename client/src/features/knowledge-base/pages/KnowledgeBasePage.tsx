@@ -56,7 +56,7 @@ function adaptPersonalDocument(server: KbTeamDocument): KnowledgeDocument {
   return {
     id: String(server.id),
     folder_id: String(server.folder_id || ''),
-    file_name: server.name || server.original_name || '未知文档',
+    file_name: server.title || server.name || server.original_name || '未知文档',
     status: (server as Record<string, unknown>).status as KnowledgeDocumentStatus || ('pending' as KnowledgeDocumentStatus),
     progress: (server as Record<string, unknown>).progress as number || 0,
     message: (server as Record<string, unknown>).message as string || '未分析',
@@ -65,8 +65,8 @@ function adaptPersonalDocument(server: KbTeamDocument): KnowledgeDocument {
     filtered_block_count: (server as Record<string, unknown>).filtered_block_count as number || 0,
     candidate_item_count: (server as Record<string, unknown>).candidate_item_count as number || 0,
     created_at: server.created_at || '',
-    updated_at: server.created_at || '',
-    uploaded_by_name: server.uploaded_by_name,
+    updated_at: server.updated_at || server.created_at || '',
+    uploaded_by_name: (server as Record<string, unknown>).owner_name || server.uploaded_by_name,
   };
 }
 
