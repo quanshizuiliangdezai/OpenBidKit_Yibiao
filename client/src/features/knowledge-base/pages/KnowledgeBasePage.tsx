@@ -1160,6 +1160,11 @@ function KnowledgeBasePage() {
 
   const handleBatchMove = async (targetFolderId: string) => {
     if (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0) return;
+    // 文档必须归属某个文件夹，不支持移动到"根目录"
+    if (selectedDocumentIds.size > 0 && !targetFolderId) {
+      showToast('文档必须移动到文件夹，请选择目标文件夹', 'info');
+      return;
+    }
     try {
       setBatchProcessing(true);
       for (const id of Array.from(selectedDocumentIds)) {
@@ -1946,10 +1951,12 @@ function KnowledgeBasePage() {
               </Dialog.Description>
             </div>
             <div className="knowledge-sync-folder-list">
-              <label className={`knowledge-sync-folder ${batchMoveTargetId === '' ? 'is-active' : ''}`}>
-                <input type="radio" name="batch-move-folder" value="" checked={batchMoveTargetId === ''} onChange={() => setBatchMoveTargetId('')} />
-                <span>根目录</span>
-              </label>
+              {selectedDocumentIds.size === 0 && (
+                <label className={`knowledge-sync-folder ${batchMoveTargetId === '' ? 'is-active' : ''}`}>
+                  <input type="radio" name="batch-move-folder" value="" checked={batchMoveTargetId === ''} onChange={() => setBatchMoveTargetId('')} />
+                  <span>根目录</span>
+                </label>
+              )}
               {index.folders.map((folder) => (
                 <label key={folder.id} className={`knowledge-sync-folder ${batchMoveTargetId === folder.id ? 'is-active' : ''}`}>
                   <input
@@ -1965,7 +1972,7 @@ function KnowledgeBasePage() {
             </div>
             <div className="knowledge-sync-actions">
               <button type="button" className="secondary-action" onClick={() => setShowBatchMove(false)} disabled={batchProcessing}>取消</button>
-              <button type="button" className="primary-action" onClick={() => void handleBatchMove(batchMoveTargetId)} disabled={batchProcessing}>
+              <button type="button" className="primary-action" onClick={() => void handleBatchMove(batchMoveTargetId)} disabled={batchProcessing || (selectedDocumentIds.size > 0 && !batchMoveTargetId)}>
                 {batchProcessing ? '移动中...' : '移动'}
               </button>
             </div>

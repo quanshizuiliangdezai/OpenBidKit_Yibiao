@@ -225,7 +225,7 @@ function createKbTeamService({ kbAuthService, app }) {
   async function moveDocument(documentId, folderId) {
     const { ok, status, data } = await api(`/api/documents/${documentId}`, {
       method: 'PUT',
-      body: { folder_id: folderId },
+      body: { folder_id: (folderId == null || folderId === '') ? null : folderId },
     });
     if (!ok) {
       const msg = data?.error || `移动文档失败（${status}）`;

@@ -174,7 +174,7 @@ function createKbPersonalService({ app, kbAuthService }) {
     const res = await fetch(`${baseUrl()}/api/personal/documents/${encodeURIComponent(documentId)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ folder_id: folderId }),
+      body: JSON.stringify({ folder_id: (folderId == null || folderId === '') ? null : folderId }),
     });
     const data = await res.json().catch(() => null);
     if (!res.ok) throw new Error(data?.error || `移动文档失败（${res.status}）`);
