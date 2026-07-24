@@ -138,14 +138,15 @@ function createKbPersonalService({ app, kbAuthService }) {
     return data;
   }
 
-  /** 个人库文档 → 团队库（documentIds: string[]，targetTeamFolderId: 团队库目标文件夹） */
-  async function importToTeam(documentIds, targetTeamFolderId) {
+  /** 个人库文档 → 团队库（documentIds: string[]，targetTeamFolderId: 团队库目标文件夹，folderIds: 个人库文件夹id[] 整文件夹同步） */
+  async function importToTeam(documentIds, targetTeamFolderId, folderIds = []) {
     const res = await fetch(`${baseUrl()}/api/import/personal`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
         folder_id: targetTeamFolderId,
         documents: documentIds.map(id => ({ document_id: id })),
+        folders: folderIds,
       }),
     });
     const data = await res.json().catch(() => null);
@@ -153,12 +154,12 @@ function createKbPersonalService({ app, kbAuthService }) {
     return data;
   }
 
-  /** 团队库文档 → 个人库（documentIds: number[]） */
-  async function importFromTeam(documentIds) {
+  /** 团队库文档 → 个人库（documentIds: number[]，folderIds: 团队库文件夹id[] 整文件夹同步） */
+  async function importFromTeam(documentIds, folderIds = []) {
     const res = await fetch(`${baseUrl()}/api/import/team`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ documents: documentIds.map(id => ({ id })) }),
+      body: JSON.stringify({ documents: documentIds.map(id => ({ id })), folders: folderIds }),
     });
     const data = await res.json().catch(() => null);
     if (!res.ok) throw new Error(data?.error || `同步到个人库失败（${res.status}）`);

@@ -374,6 +374,16 @@ function KnowledgeBasePage() {
   const [teamFolderOptions, setTeamFolderOptions] = useState<KnowledgeFolder[]>([]);
   const [syncTargetFolderId, setSyncTargetFolderId] = useState('');
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<string>>(() => new Set());
+  const [selectedFolderIds, setSelectedFolderIds] = useState<Set<string>>(() => new Set());
+
+  const toggleSelectFolder = (folderId: string) => {
+    setSelectedFolderIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderId)) next.delete(folderId);
+      else next.add(folderId);
+      return next;
+    });
+  };
   const [retryingDocumentIds, setRetryingDocumentIds] = useState<Set<string>>(() => new Set());
   const [visibleDocumentCount, setVisibleDocumentCount] = useState(documentRenderBatchSize);
   const autoMatchingIdsRef = useRef(new Set<string>());
@@ -684,8 +694,8 @@ function KnowledgeBasePage() {
 
   // 打开「同步到团队」对话框（个人库 → 团队库）
   const openSyncToTeam = async () => {
-    if (selectedDocumentIds.size === 0) {
-      showToast('请先勾选要同步到团队的文档', 'info');
+    if (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0) {
+      showToast('请先勾选要同步到团队的文档或文件夹', 'info');
       return;
     }
     await fetchTeamFolders();
@@ -702,12 +712,14 @@ function KnowledgeBasePage() {
     try {
       setSyncing(true);
       const ids = Array.from(selectedDocumentIds);
-      const result = await window.yibiao?.kbPersonal.importToTeam(ids, syncTargetFolderId);
+      const folderIds = Array.from(selectedFolderIds);
+      const result = await window.yibiao?.kbPersonal.importToTeam(ids, syncTargetFolderId, folderIds);
       if (!result?.success) throw new Error(result?.error || '同步到团队失败');
       const created = result.data?.created?.length || 0;
       const failed = result.data?.failed?.length || 0;
       showToast(`已同步 ${created} 个文档到团队${failed ? `，${failed} 个失败` : ''}`, 'success');
       setSelectedDocumentIds(new Set());
+      setSelectedFolderIds(new Set());
       setShowSyncToTeam(false);
       if (kbTab === 'team') await loadTeamTree();
     } catch (error) {
@@ -719,19 +731,21 @@ function KnowledgeBasePage() {
 
   // 将选中的团队文档同步到个人库（团队库 → 个人库）
   const syncFromTeam = async () => {
-    if (selectedDocumentIds.size === 0) {
-      showToast('请先勾选要同步到个人的文档', 'info');
+    if (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0) {
+      showToast('请先勾选要同步到个人的文档或文件夹', 'info');
       return;
     }
     if (!window.confirm(`确定将选中的 ${selectedDocumentIds.size} 个文档同步到个人知识库吗？`)) return;
     try {
       setSyncing(true);
       const ids = Array.from(selectedDocumentIds);
-      const result = await window.yibiao?.kbPersonal.importFromTeam(ids);
+      const folderIds = Array.from(selectedFolderIds);
+      const result = await window.yibiao?.kbPersonal.importFromTeam(ids, folderIds);
       if (!result?.success) throw new Error(result?.error || '同步到个人失败');
       const synced = result.data?.synced?.filter((item) => item.ok).length || 0;
       showToast(`已同步 ${synced} 个文档到个人知识库`, 'success');
       setSelectedDocumentIds(new Set());
+      setSelectedFolderIds(new Set());
       if (kbTab === 'personal') await loadPersonalTree();
     } catch (error) {
       showToast(error instanceof Error ? error.message : '同步到个人失败', 'error');
@@ -1106,8 +1120,8 @@ function KnowledgeBasePage() {
               <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading || !activeFolder}>
                 {loading ? '处理中...' : '上传文档'}
               </button>
-              <button type="button" className="sync-action" onClick={() => void syncFromTeam()} disabled={syncing || selectedDocumentIds.size === 0}>
-                同步到个人{selectedDocumentIds.size ? `（${selectedDocumentIds.size}）` : ''}
+              <button type="button" className="sync-action" onClick={() => void syncFromTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0)}>
+                同步到个人{(selectedDocumentIds.size + selectedFolderIds.size) ? `（${selectedDocumentIds.size + selectedFolderIds.size}）` : ''}
               </button>
             </>
           )}
@@ -1117,8 +1131,8 @@ function KnowledgeBasePage() {
               <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading || !activeFolder}>
                 {loading ? '处理中...' : '上传文档'}
               </button>
-              <button type="button" className="sync-action" onClick={() => void openSyncToTeam()} disabled={syncing || selectedDocumentIds.size === 0}>
-                同步到团队{selectedDocumentIds.size ? `（${selectedDocumentIds.size}）` : ''}
+              <button type="button" className="sync-action" onClick={() => void openSyncToTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0)}>
+                同步到团队{(selectedDocumentIds.size + selectedFolderIds.size) ? `（${selectedDocumentIds.size + selectedFolderIds.size}）` : ''}
               </button>
             </>
           )}
@@ -1177,7 +1191,7 @@ function KnowledgeBasePage() {
             <div className="knowledge-sync-head">
               <Dialog.Title className="knowledge-sync-title">同步到团队知识库</Dialog.Title>
               <Dialog.Description className="knowledge-sync-desc">
-                选择目标团队文件夹，将选中的 {selectedDocumentIds.size} 个个人文档同步过去。
+                选择目标团队文件夹，将选中的 {selectedDocumentIds.size + selectedFolderIds.size} 个文档/文件夹同步过去。
               </Dialog.Description>
             </div>
             <div className="knowledge-sync-folder-list">
@@ -1232,6 +1246,13 @@ function KnowledgeBasePage() {
                     }}
                   >
                     <div className="knowledge-folder-row">
+                      <label className="knowledge-document-select" onClick={(event) => event.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedFolderIds.has(folder.id)}
+                          onChange={() => toggleSelectFolder(folder.id)}
+                        />
+                      </label>
                       <button type="button" className="knowledge-folder-main" onClick={() => startTransition(() => setActiveFolderId(folder.id))}>
                         <span aria-hidden="true">F</span>
                         <strong>{folder.name}</strong>
