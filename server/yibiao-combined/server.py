@@ -416,14 +416,9 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
     def _can_write_folder(self, employee, parent_id):
         if employee['role'] == 'admin':
             return True, None
-        root = kb_db.get_root_folder(employee['id'])
-        if not root:
-            return False, '你还没有根文件夹，请联系管理员'
-        if parent_id in (None, '', 0, '0'):
-            return False, '员工不能创建顶级文件夹'
-        if kb_db.is_in_own_subtree(employee['id'], int(parent_id)):
-            return True, None
-        return False, '只能在自己根文件夹及子文件夹内操作'
+        # A5（成员可在根目录建文件夹）+ A3（他人可编辑）：成员可在团队库任意文件夹（含根目录）创建/写入。
+        # 删除权限由 A1 在 _kb_DELETE 单独控制（P2 落实：只能删自己的）。
+        return True, None
 
     def _parse_multipart(self):
         try:
@@ -605,7 +600,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             if not employee:
                 return self._send(401, {'error': '未登录或会话已过期'})
             name = (data.get('name') or '').strip()
-            parent_id = data.get('parent_id')
+            parent_id = data.get('parent_id') or data.get('parent')
             ok, err = self._can_write_folder(employee, parent_id)
             if not ok:
                 return self._send(403, {'error': err})
@@ -698,6 +693,15 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             if not ok:
                 return self._send(403, {'error': err})
             created, failed = [], []
+            for pfid in (data.get('folders') or []):
+                collected = []
+                self._collect_master_folder_docs(str(pfid), collected)
+                for did in collected:
+                    remote, ierr = self._import_personal_doc_to_team(str(did), int(folder_id), employee)
+                    if remote is None:
+                        failed.append({'document_id': did, 'error': ierr or '导入失败'})
+                        continue
+                    created.append({'document_id': did, 'remote_id': remote})
             for item in data['documents']:
                 doc_id = item.get('document_id') or item.get('id')
                 if not doc_id:
@@ -722,6 +726,16 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             if not data or 'documents' not in data:
                 return self._send(400, {'error': '缺少 documents 数组'})
             synced = []
+            for fid in (data.get('folders') or []):
+                try:
+                    tfid = int(fid)
+                except (ValueError, TypeError):
+                    continue
+                collected = []
+                self._collect_team_folder_docs(tfid, collected)
+                for did in collected:
+                    ok, msg = self._sync_team_to_master(did, employee)
+                    synced.append({'id': did, 'ok': bool(ok), 'msg': msg})
             for item in data['documents']:
                 doc_id = item.get('id') or item.get('document_id')
                 try:
@@ -1148,10 +1162,57 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         import mimetypes
         mime = mimetypes.guess_type(file_name or fp)[0] or 'application/octet-stream'
         title = file_name or os.path.basename(fp)
+        # B3 命名规则：个人库文档若来源于团队库（document_id 形如 team-<id>-<user>），
+        # 则视为「个人修改后的版本」，同步回团队库时文件名追加「（账户名 YYYY年MM月DD日HH时修改版）」，
+        # 括号加在扩展名前；原团队文件保留，新增带后缀副本（复制模式）。
+        if re.match(r'^team-\d+-\d+$', str(master_doc_id)):
+            acct = ((employee.get('display_name') or employee.get('username')) if employee else None) or '用户'
+            ts = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y年%m月%d日%H时')
+            base, ext = os.path.splitext(title)
+            title = '%s（%s %s修改版）%s' % (base, acct, ts, ext)
         doc, err = kb_db.upload_document(team_folder_id, employee['id'] if employee else owner_id, title, title, mime, data)
         if err:
             return None, err
         return doc['id'], None
+
+    # ---- P0-2 文件夹级同步辅助（扁平递归：整文件夹内容同步到目标库） ----
+    def _collect_master_descendant_folders(self, root_id):
+        """返回个人库中以 root_id 为根的全部后代文件夹 folder_id（含自身）。"""
+        result, stack = [], [str(root_id)]
+        while stack:
+            fid = stack.pop()
+            result.append(fid)
+            conn = _master_db_conn()
+            try:
+                subs = conn.execute("SELECT folder_id FROM knowledge_folders WHERE parent_id=?", (fid,)).fetchall()
+            finally:
+                conn.close()
+            for s in subs:
+                stack.append(s[0])
+        return result
+
+    def _collect_master_folder_docs(self, root_id, out):
+        """递归收集个人库某文件夹（含子文件夹）下所有文档 document_id（扁平）。"""
+        fids = self._collect_master_descendant_folders(root_id)
+        conn = _master_db_conn()
+        try:
+            ph = ','.join('?' * len(fids)) or '?'
+            rows = conn.execute(
+                "SELECT document_id FROM knowledge_documents WHERE folder_id IN (%s)" % ph, fids).fetchall()
+        finally:
+            conn.close()
+        for r in rows:
+            out.append(r[0])
+
+    def _collect_team_folder_docs(self, root_id, out):
+        """递归收集团队库某文件夹（含子文件夹）下所有文档 id（扁平，内存遍历 folders 树）。"""
+        docs = kb_db.list_documents(root_id)
+        for d in docs:
+            out.append(d['id'])
+        all_folders = kb_db.list_folders()
+        children = [f for f in all_folders if f.get('parent_id') == root_id]
+        for c in children:
+            self._collect_team_folder_docs(c['id'], out)
 
     def _kb_GET(self):
         path = urlparse(self.path).path
