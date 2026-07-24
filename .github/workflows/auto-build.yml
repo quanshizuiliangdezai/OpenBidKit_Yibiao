@@ -21,6 +21,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   OPENCODE_VERSION: 'v1.17.8'
   RIPGREP_VERSION: '14.1.1'
