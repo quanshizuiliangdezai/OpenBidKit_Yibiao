@@ -181,12 +181,100 @@ function createKbTeamService({ kbAuthService, app }) {
     return data?.data || data || { success: true };
   }
 
-  // ---- 搜索（优化③）----
+  // ---- 搜索（优化③ + C5 双模式）----
 
-  async function searchDocuments(query) {
-    const { ok, status, data } = await api(`/api/documents?search=${encodeURIComponent(query)}`);
+  /**
+   * 搜索文档。mode='name' 仅文件名；mode='content' 全文检索。
+   * 服务端契约：GET /api/documents?q=<kw>&mode=name|content
+   */
+  async function searchDocuments(query, mode) {
+    const params = new URLSearchParams();
+    params.set('q', query);
+    if (mode) params.set('mode', mode);
+    const { ok, status, data } = await api(`/api/documents?${params.toString()}`);
     if (!ok) throw new Error(`搜索文档失败（${status}）`);
     return Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+  }
+
+  // ---- C1 重命名 / E2 移动 ----
+
+  /** 重命名文件夹：PUT /api/folders/{id} body {name} */
+  async function renameFolder(folderId, name) {
+    const { ok, status, data } = await api(`/api/folders/${folderId}`, { method: 'PUT', body: { name } });
+    if (!ok) {
+      const msg = data?.error || `重命名文件夹失败（${status}）`;
+      throw new Error(msg);
+    }
+    return data?.data || data || { success: true };
+  }
+
+  /** 移动文件夹：PUT /api/folders/{id} body {parent_id}（null/0 = 根目录） */
+  async function moveFolder(folderId, parentId) {
+    const { ok, status, data } = await api(`/api/folders/${folderId}`, {
+      method: 'PUT',
+      body: { parent_id: parentId == null ? null : parentId },
+    });
+    if (!ok) {
+      const msg = data?.error || `移动文件夹失败（${status}）`;
+      throw new Error(msg);
+    }
+    return data?.data || data || { success: true };
+  }
+
+  /** 移动文档：PUT /api/documents/{id} body {folder_id} */
+  async function moveDocument(documentId, folderId) {
+    const { ok, status, data } = await api(`/api/documents/${documentId}`, {
+      method: 'PUT',
+      body: { folder_id: folderId },
+    });
+    if (!ok) {
+      const msg = data?.error || `移动文档失败（${status}）`;
+      throw new Error(msg);
+    }
+    return data?.data || data || { success: true };
+  }
+
+  // ---- C3 回收站 ----
+
+  /** 列出团队库回收站（24h 内可恢复） */
+  async function listTrash() {
+    const { ok, status, data } = await api('/api/trash');
+    if (!ok) throw new Error(`获取回收站失败（${status}）`);
+    return data?.data || { folders: [], documents: [] };
+  }
+
+  /** 从回收站恢复：POST /api/trash/restore body {type, id} */
+  async function restoreFromTrash(type, id) {
+    const { ok, status, data } = await api('/api/trash/restore', {
+      method: 'POST',
+      body: { type, id },
+    });
+    if (!ok) {
+      const msg = data?.error || `恢复失败（${status}）`;
+      throw new Error(msg);
+    }
+    return data || { success: true };
+  }
+
+  // ---- C2 批量导出 zip ----
+
+  /** 导出选中文档为 zip 并保存到 destPath。ids: (string|number)[] */
+  async function exportZip(ids, destPath) {
+    const idStr = (Array.isArray(ids) ? ids : [ids]).map(String).join(',');
+    const base = kbAuthService.getServerUrl().replace(/\/+$/, '');
+    const url = `${base}/api/documents/export?ids=${encodeURIComponent(idStr)}`;
+    const res = await fetch(url, {
+      headers: kbAuthService.getToken() ? { Authorization: `Bearer ${kbAuthService.getToken()}` } : {},
+    });
+    if (!res.ok) {
+      let msg = `导出失败（${res.status}）`;
+      try { const j = await res.json(); if (j?.error) msg = j.error; } catch { /* noop */ }
+      throw new Error(msg);
+    }
+    const buffer = Buffer.from(await res.arrayBuffer());
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    fs.writeFileSync(destPath, buffer);
+    return destPath;
   }
 
   // ---- 组合查询 ----
@@ -220,6 +308,12 @@ function createKbTeamService({ kbAuthService, app }) {
     searchDocuments,
     getDocumentById,
     getDocumentVersions,
+    renameFolder,
+    moveFolder,
+    moveDocument,
+    listTrash,
+    restoreFromTrash,
+    exportZip,
   };
 }
 

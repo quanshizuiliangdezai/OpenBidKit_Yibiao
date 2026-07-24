@@ -436,6 +436,34 @@ export interface KbTeamTree {
   documents: KbTeamDocument[];
 }
 
+export interface KbTrashFolder {
+  id: string | number;
+  name: string;
+  parent_id?: string | number | null;
+  owner_id?: string | number;
+  created_at?: string;
+  deleted_at?: string;
+  deleted_by?: string | number;
+  [key: string]: unknown;
+}
+
+export interface KbTrashDocument {
+  id: string | number;
+  document_id?: string | number;
+  folder_id?: string | number | null;
+  owner_id?: string | number;
+  file_name?: string;
+  created_at?: string;
+  deleted_at?: string;
+  deleted_by?: string | number;
+  [key: string]: unknown;
+}
+
+export interface KbTrash {
+  folders: KbTrashFolder[];
+  documents: KbTrashDocument[];
+}
+
 export interface KbTeamUploadResult {
   success: boolean;
   uploaded?: KbTeamDocument[];
@@ -652,6 +680,13 @@ export interface YibiaoBridge {
     searchDocuments: (query: string) => Promise<{ success: boolean; data?: KbTeamDocument[]; error?: string }>;
     getDocumentVersions: (documentId: string | number) => Promise<{ success: boolean; data?: Array<{ version: number; created_at: string; note: string }>; error?: string }>;
     listDocuments: (folderId?: string | number, searchQuery?: string) => Promise<{ success: boolean; data?: KbTeamDocument[]; error?: string }>;
+    renameFolder: (folderId: string | number, name: string) => Promise<KbTeamResult>;
+    moveFolder: (folderId: string | number, parentId?: string | number | null) => Promise<KbTeamResult>;
+    moveDocument: (documentId: string | number, folderId: string | number) => Promise<KbTeamResult>;
+    search: (query: string, mode?: 'name' | 'content') => Promise<{ success: boolean; data?: KbTeamDocument[]; error?: string; needLogin?: boolean }>;
+    listTrash: () => Promise<{ success: boolean; data?: KbTrash; error?: string; needLogin?: boolean }>;
+    restoreFromTrash: (type: 'folder' | 'document', id: string | number) => Promise<KbTeamResult>;
+    exportZip: (ids: Array<string | number>) => Promise<{ success: boolean; data?: { localPath: string }; error?: string; canceled?: boolean; needLogin?: boolean }>;
   },
   plugins: {
     getAvailablePlugins: () => Promise<AvailablePlugin[]>;
@@ -670,11 +705,17 @@ export interface YibiaoBridge {
     listFolders: () => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
     listDocuments: (folderId: string) => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
     downloadDocument: (documentId: string, destPath?: string) => Promise<{ success: boolean; data?: string; error?: string }>;
-    searchDocuments: (keyword: string) => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
+    searchDocuments: (keyword: string, mode?: 'name' | 'content') => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
     createFolder: (name: string, parentId?: string | null) => Promise<{ success: boolean; data?: KbTeamFolder; error?: string }>;
     uploadDocument: (folderId: string) => Promise<{ success: boolean; data?: { uploaded: Array<{ file: string; doc: KbTeamDocument }>; failed: Array<{ file: string; error: string }>; canceled: boolean }; error?: string }>;
     deleteFolder: (folderId: string) => Promise<{ success: boolean; data?: unknown; error?: string }>;
+    deleteDocument: (documentId: string) => Promise<{ success: boolean; data?: unknown; error?: string }>;
     moveFolder: (folderId: string, parentId?: string | null) => Promise<{ success: boolean; data?: unknown; error?: string }>;
+    renameFolder: (folderId: string, name: string) => Promise<{ success: boolean; data?: unknown; error?: string }>;
+    moveDocument: (documentId: string, folderId: string | number) => Promise<{ success: boolean; data?: unknown; error?: string }>;
+    listTrash: () => Promise<{ success: boolean; data?: KbTrash; error?: string }>;
+    restoreFromTrash: (type: 'folder' | 'document', id: string | number) => Promise<{ success: boolean; data?: unknown; error?: string }>;
+    exportZip: (ids: Array<string | number>) => Promise<{ success: boolean; data?: { localPath: string }; error?: string; canceled?: boolean }>;
     importToTeam: (documentIds: Array<string | number>, targetTeamFolderId: string | number, folderIds?: Array<string | number>) => Promise<{ success: boolean; data?: { created: Array<{ document_id: string | number; remote_id: number }>; failed: Array<{ document_id: string | number; error: string }> }; error?: string }>;
     importFromTeam: (documentIds: Array<string | number>, folderIds?: Array<string | number>) => Promise<{ success: boolean; data?: { synced: Array<{ id: number; ok: boolean; msg: string }> }; error?: string }>;
   },

@@ -58,10 +58,10 @@ function registerKbPersonalIpc({ kbAuthService, app }) {
     }
   });
 
-  // 搜索文档（全局）
-  ipcMain.handle('kb-personal:search', async (_event, keyword) => {
+  // 搜索文档（全局，C5 name / content 双模式）
+  ipcMain.handle('kb-personal:search', async (_event, keyword, mode) => {
     try {
-      const docs = await personalService.searchDocuments(keyword);
+      const docs = await personalService.searchDocuments(keyword, mode);
       return { success: true, data: docs };
     } catch (err) {
       return { error: err.message || '搜索文档失败' };
@@ -117,6 +117,16 @@ function registerKbPersonalIpc({ kbAuthService, app }) {
     }
   });
 
+  // 删除文档（进回收站）
+  ipcMain.handle('kb-personal:delete-document', async (_event, documentId) => {
+    try {
+      const result = await personalService.deleteDocument(documentId);
+      return { success: true, data: result };
+    } catch (err) {
+      return { error: err.message || '删除文档失败' };
+    }
+  });
+
   // 移动文件夹
   ipcMain.handle('kb-personal:move-folder', async (_event, folderId, parentId) => {
     try {
@@ -127,20 +137,79 @@ function registerKbPersonalIpc({ kbAuthService, app }) {
     }
   });
 
-  // 个人库 → 团队库
-  ipcMain.handle('kb-personal:import-to-team', async (_event, documentIds, targetTeamFolderId) => {
+  // C1 重命名文件夹
+  ipcMain.handle('kb-personal:rename-folder', async (_event, folderId, name) => {
     try {
-      const result = await personalService.importToTeam(documentIds, targetTeamFolderId);
+      const result = await personalService.renameFolder(folderId, name);
+      return { success: true, data: result };
+    } catch (err) {
+      return { error: err.message || '重命名文件夹失败' };
+    }
+  });
+
+  // E2 移动文档
+  ipcMain.handle('kb-personal:move-document', async (_event, documentId, folderId) => {
+    try {
+      const result = await personalService.moveDocument(documentId, folderId);
+      return { success: true, data: result };
+    } catch (err) {
+      return { error: err.message || '移动文档失败' };
+    }
+  });
+
+  // C3 回收站列表
+  ipcMain.handle('kb-personal:list-trash', async () => {
+    try {
+      const data = await personalService.listTrash();
+      return { success: true, data };
+    } catch (err) {
+      return { error: err.message || '获取回收站失败' };
+    }
+  });
+
+  // C3 从回收站恢复
+  ipcMain.handle('kb-personal:restore-from-trash', async (_event, type, id) => {
+    try {
+      const data = await personalService.restoreFromTrash(type, id);
+      return { success: true, data };
+    } catch (err) {
+      return { error: err.message || '恢复失败' };
+    }
+  });
+
+  // C2 批量导出 zip（弹保存对话框）
+  ipcMain.handle('kb-personal:export-zip', async (event, ids) => {
+    try {
+      if (!Array.isArray(ids) || ids.length === 0) return { success: false, error: '未选择文档' };
+      const win = BrowserWindow.fromWebContents(event.sender);
+      const os = require('node:os');
+      const { canceled, filePath } = await dialog.showSaveDialog(win, {
+        title: '导出为 ZIP',
+        defaultPath: path.join(os.homedir(), 'personal_documents.zip'),
+        filters: [{ name: 'ZIP 压缩包', extensions: ['zip'] }],
+      });
+      if (canceled || !filePath) return { success: false, canceled: true };
+      await personalService.exportZip(ids, filePath);
+      return { success: true, data: { localPath: filePath } };
+    } catch (err) {
+      return { error: err.message || '导出失败' };
+    }
+  });
+
+  // 个人库 → 团队库（folderIds 整文件夹同步透传）
+  ipcMain.handle('kb-personal:import-to-team', async (_event, documentIds, targetTeamFolderId, folderIds) => {
+    try {
+      const result = await personalService.importToTeam(documentIds, targetTeamFolderId, folderIds || []);
       return { success: true, data: result };
     } catch (err) {
       return { error: err.message || '同步到团队库失败' };
     }
   });
 
-  // 团队库 → 个人库
-  ipcMain.handle('kb-personal:import-from-team', async (_event, documentIds) => {
+  // 团队库 → 个人库（folderIds 整文件夹同步透传）
+  ipcMain.handle('kb-personal:import-from-team', async (_event, documentIds, folderIds) => {
     try {
-      const result = await personalService.importFromTeam(documentIds);
+      const result = await personalService.importFromTeam(documentIds, folderIds || []);
       return { success: true, data: result };
     } catch (err) {
       return { error: err.message || '同步到个人库失败' };

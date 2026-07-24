@@ -1,9 +1,9 @@
-import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type MouseEvent } from 'react';
+import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type MouseEvent, type DragEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeDocument, KnowledgeDocumentStatus, KnowledgeFolder, KnowledgeItem } from '../types';
-import type { KbAuthStatus, KbTeamDocument, KbTeamFolder } from '../../../shared/types/ipc';
+import type { KbAuthStatus, KbTeamDocument, KbTeamFolder, KbTrashFolder, KbTrashDocument } from '../../../shared/types/ipc';
 import KbUserBar from '../components/KbUserBar';
 import { useAuth } from '../../../shared/auth/AuthContext';
 
@@ -25,6 +25,7 @@ function adaptServerFolder(server: KbTeamFolder): KnowledgeFolder {
     parent_id: server.parent_id == null || server.parent_id === '' ? null : String(server.parent_id),
     created_at: server.created_at || '',
     updated_at: server.created_at || '',
+    owner_id: server.owner_id,
   };
 }
 
@@ -49,6 +50,7 @@ function adaptServerDocument(
     created_at: server.created_at || '',
     updated_at: server.created_at || '',
     uploaded_by_name: server.uploaded_by_name,
+    uploaded_by: server.uploaded_by,
   };
 }
 
@@ -69,6 +71,7 @@ function adaptPersonalDocument(server: KbTeamDocument): KnowledgeDocument {
     created_at: server.created_at || '',
     updated_at: ((srv.updated_at || server.created_at || '') as string),
     uploaded_by_name: ((srv.owner_name || server.uploaded_by_name) as string | undefined),
+    uploaded_by: (srv.owner_id as string | number | undefined),
   };
 }
 
@@ -85,6 +88,20 @@ const statusLabels: Record<KnowledgeDocument['status'], string> = {
   success: '完成',
   error: '失败',
 };
+
+// 回收站 24h 倒计时显示
+function formatTrashRemaining(deletedAt?: string): string {
+  if (!deletedAt) return '';
+  const deletedMs = Date.parse(deletedAt.replace(' ', 'T') + (deletedAt.includes('Z') ? '' : 'Z'));
+  if (Number.isNaN(deletedMs)) return '';
+  const elapsedMs = Date.now() - deletedMs;
+  const remainMs = 24 * 3600 * 1000 - elapsedMs;
+  if (remainMs <= 0) return '已过期';
+  const totalMin = Math.floor(remainMs / 60000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return `剩余 ${h} 小时 ${m} 分`;
+}
 
 type RenderDebugKind = 'item-source' | 'document-markdown' | 'document-items';
 
@@ -344,14 +361,33 @@ type KnowledgeViewer = {
   mode: 'analysis' | 'items' | 'markdown';
 };
 
+// E3：树状态（当前 tab + 选中文件夹）记忆到 localStorage
+const KB_TREE_STATE_KEY = 'yibiao.kb.treeState';
+function readTreeState(): { kbTab?: 'team' | 'personal'; activeFolderId?: string } {
+  try {
+    const raw = localStorage.getItem(KB_TREE_STATE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+function writeTreeState(state: { kbTab: 'team' | 'personal'; activeFolderId: string }) {
+  try {
+    localStorage.setItem(KB_TREE_STATE_KEY, JSON.stringify(state));
+  } catch {
+    /* noop */
+  }
+}
+
 function KnowledgeBasePage() {
+  const initialTreeState = readTreeState();
   const [index, setIndex] = useState<KnowledgeBaseIndex>(emptyIndex);
-  const [activeFolderId, setActiveFolderId] = useState('');
+  const [activeFolderId, setActiveFolderId] = useState(initialTreeState.activeFolderId || '');
   const [listLoading, setListLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [authStatus, setAuthStatus] = useState<KbAuthStatus | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [kbTab, setKbTab] = useState<'team' | 'personal'>('team');
+  const [kbTab, setKbTab] = useState<'team' | 'personal'>(initialTreeState.kbTab || 'team');
   const [viewer, setViewer] = useState<KnowledgeViewer | null>(null);
   const [viewerLoading, setViewerLoading] = useState(false);
   const [viewerTrace, setViewerTrace] = useState<RenderDebugTrace | null>(null);
@@ -375,6 +411,31 @@ function KnowledgeBasePage() {
   const [syncTargetFolderId, setSyncTargetFolderId] = useState('');
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<string>>(() => new Set());
   const [selectedFolderIds, setSelectedFolderIds] = useState<Set<string>>(() => new Set());
+
+  // C5 搜索（name / content 双模式）
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMode, setSearchMode] = useState<'name' | 'content'>('name');
+  const [searchActive, setSearchActive] = useState(false);
+  const [searchResults, setSearchResults] = useState<KnowledgeDocument[]>([]);
+  const [searching, setSearching] = useState(false);
+  // C1 重命名
+  const [showRename, setShowRename] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<KnowledgeFolder | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [renaming, setRenaming] = useState(false);
+  // C2 导出
+  const [exporting, setExporting] = useState(false);
+  // C3 回收站
+  const [showTrash, setShowTrash] = useState(false);
+  const [trashData, setTrashData] = useState<{ folders: KbTrashFolder[]; documents: KbTrashDocument[] }>({ folders: [], documents: [] });
+  const [trashLoading, setTrashLoading] = useState(false);
+  // E2 拖拽
+  const [dragDocId, setDragDocId] = useState<string | null>(null);
+  const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
+  // E1 批量操作
+  const [batchProcessing, setBatchProcessing] = useState(false);
+  const [showBatchMove, setShowBatchMove] = useState(false);
+  const [batchMoveTargetId, setBatchMoveTargetId] = useState('');
 
   const toggleSelectFolder = (folderId: string) => {
     setSelectedFolderIds((prev) => {
@@ -408,7 +469,25 @@ function KnowledgeBasePage() {
     return grouped;
   }, [index.documents]);
   const documents = activeFolder ? documentsByFolder.get(activeFolder.id) || emptyDocuments : emptyDocuments;
-  const visibleDocuments = documents.slice(0, Math.min(visibleDocumentCount, documents.length));
+  // C5：搜索激活时展示跨文件夹搜索结果，否则展示当前文件夹文档
+  const displayedDocuments = searchActive ? searchResults : documents;
+  const visibleDocuments = displayedDocuments.slice(0, Math.min(visibleDocumentCount, displayedDocuments.length));
+
+  // A1/A3：当前用户与删除权限判断
+  const currentUserId = authStatus?.employee?.id;
+  const isAdmin = authStatus?.employee?.role === 'admin';
+  const canDeleteDoc = (document: KnowledgeDocument) => {
+    if (isAdmin) return true;
+    // 无 uploaded_by 信息时（老数据）保守放行，交由服务端最终裁决
+    if (document.uploaded_by == null) return true;
+    return String(document.uploaded_by) === String(currentUserId);
+  };
+  const canManageFolder = (folder: KnowledgeFolder | undefined | null) => {
+    if (!folder) return false;
+    if (isAdmin) return true;
+    if (folder.owner_id == null) return true;
+    return String(folder.owner_id) === String(currentUserId);
+  };
 
   useEffect(() => {
     trackPageView(viewer ? `knowledge-base/viewer/${viewer.mode}` : `knowledge-base/${kbTab === 'team' ? 'team' : 'personal'}`);
@@ -457,12 +536,24 @@ function KnowledgeBasePage() {
 
   useEffect(() => {
     setVisibleDocumentCount(documentRenderBatchSize);
-  }, [activeFolder?.id, documents.length]);
+  }, [activeFolder?.id, displayedDocuments.length, searchActive]);
 
   // 切换文件夹或标签时清空已勾选的同步项，避免串库
   useEffect(() => {
     setSelectedDocumentIds(new Set());
   }, [activeFolderId, kbTab]);
+
+  // E3：记忆当前 tab + 选中文件夹到 localStorage
+  useEffect(() => {
+    writeTreeState({ kbTab, activeFolderId });
+  }, [kbTab, activeFolderId]);
+
+  // 切换 tab / 文件夹时退出搜索态，避免展示串库结果
+  useEffect(() => {
+    setSearchActive(false);
+    setSearchResults([]);
+    setSearchQuery('');
+  }, [kbTab]);
 
   // 点击或滚动时关闭文件夹右键菜单
   useEffect(() => {
@@ -477,14 +568,14 @@ function KnowledgeBasePage() {
   }, [folderMenu]);
 
   useEffect(() => {
-    if (visibleDocumentCount >= documents.length) return undefined;
+    if (visibleDocumentCount >= displayedDocuments.length) return undefined;
     const timeoutId = window.setTimeout(() => {
       startTransition(() => {
-        setVisibleDocumentCount((count) => Math.min(count + documentRenderBatchSize, documents.length));
+        setVisibleDocumentCount((count) => Math.min(count + documentRenderBatchSize, displayedDocuments.length));
       });
     }, 24);
     return () => window.clearTimeout(timeoutId);
-  }, [documents.length, visibleDocumentCount]);
+  }, [displayedDocuments.length, visibleDocumentCount]);
 
   useEffect(() => {
     if (developerMode) return;
@@ -668,11 +759,11 @@ function KnowledgeBasePage() {
     });
   };
 
-  // 全选/取消全选当前文件夹下的文档
+  // 全选/取消全选当前展示的文档（含搜索结果）
   const toggleSelectAll = (checked: boolean) => {
     setSelectedDocumentIds((prev) => {
       const next = new Set(prev);
-      documents.forEach((document) => {
+      displayedDocuments.forEach((document) => {
         if (checked) next.add(document.id);
         else next.delete(document.id);
       });
@@ -849,14 +940,29 @@ function KnowledgeBasePage() {
   };
 
   const deleteDocument = async (document: KnowledgeDocument) => {
+    if (!canDeleteDoc(document)) {
+      showToast('只能删除自己上传的文档', 'info');
+      return;
+    }
     if (!window.confirm(`确定删除文档"${document.file_name}"吗？`)) return;
     try {
-      const result = await window.yibiao?.kbTeam.deleteDocument(document.id);
+      const result = kbTab === 'team'
+        ? await window.yibiao?.kbTeam.deleteDocument(document.id)
+        : await window.yibiao?.kbPersonal.deleteDocument(document.id);
       if (!result?.success) {
         throw new Error(result?.error || '删除文档失败');
       }
-      await window.yibiao?.knowledgeBase.deleteLocalAnalysis(document.id);
+      // 团队库需清除本地分析数据；个人库跳过
+      if (kbTab === 'team') {
+        await window.yibiao?.knowledgeBase.deleteLocalAnalysis(document.id);
+      }
       setIndex((prev) => ({ ...prev, documents: prev.documents.filter((item) => item.id !== document.id) }));
+      setSelectedDocumentIds((prev) => {
+        if (!prev.has(document.id)) return prev;
+        const next = new Set(prev);
+        next.delete(document.id);
+        return next;
+      });
       setViewer((prev) => (prev?.document.id === document.id ? null : prev));
       showToast('文档已删除', 'success');
     } catch (error) {
@@ -866,14 +972,261 @@ function KnowledgeBasePage() {
 
   const moveFolder = async (folderId: string, targetParentId: string) => {
     try {
-      const result = await window.yibiao?.kbPersonal.moveFolder(folderId, targetParentId || null);
+      const result = kbTab === 'team'
+        ? await window.yibiao?.kbTeam.moveFolder(folderId, targetParentId || null)
+        : await window.yibiao?.kbPersonal.moveFolder(folderId, targetParentId || null);
       if (!result?.success) {
         throw new Error(result?.error || '移动文件夹失败');
       }
-      await loadPersonalTree();
+      if (kbTab === 'team') await loadTeamTree(); else await loadPersonalTree();
       showToast('文件夹已移动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '移动文件夹失败', 'error');
+    }
+  };
+
+  // ---- C5 搜索（name / content 双模式，防抖）----
+  const searchDebounceRef = useRef<number | undefined>(undefined);
+  const onSearchInput = (value: string, mode: 'name' | 'content') => {
+    setSearchQuery(value);
+    setSearchMode(mode);
+    window.clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = window.setTimeout(() => {
+      void handleSearch(value, mode);
+    }, 300);
+  };
+
+  const handleSearch = async (query: string, mode: 'name' | 'content') => {
+    const q = query.trim();
+    if (!q) {
+      setSearchActive(false);
+      setSearchResults([]);
+      return;
+    }
+    try {
+      setSearching(true);
+      let results: KnowledgeDocument[] = [];
+      if (kbTab === 'team') {
+        const res = await window.yibiao?.kbTeam.search(q, mode);
+        if (!res?.success) throw new Error(res?.error || '搜索失败');
+        results = await Promise.all((res.data || []).map(async (doc) => {
+          const localStatus = await window.yibiao?.knowledgeBase.getLocalStatus(doc.id);
+          return adaptServerDocument(doc, localStatus);
+        }));
+      } else {
+        const res = await window.yibiao?.kbPersonal.searchDocuments(q, mode);
+        if (!res?.success) throw new Error(res?.error || '搜索失败');
+        results = (res.data || []).map(adaptPersonalDocument);
+      }
+      setSearchResults(results);
+      setSearchActive(true);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '搜索失败', 'error');
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const clearSearch = () => {
+    setSearchActive(false);
+    setSearchResults([]);
+    setSearchQuery('');
+    setSearchMode('name');
+    window.clearTimeout(searchDebounceRef.current);
+  };
+
+  // ---- C1 重命名文件夹 ----
+  const openRename = (folder: KnowledgeFolder) => {
+    setRenameTarget(folder);
+    setRenameValue(folder.name);
+    setShowRename(true);
+  };
+  const handleRename = async () => {
+    if (!renameTarget) return;
+    const name = renameValue.trim();
+    if (!name) { showToast('请输入文件夹名称', 'info'); return; }
+    try {
+      setRenaming(true);
+      const result = kbTab === 'team'
+        ? await window.yibiao?.kbTeam.renameFolder(renameTarget.id, name)
+        : await window.yibiao?.kbPersonal.renameFolder(renameTarget.id, name);
+      if (!result?.success) throw new Error(result?.error || '重命名失败');
+      setIndex((prev) => ({ ...prev, folders: prev.folders.map((f) => (f.id === renameTarget.id ? { ...f, name } : f)) }));
+      setShowRename(false);
+      setRenameTarget(null);
+      showToast('已重命名', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '重命名失败', 'error');
+    } finally {
+      setRenaming(false);
+    }
+  };
+
+  // ---- C2 批量导出 zip ----
+  const handleExport = async () => {
+    if (selectedDocumentIds.size === 0) { showToast('请先勾选要导出的文档', 'info'); return; }
+    try {
+      setExporting(true);
+      const ids = Array.from(selectedDocumentIds);
+      const result = kbTab === 'team'
+        ? await window.yibiao?.kbTeam.exportZip(ids)
+        : await window.yibiao?.kbPersonal.exportZip(ids);
+      if (!result?.success) {
+        if (result?.canceled) return;
+        throw new Error(result?.error || '导出失败');
+      }
+      showToast('已导出压缩包', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '导出失败', 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // ---- C3 回收站 ----
+  const openTrash = async () => {
+    try {
+      setTrashLoading(true);
+      setShowTrash(true);
+      const result = kbTab === 'team'
+        ? await window.yibiao?.kbTeam.listTrash()
+        : await window.yibiao?.kbPersonal.listTrash();
+      if (!result?.success) throw new Error(result?.error || '获取回收站失败');
+      setTrashData({
+        folders: (result.data?.folders || []) as KbTrashFolder[],
+        documents: (result.data?.documents || []) as KbTrashDocument[],
+      });
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '获取回收站失败', 'error');
+    } finally {
+      setTrashLoading(false);
+    }
+  };
+  const handleRestore = async (type: 'folder' | 'document', id: string) => {
+    try {
+      const result = kbTab === 'team'
+        ? await window.yibiao?.kbTeam.restoreFromTrash(type, id)
+        : await window.yibiao?.kbPersonal.restoreFromTrash(type, id);
+      if (!result?.success) throw new Error(result?.error || '恢复失败');
+      showToast('已恢复', 'success');
+      await openTrash();
+      if (kbTab === 'team') await loadTeamTree(); else await loadPersonalTree();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '恢复失败', 'error');
+    }
+  };
+
+  // ---- E1 批量操作 ----
+  const handleBatchDelete = async () => {
+    if (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0) return;
+    const docCount = selectedDocumentIds.size;
+    const folderCount = selectedFolderIds.size;
+    if (!window.confirm(`确定删除选中的 ${docCount} 个文档和 ${folderCount} 个文件夹吗？`)) return;
+    try {
+      setBatchProcessing(true);
+      for (const id of Array.from(selectedDocumentIds)) {
+        const doc = index.documents.find((d) => d.id === id);
+        if (doc && !canDeleteDoc(doc)) {
+          showToast(`文档「${doc.file_name}」非本人上传，已跳过`, 'info');
+          continue;
+        }
+        const result = kbTab === 'team'
+          ? await window.yibiao?.kbTeam.deleteDocument(id)
+          : await window.yibiao?.kbPersonal.deleteDocument(id);
+        if (!result?.success) throw new Error(result?.error || '删除文档失败');
+        if (kbTab === 'team') await window.yibiao?.knowledgeBase.deleteLocalAnalysis(id);
+      }
+      for (const id of Array.from(selectedFolderIds)) {
+        const folder = index.folders.find((f) => f.id === id);
+        if (folder && !canManageFolder(folder)) {
+          showToast(`文件夹「${folder.name}」非本人创建，已跳过`, 'info');
+          continue;
+        }
+        const result = kbTab === 'team'
+          ? await window.yibiao?.kbTeam.deleteFolder(id)
+          : await window.yibiao?.kbPersonal.deleteFolder(id);
+        if (!result?.success) throw new Error(result?.error || '删除文件夹失败');
+      }
+      setSelectedDocumentIds(new Set());
+      setSelectedFolderIds(new Set());
+      if (kbTab === 'team') await loadTeamTree(); else await loadPersonalTree();
+      showToast('已批量删除', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '批量删除失败', 'error');
+    } finally {
+      setBatchProcessing(false);
+    }
+  };
+
+  const handleBatchMove = async (targetFolderId: string) => {
+    if (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0) return;
+    try {
+      setBatchProcessing(true);
+      for (const id of Array.from(selectedDocumentIds)) {
+        const result = kbTab === 'team'
+          ? await window.yibiao?.kbTeam.moveDocument(id, targetFolderId)
+          : await window.yibiao?.kbPersonal.moveDocument(id, targetFolderId);
+        if (!result?.success) throw new Error(result?.error || '移动文档失败');
+      }
+      for (const id of Array.from(selectedFolderIds)) {
+        if (id === targetFolderId) continue; // 不允许移动到自身
+        const result = kbTab === 'team'
+          ? await window.yibiao?.kbTeam.moveFolder(id, targetFolderId || null)
+          : await window.yibiao?.kbPersonal.moveFolder(id, targetFolderId || null);
+        if (!result?.success) throw new Error(result?.error || '移动文件夹失败');
+      }
+      setSelectedDocumentIds(new Set());
+      setSelectedFolderIds(new Set());
+      setShowBatchMove(false);
+      if (kbTab === 'team') await loadTeamTree(); else await loadPersonalTree();
+      showToast('已批量移动', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '批量移动失败', 'error');
+    } finally {
+      setBatchProcessing(false);
+    }
+  };
+
+  // ---- E2 拖拽移动 ----
+  const handleDragStartDoc = (event: DragEvent<HTMLElement>, docId: string) => {
+    event.dataTransfer.setData('application/x-yibiao-doc', docId);
+    event.dataTransfer.setData('text/plain', `doc:${docId}`);
+    event.dataTransfer.effectAllowed = 'move';
+    setDragDocId(docId);
+  };
+  const handleDragStartFolder = (event: DragEvent<HTMLElement>, folderId: string) => {
+    event.dataTransfer.setData('application/x-yibiao-folder', folderId);
+    event.dataTransfer.setData('text/plain', `folder:${folderId}`);
+    event.dataTransfer.effectAllowed = 'move';
+  };
+  const handleDropOnFolder = async (event: DragEvent<HTMLElement>, folder: KnowledgeFolder) => {
+    event.preventDefault();
+    setDragOverFolderId(null);
+    const docId = event.dataTransfer.getData('application/x-yibiao-doc');
+    const folderId = event.dataTransfer.getData('application/x-yibiao-folder');
+    setDragDocId(null);
+    if (docId && docId !== folder.id) {
+      try {
+        const result = kbTab === 'team'
+          ? await window.yibiao?.kbTeam.moveDocument(docId, folder.id)
+          : await window.yibiao?.kbPersonal.moveDocument(docId, folder.id);
+        if (!result?.success) throw new Error(result?.error || '移动文档失败');
+        if (kbTab === 'team') await loadTeamTree(); else await loadPersonalTree();
+        showToast('文档已移动', 'success');
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '移动失败', 'error');
+      }
+    } else if (folderId && folderId !== folder.id) {
+      try {
+        const result = kbTab === 'team'
+          ? await window.yibiao?.kbTeam.moveFolder(folderId, folder.id)
+          : await window.yibiao?.kbPersonal.moveFolder(folderId, folder.id);
+        if (!result?.success) throw new Error(result?.error || '移动文件夹失败');
+        if (kbTab === 'team') await loadTeamTree(); else await loadPersonalTree();
+        showToast('文件夹已移动', 'success');
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '移动失败', 'error');
+      }
     }
   };
 
@@ -1136,8 +1489,51 @@ function KnowledgeBasePage() {
               </button>
             </>
           )}
+          {(selectedDocumentIds.size + selectedFolderIds.size) > 0 && (
+            <>
+              <button type="button" className="secondary-action" onClick={() => setShowBatchMove(true)} disabled={batchProcessing || syncing}>
+                批量移动（{selectedDocumentIds.size + selectedFolderIds.size}）
+              </button>
+              <button type="button" className="is-danger" onClick={() => void handleBatchDelete()} disabled={batchProcessing || syncing}>
+                {batchProcessing ? '处理中...' : `批量删除（${selectedDocumentIds.size + selectedFolderIds.size}）`}
+              </button>
+              {selectedDocumentIds.size > 0 && (
+                <button type="button" className="secondary-action" onClick={() => void handleExport()} disabled={exporting || syncing}>
+                  {exporting ? '导出中...' : `导出（${selectedDocumentIds.size}）`}
+                </button>
+              )}
+              <button type="button" className="secondary-action" onClick={() => { setSelectedDocumentIds(new Set()); setSelectedFolderIds(new Set()); }}>取消选择</button>
+            </>
+          )}
+          <button type="button" className="secondary-action" onClick={() => void openTrash()}>回收站</button>
         </div>
       </section>
+
+      <div className="knowledge-search-bar">
+        <input
+          className="knowledge-search-input"
+          type="search"
+          value={searchQuery}
+          placeholder={kbTab === 'team' ? '搜索团队库文档（文件名 / 全文）' : '搜索个人库文档（文件名 / 全文）'}
+          onChange={(event) => onSearchInput(event.target.value, searchMode)}
+        />
+        <div className="knowledge-search-modes">
+          <button
+            type="button"
+            className={`kb-search-mode ${searchMode === 'name' ? 'is-active' : ''}`}
+            onClick={() => onSearchInput(searchQuery, 'name')}
+          >文件名</button>
+          <button
+            type="button"
+            className={`kb-search-mode ${searchMode === 'content' ? 'is-active' : ''}`}
+            onClick={() => onSearchInput(searchQuery, 'content')}
+          >全文</button>
+        </div>
+        {searching && <span className="knowledge-search-status">搜索中…</span>}
+        {searchActive && (
+          <button type="button" className="secondary-action" onClick={clearSearch}>清除搜索</button>
+        )}
+      </div>
 
       {showCreateFolder && (
         <form
@@ -1240,10 +1636,13 @@ function KnowledgeBasePage() {
                 return (
                   <article
                     key={folder.id}
-                    className={`knowledge-folder-card ${folder.id === activeFolder?.id ? 'is-active' : ''} ${folder.parent_id ? 'is-child' : ''}`}
-                    onContextMenu={(event) => {
-                      if (kbTab === 'personal') openFolderContextMenu(event, folder);
-                    }}
+                    className={`knowledge-folder-card ${folder.id === activeFolder?.id ? 'is-active' : ''} ${folder.parent_id ? 'is-child' : ''} ${dragOverFolderId === folder.id ? 'is-drop-target' : ''}`}
+                    draggable
+                    onDragStart={(event) => handleDragStartFolder(event, folder.id)}
+                    onDragOver={(event) => { event.preventDefault(); setDragOverFolderId(folder.id); }}
+                    onDragLeave={() => setDragOverFolderId((prev) => (prev === folder.id ? null : prev))}
+                    onDrop={(event) => void handleDropOnFolder(event, folder)}
+                    onContextMenu={(event) => openFolderContextMenu(event, folder)}
                   >
                     <div className="knowledge-folder-row">
                       <label className="knowledge-document-select" onClick={(event) => event.stopPropagation()}>
@@ -1253,7 +1652,7 @@ function KnowledgeBasePage() {
                           onChange={() => toggleSelectFolder(folder.id)}
                         />
                       </label>
-                      <button type="button" className="knowledge-folder-main" onClick={() => startTransition(() => setActiveFolderId(folder.id))}>
+                      <button type="button" className="knowledge-folder-main" onClick={() => { if (searchActive) clearSearch(); startTransition(() => setActiveFolderId(folder.id)); }}>
                         <span aria-hidden="true">F</span>
                         <strong>{folder.name}</strong>
                         <small>{count} 个文档</small>
@@ -1261,7 +1660,13 @@ function KnowledgeBasePage() {
                     </div>
                     {kbTab === 'team' && (
                       <div className="knowledge-folder-actions">
-                        <button type="button" className="is-danger" onClick={() => void deleteFolder(folder.id, folder.name)}>删除</button>
+                        <button
+                          type="button"
+                          className="is-danger"
+                          disabled={!canManageFolder(folder)}
+                          title={canManageFolder(folder) ? '' : '只能删除自己创建的文件夹'}
+                          onClick={() => void deleteFolder(folder.id, folder.name)}
+                        >删除</button>
                       </div>
                     )}
                   </article>
@@ -1278,17 +1683,17 @@ function KnowledgeBasePage() {
 
         <main className="knowledge-document-panel">
           <div className="knowledge-panel-head">
-            <strong>{activeFolder?.name || '未选择文件夹'}</strong>
+            <strong>{searchActive ? `搜索结果（${displayedDocuments.length}）` : (activeFolder?.name || '未选择文件夹')}</strong>
             <span className="knowledge-panel-head-right">
               <label className="knowledge-select-all">
                 <input
                   type="checkbox"
-                  checked={documents.length > 0 && documents.every((document) => selectedDocumentIds.has(document.id))}
+                  checked={displayedDocuments.length > 0 && displayedDocuments.every((document) => selectedDocumentIds.has(document.id))}
                   onChange={(event) => toggleSelectAll(event.target.checked)}
                 />
                 全选
               </label>
-              <span>{documents.length} 个文档</span>
+              <span>{displayedDocuments.length} 个文档</span>
             </span>
           </div>
 
@@ -1297,7 +1702,7 @@ function KnowledgeBasePage() {
               <strong>正在读取团队库...</strong>
               <p>文档列表加载完成后会自动显示。</p>
             </div>
-          ) : documents.length ? (
+          ) : displayedDocuments.length ? (
             <div className="knowledge-document-list">
               {visibleDocuments.map((document) => {
                 const retrying = retryingDocumentIds.has(document.id);
@@ -1305,6 +1710,9 @@ function KnowledgeBasePage() {
                   <article
                     className="knowledge-document-card"
                     key={document.id}
+                    draggable
+                    onDragStart={(event) => handleDragStartDoc(event, document.id)}
+                    onDragEnd={() => setDragDocId(null)}
                   >
                     <div className="knowledge-document-title">
                       <div className="knowledge-document-title-left">
@@ -1343,19 +1751,26 @@ function KnowledgeBasePage() {
                           {retrying ? '重试中...' : '重试'}
                         </button>
                       )}
-                      {kbTab === 'team' && (
+                      {canDeleteDoc(document) ? (
                         <button type="button" className="is-danger" onClick={() => void deleteDocument(document)}>删除</button>
+                      ) : (
+                        <button type="button" className="is-danger" disabled title="只能删除自己上传的文档">删除</button>
                       )}
                     </div>
                   </article>
                 );
               })}
-              {visibleDocuments.length < documents.length && (
+              {visibleDocuments.length < displayedDocuments.length && (
                 <div className="knowledge-empty-box">
                   <strong>正在加载更多文档...</strong>
-                  <p>已显示 {visibleDocuments.length} / {documents.length} 个文档。</p>
+                  <p>已显示 {visibleDocuments.length} / {displayedDocuments.length} 个文档。</p>
                 </div>
               )}
+            </div>
+          ) : searchActive ? (
+            <div className="knowledge-empty-box large">
+              <strong>未找到匹配的文档</strong>
+              <p>换个关键词，或切换「文件名 / 全文」模式再试。</p>
             </div>
           ) : (
             <div className="knowledge-empty-box large">
@@ -1397,6 +1812,20 @@ function KnowledgeBasePage() {
           </button>
           <button
             type="button"
+            disabled={!canManageFolder(folderMenu.folder)}
+            title={canManageFolder(folderMenu.folder) ? '' : '只能重命名自己创建的文件夹'}
+            onClick={(event) => {
+              event.stopPropagation();
+              closeFolderMenu();
+              openRename(folderMenu.folder);
+            }}
+          >
+            重命名
+          </button>
+          <button
+            type="button"
+            disabled={!canManageFolder(folderMenu.folder)}
+            title={canManageFolder(folderMenu.folder) ? '' : '只能移动自己创建的文件夹'}
             onClick={(event) => {
               event.stopPropagation();
               closeFolderMenu();
@@ -1410,6 +1839,8 @@ function KnowledgeBasePage() {
           <button
             type="button"
             className="is-danger"
+            disabled={!canManageFolder(folderMenu.folder)}
+            title={canManageFolder(folderMenu.folder) ? '' : '只能删除自己创建的文件夹'}
             onClick={(event) => {
               event.stopPropagation();
               closeFolderMenu();
@@ -1471,6 +1902,125 @@ function KnowledgeBasePage() {
               >
                 移动
               </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={showRename} onOpenChange={(open) => !open && setShowRename(false)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="knowledge-sync-modal" />
+          <Dialog.Content className="knowledge-sync-dialog-card">
+            <div className="knowledge-sync-head">
+              <Dialog.Title className="knowledge-sync-title">重命名文件夹</Dialog.Title>
+              <Dialog.Description className="knowledge-sync-desc">修改「{renameTarget?.name}」的名称。</Dialog.Description>
+            </div>
+            <div className="knowledge-sync-folder-list">
+              <input
+                autoFocus
+                className="knowledge-search-input"
+                value={renameValue}
+                onChange={(event) => setRenameValue(event.target.value)}
+                placeholder="输入新文件夹名称"
+                onKeyDown={(event) => { if (event.key === 'Enter') void handleRename(); }}
+              />
+            </div>
+            <div className="knowledge-sync-actions">
+              <button type="button" className="secondary-action" onClick={() => setShowRename(false)} disabled={renaming}>取消</button>
+              <button type="button" className="primary-action" onClick={() => void handleRename()} disabled={renaming || !renameValue.trim()}>
+                {renaming ? '保存中...' : '保存'}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={showBatchMove} onOpenChange={(open) => !open && setShowBatchMove(false)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="knowledge-sync-modal" />
+          <Dialog.Content className="knowledge-sync-dialog-card">
+            <div className="knowledge-sync-head">
+              <Dialog.Title className="knowledge-sync-title">批量移动到</Dialog.Title>
+              <Dialog.Description className="knowledge-sync-desc">
+                将选中的 {selectedDocumentIds.size + selectedFolderIds.size} 个文档/文件夹移动到目标文件夹。
+              </Dialog.Description>
+            </div>
+            <div className="knowledge-sync-folder-list">
+              <label className={`knowledge-sync-folder ${batchMoveTargetId === '' ? 'is-active' : ''}`}>
+                <input type="radio" name="batch-move-folder" value="" checked={batchMoveTargetId === ''} onChange={() => setBatchMoveTargetId('')} />
+                <span>根目录</span>
+              </label>
+              {index.folders.map((folder) => (
+                <label key={folder.id} className={`knowledge-sync-folder ${batchMoveTargetId === folder.id ? 'is-active' : ''}`}>
+                  <input
+                    type="radio"
+                    name="batch-move-folder"
+                    value={folder.id}
+                    checked={batchMoveTargetId === folder.id}
+                    onChange={() => setBatchMoveTargetId(folder.id)}
+                  />
+                  <span>{folder.name}</span>
+                </label>
+              ))}
+            </div>
+            <div className="knowledge-sync-actions">
+              <button type="button" className="secondary-action" onClick={() => setShowBatchMove(false)} disabled={batchProcessing}>取消</button>
+              <button type="button" className="primary-action" onClick={() => void handleBatchMove(batchMoveTargetId)} disabled={batchProcessing}>
+                {batchProcessing ? '移动中...' : '移动'}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={showTrash} onOpenChange={(open) => !open && setShowTrash(false)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="knowledge-sync-modal" />
+          <Dialog.Content className="knowledge-sync-dialog-card">
+            <div className="knowledge-sync-head">
+              <Dialog.Title className="knowledge-sync-title">回收站（24 小时内可恢复）</Dialog.Title>
+              <Dialog.Description className="knowledge-sync-desc">删除的文件夹与文档会保留 24 小时，删除者本人或管理员可恢复。</Dialog.Description>
+            </div>
+            <div className="knowledge-trash-list">
+              {trashLoading ? (
+                <div className="knowledge-empty-box"><strong>加载中...</strong></div>
+              ) : (trashData.folders.length === 0 && trashData.documents.length === 0) ? (
+                <div className="knowledge-empty-box"><strong>回收站是空的</strong><p>暂无可恢复的文件夹或文档。</p></div>
+              ) : (
+                <>
+                  {trashData.folders.map((item) => (
+                    <div key={`f-${item.id}`} className="knowledge-trash-item">
+                      <div className="knowledge-trash-info">
+                        <strong>📁 {item.name}</strong>
+                        <small>{formatTrashRemaining(item.deleted_at)}</small>
+                      </div>
+                      <button
+                        type="button"
+                        className="secondary-action"
+                        disabled={!(isAdmin || String(item.deleted_by) === String(currentUserId))}
+                        onClick={() => void handleRestore('folder', String(item.id))}
+                      >恢复</button>
+                    </div>
+                  ))}
+                  {trashData.documents.map((item) => (
+                    <div key={`d-${item.id}`} className="knowledge-trash-item">
+                      <div className="knowledge-trash-info">
+                        <strong>📄 {item.file_name || '文档'}</strong>
+                        <small>{formatTrashRemaining(item.deleted_at)}</small>
+                      </div>
+                      <button
+                        type="button"
+                        className="secondary-action"
+                        disabled={!(isAdmin || String(item.deleted_by) === String(currentUserId))}
+                        onClick={() => void handleRestore('document', String(item.id))}
+                      >恢复</button>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+            <div className="knowledge-sync-actions">
+              <button type="button" className="secondary-action" onClick={() => setShowTrash(false)}>关闭</button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>

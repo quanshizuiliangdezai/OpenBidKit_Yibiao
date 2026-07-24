@@ -96,7 +96,11 @@ def _client_ip(handler):
 def _master_db_conn():
     if not os.path.exists(MASTER_DB):
         return None
-    conn = __import__('sqlite3').connect(MASTER_DB)
+    _sqlite3 = __import__('sqlite3')
+    conn = _sqlite3.connect(MASTER_DB)
+    # sqlite3.Row 支持按索引和按列名两种访问方式，向后兼容旧的 r[0] 取值，
+    # 同时让新增的个人库回收站/导出等方法可以安全地使用 row['col'] 访问。
+    conn.row_factory = _sqlite3.Row
     conn.execute('PRAGMA busy_timeout = 5000')
     return conn
 
@@ -486,6 +490,17 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     break
                 self.wfile.write(chunk)
 
+    def _send_zip(self, data, filename):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/zip')
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        self.send_header('Content-Disposition', 'attachment; filename*=UTF-8\'\'' + quote(filename))
+        self.end_headers()
+        self.wfile.write(data)
+
     def _kb_OPTIONS(self):
         self._send(204)
 
@@ -750,6 +765,46 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 detail='团队库→个人库: %d 篇' % len(synced), ip=_client_ip(self))
             return self._send(200, {'success': True, 'synced': synced})
 
+        if path == '/api/trash/restore':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            ttype = data.get('type')
+            tid = data.get('id')
+            if ttype == 'folder':
+                f = kb_db.get_folder(tid, include_deleted=True)
+                if not f:
+                    return self._send(404, {'error': '文件夹不存在'})
+                if employee['role'] != 'admin' and str(f.get('deleted_by')) != str(employee['id']):
+                    return self._send(403, {'error': '只能恢复自己删除的文件夹'})
+                ok, err = kb_db.restore_folder(tid)
+            else:
+                d = kb_db.get_document(tid)
+                if not d:
+                    return self._send(404, {'error': '文档不存在'})
+                if employee['role'] != 'admin' and str(d.get('deleted_by')) != str(employee['id']):
+                    return self._send(403, {'error': '只能恢复自己删除的文档'})
+                ok, err = kb_db.restore_document(tid)
+            if not ok:
+                return self._send(400, {'error': err})
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                role=employee.get('role'), action='restore', target_type=ttype or 'document', target_id=tid,
+                detail='从回收站恢复', ip=_client_ip(self))
+            return self._send(200, {'success': True})
+        if path == '/api/personal/trash/restore':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            ok, err = self._personal_restore(data.get('type'), data.get('id'), employee)
+            if not ok:
+                return self._send(400, {'error': err})
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                role=employee.get('role'), action='restore', target_type=data.get('type') or 'document',
+                target_id=data.get('id'), detail='从回收站恢复个人文件', ip=_client_ip(self))
+            return self._send(200, {'success': True})
+
         return self._send(404, {'error': '接口不存在'})
 
     # ==================== 个人库（主库 master.sqlite）辅助方法 ====================
@@ -796,9 +851,13 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             sel = "folder_id, name, sort_order, created_at, updated_at" + (", parent_id" if has_parent else "") + (", owner_id" if has_owner else "")
             q = "SELECT %s FROM knowledge_folders" % sel
             args = ()
+            where = []
             if has_owner and employee and employee.get('role') != 'admin':
-                q += " WHERE owner_id=? OR owner_id IS NULL"
+                where.append("(owner_id=? OR owner_id IS NULL)")
                 args = (employee['id'],)
+            where.append("(deleted_at IS NULL OR deleted_at='')")
+            if where:
+                q += " WHERE " + " AND ".join(where)
             q += " ORDER BY sort_order, name"
             rows = conn.execute(q, args).fetchall()
             out = []
@@ -830,6 +889,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             args = []
             if 'is_deleted' in cols:
                 conditions.append("COALESCE(is_deleted,0)=0")
+            conditions.append("(deleted_at IS NULL OR deleted_at='')")
             if 'owner_id' in cols and employee and employee.get('role') != 'admin':
                 conditions.append("(owner_id=? OR owner_id IS NULL)")
                 args.append(employee['id'])
@@ -940,17 +1000,25 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     if folder_owner and folder_owner[0] is not None and folder_owner[0] != employee['id']:
                         return None, '只能上传到自己创建的个人文件夹'
                 cols = {c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()}
+                # 补 content_text 列并抽取正文，供个人库全文检索（mode=content）使用。
+                if 'content_text' not in cols:
+                    conn.execute("ALTER TABLE knowledge_documents ADD COLUMN content_text TEXT")
+                    cols.add('content_text')
                 now = datetime.datetime.now().isoformat()
                 doc_id = uuid.uuid4().hex
                 doc_dir_rel = 'folders/%s/documents/%s' % (folder_id, doc_id)
                 owner_id = employee['id'] if employee else None
                 owner_name = (employee.get('display_name') or employee.get('username')) if employee else None
+                import mimetypes as _mt
+                _mime = _mt.guess_type(filename)[0] or 'application/octet-stream'
+                content_text = kb_db._extract_text_for_search(data, filename, _mime)
                 fields = {
                     'document_id': doc_id, 'folder_id': str(folder_id), 'file_name': filename,
                     'document_dir': doc_dir_rel, 'source_path': '%s/%s' % (doc_dir_rel, filename),
                     'markdown_path': '', 'status': 'success', 'progress': 100,
                     'message': '通过服务器上传', 'created_at': now, 'updated_at': now,
                     'owner_id': owner_id, 'owner_name': owner_name,
+                    'content_text': content_text,
                 }
                 if 'uploaded_by' in cols:
                     fields['uploaded_by'] = owner_name
@@ -975,7 +1043,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 'owner_id': owner_id, 'owner_name': owner_name}, None
 
     def _personal_delete_folder(self, folder_id, employee):
-        """个人库删除文件夹：递归删除子文件夹及其文档，并清理物理文件。"""
+        """个人库软删文件夹（进回收站）：标记自身+后代文件夹+其文档的 deleted_at，保留物理文件。"""
         folder_id = str(folder_id)
         with _MASTER_LOCK:
             conn = _master_db_conn()
@@ -983,6 +1051,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 return False, '个人库不可用'
             try:
                 self._ensure_owner_cols(conn)
+                self._ensure_deleted_col(conn)
                 row = conn.execute(
                     "SELECT folder_id, name, owner_id FROM knowledge_folders WHERE folder_id=?",
                     (folder_id,)).fetchone()
@@ -990,31 +1059,20 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     return False, '文件夹不存在'
                 if employee and employee.get('role') != 'admin' and row['owner_id'] is not None and row['owner_id'] != employee['id']:
                     return False, '只能删除自己创建的个人文件夹'
-                # 递归收集自身及所有子文件夹
-                ids = {folder_id}
-                frontier = [folder_id]
-                while frontier:
-                    placeholders = ','.join('?' * len(frontier))
-                    rows = conn.execute(
-                        "SELECT folder_id FROM knowledge_folders WHERE parent_id IN (%s)" % placeholders,
-                        frontier).fetchall()
-                    frontier = []
-                    for r in rows:
-                        fid = r[0]
-                        if fid not in ids:
-                            ids.add(fid)
-                            frontier.append(fid)
-                ids_list = list(ids)
-                placeholders = ','.join('?' * len(ids_list))
+                ids = self._collect_master_descendant_folders(folder_id)
+                ts = datetime.datetime.now().isoformat()
+                by = str(employee['id']) if employee else None
+                ph = ','.join('?' * len(ids))
+                conn.execute(
+                    "UPDATE knowledge_folders SET deleted_at=?, deleted_by=? WHERE folder_id IN (%s)" % ph,
+                    [ts, by] + ids)
                 docs = conn.execute(
-                    "SELECT document_id, folder_id FROM knowledge_documents WHERE folder_id IN (%s)" % placeholders,
-                    ids_list).fetchall()
-                for doc in docs:
-                    doc_dir = self._personal_doc_dir(doc['folder_id'], doc['document_id'])
-                    if os.path.isdir(doc_dir):
-                        shutil.rmtree(doc_dir, ignore_errors=True)
-                conn.execute("DELETE FROM knowledge_documents WHERE folder_id IN (%s)" % placeholders, ids_list)
-                conn.execute("DELETE FROM knowledge_folders WHERE folder_id IN (%s)" % placeholders, ids_list)
+                    "SELECT document_id FROM knowledge_documents WHERE folder_id IN (%s)" % ph, ids).fetchall()
+                if docs:
+                    dph = ','.join('?' * len(docs))
+                    conn.execute(
+                        "UPDATE knowledge_documents SET deleted_at=?, deleted_by=? WHERE document_id IN (%s)" % dph,
+                        [ts, by] + [d['document_id'] for d in docs])
                 conn.commit()
                 return True, row['name']
             finally:
@@ -1068,6 +1126,410 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 return True, None
             finally:
                 conn.close()
+
+    def _personal_move_document(self, doc_id, new_folder_id, employee):
+        """个人库移动文档：修改 folder_id，校验文档与目标文件夹存在且归属正确。"""
+        doc_id = str(doc_id)
+        new_folder_id = str(new_folder_id)
+        with _MASTER_LOCK:
+            conn = _master_db_conn()
+            if conn is None:
+                return False, '个人库不可用'
+            try:
+                self._ensure_owner_cols(conn)
+                self._ensure_deleted_col(conn)
+                row = conn.execute(
+                    "SELECT document_id, owner_id FROM knowledge_documents WHERE document_id=?",
+                    (doc_id,)).fetchone()
+                if not row:
+                    return False, '文档不存在'
+                if employee and employee.get('role') != 'admin' and row['owner_id'] is not None and row['owner_id'] != employee['id']:
+                    return False, '只能移动自己上传的个人文档'
+                parent = conn.execute(
+                    "SELECT folder_id FROM knowledge_folders WHERE folder_id=?",
+                    (new_folder_id,)).fetchone()
+                if not parent:
+                    return False, '目标文件夹不存在'
+                now = datetime.datetime.now().isoformat()
+                conn.execute(
+                    "UPDATE knowledge_documents SET folder_id=?, updated_at=? WHERE document_id=?",
+                    (new_folder_id, now, doc_id))
+                conn.commit()
+                return True, None
+            finally:
+                conn.close()
+
+    # ==================== 个人库：重命名 / 软删 / 回收站 / 恢复 / 搜索 / 导出 ====================
+
+    def _ensure_deleted_col(self, conn):
+        """给主库 knowledge_folders / knowledge_documents 补回收站软删列。"""
+        for tbl in ('knowledge_folders', 'knowledge_documents'):
+            cols = {c[1] for c in conn.execute("PRAGMA table_info(%s)" % tbl).fetchall()}
+            if 'deleted_at' not in cols:
+                conn.execute("ALTER TABLE %s ADD COLUMN deleted_at TEXT" % tbl)
+            if 'deleted_by' not in cols:
+                conn.execute("ALTER TABLE %s ADD COLUMN deleted_by TEXT" % tbl)
+        conn.commit()
+
+    def _personal_rename_folder(self, folder_id, name, employee):
+        folder_id = str(folder_id)
+        name = (name or '').strip()
+        if not name:
+            return False, '文件夹名不能为空'
+        with _MASTER_LOCK:
+            conn = _master_db_conn()
+            if conn is None:
+                return False, '个人库不可用'
+            try:
+                self._ensure_deleted_col(conn)
+                row = conn.execute(
+                    "SELECT folder_id, owner_id FROM knowledge_folders WHERE folder_id=?", (folder_id,)).fetchone()
+                if not row:
+                    return False, '文件夹不存在'
+                if employee and employee.get('role') != 'admin' and row['owner_id'] is not None and row['owner_id'] != employee['id']:
+                    return False, '只能重命名自己创建的个人文件夹'
+                now = datetime.datetime.now().isoformat()
+                conn.execute("UPDATE knowledge_folders SET name=?, updated_at=? WHERE folder_id=?", (name, now, folder_id))
+                conn.commit()
+                return True, None
+            finally:
+                conn.close()
+
+    def _personal_delete_document(self, doc_id, employee):
+        """个人库软删文档（进回收站）。"""
+        doc_id = str(doc_id)
+        with _MASTER_LOCK:
+            conn = _master_db_conn()
+            if conn is None:
+                return False, '个人库不可用'
+            try:
+                self._ensure_deleted_col(conn)
+                row = conn.execute(
+                    "SELECT document_id, owner_id FROM knowledge_documents WHERE document_id=?", (doc_id,)).fetchone()
+                if not row:
+                    return False, '文档不存在'
+                if employee and employee.get('role') != 'admin' and row['owner_id'] is not None and row['owner_id'] != employee['id']:
+                    return False, '只能删除自己上传的个人文档'
+                ts = datetime.datetime.now().isoformat()
+                by = str(employee['id']) if employee else None
+                conn.execute(
+                    "UPDATE knowledge_documents SET deleted_at=?, deleted_by=? WHERE document_id=?", (ts, by, doc_id))
+                conn.commit()
+                return True, None
+            finally:
+                conn.close()
+
+    def _personal_trash(self, employee):
+        conn = _master_db_conn()
+        if conn is None:
+            return {'folders': [], 'documents': []}
+        try:
+            self._ensure_deleted_col(conn)
+            folders = conn.execute(
+                "SELECT folder_id,name,parent_id,owner_id,created_at,deleted_at,deleted_by "
+                "FROM knowledge_folders WHERE deleted_at IS NOT NULL AND deleted_at<>'' ORDER BY deleted_at DESC").fetchall()
+            docs = conn.execute(
+                "SELECT document_id,folder_id,owner_id,file_name,created_at,deleted_at,deleted_by "
+                "FROM knowledge_documents WHERE deleted_at IS NOT NULL AND deleted_at<>'' ORDER BY deleted_at DESC").fetchall()
+            out_f = [{'id': r[0], 'name': r[1], 'parent_id': r[2], 'owner_id': r[3],
+                     'created_at': r[4], 'deleted_at': r[5], 'deleted_by': r[6]} for r in folders]
+            out_d = [{'id': r[0], 'folder_id': r[1], 'owner_id': r[2], 'title': r[3],
+                     'created_at': r[4], 'deleted_at': r[5], 'deleted_by': r[6]} for r in docs]
+            return {'folders': out_f, 'documents': out_d}
+        finally:
+            conn.close()
+
+    def _personal_restore(self, target_type, target_id, employee):
+        conn = _master_db_conn()
+        if conn is None:
+            return False, '个人库不可用'
+        try:
+            self._ensure_deleted_col(conn)
+            by = str(employee['id'])
+            if target_type == 'folder':
+                row = conn.execute(
+                    "SELECT folder_id,deleted_by FROM knowledge_folders WHERE folder_id=?", (str(target_id),)).fetchone()
+                if not row:
+                    return False, '文件夹不存在'
+                if employee.get('role') != 'admin' and str(row['deleted_by']) != by:
+                    return False, '只能恢复自己删除的文件夹'
+                ids = self._collect_master_descendant_folders(str(target_id))
+                ph = ','.join('?' * len(ids))
+                conn.execute("UPDATE knowledge_folders SET deleted_at=NULL WHERE folder_id IN (%s)" % ph, ids)
+                docs = conn.execute(
+                    "SELECT document_id FROM knowledge_documents WHERE folder_id IN (%s)" % ph, ids).fetchall()
+                if docs:
+                    dph = ','.join('?' * len(docs))
+                    conn.execute("UPDATE knowledge_documents SET deleted_at=NULL WHERE document_id IN (%s)" % dph,
+                                 [d['document_id'] for d in docs])
+                conn.commit()
+                return True, None
+            else:
+                row = conn.execute(
+                    "SELECT document_id,deleted_by FROM knowledge_documents WHERE document_id=?", (str(target_id),)).fetchone()
+                if not row:
+                    return False, '文档不存在'
+                if employee.get('role') != 'admin' and str(row['deleted_by']) != by:
+                    return False, '只能恢复自己删除的文档'
+                conn.execute("UPDATE knowledge_documents SET deleted_at=NULL WHERE document_id=?", (str(target_id),))
+                conn.commit()
+                return True, None
+        finally:
+            conn.close()
+
+    def _personal_search(self, kw, mode, employee=None):
+        conn = _master_db_conn()
+        if conn is None:
+            return []
+        try:
+            self._ensure_owner_cols(conn)
+            pattern = '%' + kw.replace('%', '').replace('_', '') + '%'
+            owner_filter = ''
+            args = []
+            if employee and employee.get('role') != 'admin':
+                owner_filter = " AND (owner_id=? OR owner_id IS NULL)"
+                args = [employee['id']]
+            if mode == 'content':
+                cols = [c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()]
+                if 'content_text' in cols:
+                    q = ("SELECT document_id,folder_id,file_name,owner_id,created_at FROM knowledge_documents "
+                         "WHERE (deleted_at IS NULL OR deleted_at='') AND "
+                         "(file_name LIKE ? OR COALESCE(content_text,'') LIKE ?)" + owner_filter + " ORDER BY created_at DESC")
+                    rows = conn.execute(q, (pattern, pattern) + tuple(args)).fetchall()
+                else:
+                    q = ("SELECT document_id,folder_id,file_name,owner_id,created_at FROM knowledge_documents "
+                         "WHERE (deleted_at IS NULL OR deleted_at='') AND file_name LIKE ?" + owner_filter + " ORDER BY created_at DESC")
+                    rows = conn.execute(q, (pattern,) + tuple(args)).fetchall()
+            else:
+                q = ("SELECT document_id,folder_id,file_name,owner_id,created_at FROM knowledge_documents "
+                     "WHERE (deleted_at IS NULL OR deleted_at='') AND file_name LIKE ?" + owner_filter + " ORDER BY created_at DESC")
+                rows = conn.execute(q, (pattern,) + tuple(args)).fetchall()
+            return [{'id': r[0], 'folder_id': r[1], 'title': r[2], 'owner_id': r[3], 'created_at': r[4]}
+                    for r in rows]
+        finally:
+            conn.close()
+
+    def _export_team_zip(self, ids, employee):
+        import io
+        buf = io.BytesIO()
+        wanted = [int(i) for i in ids if str(i).isdigit()]
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+            for did in wanted:
+                # 用 get_document（SELECT *）而非 list_documents（不含 file_path），
+                # 否则 d['file_path'] 会 KeyError 崩溃导致导出 503。
+                d = kb_db.get_document(did)
+                if not d:
+                    continue
+                if d.get('deleted_at'):
+                    continue
+                if employee and employee.get('role') != 'admin' and d.get('owner_id') is not None and d['owner_id'] != employee['id']:
+                    continue
+                fp = d.get('file_path') or ''
+                if not fp:
+                    continue
+                full = os.path.join(kb_db.KB_DATA_DIR, fp)
+                if os.path.isfile(full):
+                    z.write(full, '%s/%s' % (did, d.get('file_name') or 'file'))
+        return buf.getvalue()
+
+    def _export_personal_zip(self, ids, employee):
+        import io
+        buf = io.BytesIO()
+        conn = _master_db_conn()
+        if conn is None:
+            return None
+        try:
+            self._ensure_owner_cols(conn)
+            ph = ','.join('?' * len(ids)) or '?'
+            rows = conn.execute(
+                "SELECT document_id, folder_id, file_name, owner_id FROM knowledge_documents WHERE document_id IN (%s)" % ph,
+                ids).fetchall()
+            with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+                for r in rows:
+                    if employee and employee.get('role') != 'admin' and r['owner_id'] is not None and r['owner_id'] != employee['id']:
+                        continue
+                    base = self._personal_doc_dir(r['folder_id'], r['document_id'])
+                    fp = None
+                    if os.path.isdir(base):
+                        cands = []
+                        for root, _d, files in os.walk(base):
+                            for f in files:
+                                cands.append(os.path.join(root, f))
+                        for c in cands:
+                            if os.path.basename(c) == r['file_name']:
+                                fp = c
+                                break
+                        if fp is None and cands:
+                            fp = cands[0]
+                    if fp and os.path.isfile(fp):
+                        z.write(fp, '%s/%s' % (r['document_id'], r['file_name'] or 'file'))
+            return buf.getvalue()
+        finally:
+            conn.close()
+
+    def _personal_hard_delete_folder_tree(self, folder_id):
+        conn = _master_db_conn()
+        if conn is None:
+            return
+        try:
+            ids = self._collect_master_descendant_folders(str(folder_id))
+            ph = ','.join('?' * len(ids))
+            docs = conn.execute(
+                "SELECT document_id,folder_id FROM knowledge_documents WHERE folder_id IN (%s)" % ph, ids).fetchall()
+            for doc in docs:
+                ddir = self._personal_doc_dir(doc['folder_id'], doc['document_id'])
+                if os.path.isdir(ddir):
+                    shutil.rmtree(ddir, ignore_errors=True)
+            conn.execute("DELETE FROM knowledge_documents WHERE folder_id IN (%s)" % ph, ids)
+            conn.execute("DELETE FROM knowledge_folders WHERE folder_id IN (%s)" % ph, ids)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _personal_purge_expired_trash(self, hours=24):
+        cutoff = (datetime.datetime.now() - datetime.timedelta(hours=hours)).isoformat()
+        conn = _master_db_conn()
+        if conn is None:
+            return (0, 0)
+        try:
+            # 主库可能尚未有 deleted_at/deleted_by 列（用户从未删过东西），
+            # 而 purge 会在每次访问回收站与后台线程中先于任何删除操作运行，
+            # 必须先补列，否则 SELECT deleted_at 会抛 OperationalError 崩连接。
+            self._ensure_deleted_col(conn)
+            frows = conn.execute(
+                "SELECT folder_id FROM knowledge_folders WHERE deleted_at IS NOT NULL AND deleted_at<>'' AND deleted_at<?",
+                (cutoff,)).fetchall()
+            for f in frows:
+                self._personal_hard_delete_folder_tree(f['folder_id'])
+            drows = conn.execute(
+                "SELECT document_id,folder_id FROM knowledge_documents WHERE deleted_at IS NOT NULL AND deleted_at<>'' AND deleted_at<?",
+                (cutoff,)).fetchall()
+            for d in drows:
+                ddir = self._personal_doc_dir(d['folder_id'], d['document_id'])
+                if os.path.isdir(ddir):
+                    shutil.rmtree(ddir, ignore_errors=True)
+                conn.execute("DELETE FROM knowledge_documents WHERE document_id=?", (d['document_id'],))
+            conn.commit()
+            return (len(frows), len(drows))
+        finally:
+            conn.close()
+
+    def _ensure_team_transfer_folder(self, name, admin_id):
+        """A4：在团队库根目录找到或创建「xxx账户转交待处理」文件夹，返回 folder_id。"""
+        folder_name = '%s账户转交待处理' % name
+        for f in kb_db.list_folders():
+            if f['name'] == folder_name and f.get('owner_id') == admin_id and f.get('parent_id') in (None, '', 0, '0'):
+                return f['id']
+        folder, err = kb_db.create_folder(folder_name, None, admin_id)
+        if err:
+            return None
+        return folder['id']
+
+    def _transfer_personal_on_disable(self, user_id, admin):
+        """A4：账号被禁用时，自动把其个人库（master.sqlite）转交 admin 并同步到团队库。
+
+        - 在 admin 个人库建「xxx账户转交待处理」文件夹，拷贝该用户全部个人文档进去（保留物理文件）。
+        - 同时在团队库建同名文件夹，把每份文档上传到团队库（复制模式）。
+        """
+        user_id = int(user_id)
+        try:
+            kbconn = kb_db._conn()
+            try:
+                emp = kbconn.execute(
+                    "SELECT display_name,username FROM employees WHERE id=?", (user_id,)).fetchone()
+            finally:
+                kbconn.close()
+            if not emp:
+                return
+            name = emp['display_name'] or emp['username']
+            admin_id = admin['id']
+            admin_name = admin.get('display_name') or admin.get('username')
+            with _MASTER_LOCK:
+                conn = _master_db_conn()
+                if conn is None:
+                    log('[A4] 主库不可用，跳过个人库转交'); return
+                try:
+                    self._ensure_owner_cols(conn)
+                    self._ensure_parent_col(conn)
+                    self._ensure_deleted_col(conn)
+                    now = datetime.datetime.now().isoformat()
+                    folder_name = '%s账户转交待处理' % name
+                    existing = conn.execute(
+                        "SELECT folder_id FROM knowledge_folders WHERE owner_id=? AND name=? "
+                        "AND (deleted_at IS NULL OR deleted_at='') LIMIT 1",
+                        (admin_id, folder_name)).fetchone()
+                    if existing:
+                        transfer_folder = existing['folder_id']
+                    else:
+                        transfer_folder = uuid.uuid4().hex
+                        conn.execute(
+                            "INSERT INTO knowledge_folders "
+                            "(folder_id,name,sort_order,created_at,updated_at,parent_id,owner_id,owner_name) "
+                            "VALUES (?,?,?,?,?,?,?,?)",
+                            (transfer_folder, folder_name, 0, now, now, None, admin_id, admin_name))
+                    cols = {c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()}
+                    docs = conn.execute(
+                        "SELECT document_id,folder_id,file_name FROM knowledge_documents "
+                        "WHERE owner_id=? AND (is_deleted IS NULL OR is_deleted=0) "
+                        "AND (deleted_at IS NULL OR deleted_at='')",
+                        (user_id,)).fetchall()
+                    team_folder = self._ensure_team_transfer_folder(name, admin_id)
+                    copied = 0
+                    for d in docs:
+                        src_dir = self._personal_doc_dir(d['folder_id'], d['document_id'])
+                        fp = None
+                        if os.path.isdir(src_dir):
+                            cands = []
+                            for root, _dd, files in os.walk(src_dir):
+                                for f in files:
+                                    cands.append(os.path.join(root, f))
+                            for c in cands:
+                                if os.path.basename(c) == d['file_name']:
+                                    fp = c
+                                    break
+                            if fp is None and cands:
+                                fp = cands[0]
+                        new_doc_id = uuid.uuid4().hex
+                        doc_dir_rel = 'folders/%s/documents/%s' % (transfer_folder, new_doc_id)
+                        fields = {
+                            'document_id': new_doc_id, 'folder_id': transfer_folder,
+                            'file_name': d['file_name'], 'document_dir': doc_dir_rel,
+                            'source_path': '%s/%s' % (doc_dir_rel, d['file_name']),
+                            'markdown_path': '', 'status': 'success', 'progress': 100,
+                            'message': '离职转交', 'created_at': now, 'updated_at': now,
+                            'owner_id': admin_id, 'owner_name': admin_name,
+                        }
+                        if 'uploaded_by' in cols:
+                            fields['uploaded_by'] = admin_name
+                        if 'is_deleted' in cols:
+                            fields['is_deleted'] = 0
+                        keys = [k for k in fields if k in cols]
+                        conn.execute(
+                            "INSERT INTO knowledge_documents (%s) VALUES (%s)" % (
+                                ','.join(keys), ','.join('?' * len(keys))),
+                            tuple(fields[k] for k in keys))
+                        copied += 1
+                        dst_dir = os.path.join(MASTER_KB, doc_dir_rel)
+                        os.makedirs(dst_dir, exist_ok=True)
+                        data = b''
+                        if fp and os.path.isfile(fp):
+                            shutil.copy2(fp, os.path.join(dst_dir, d['file_name']))
+                            with open(fp, 'rb') as fh:
+                                data = fh.read()
+                        # 同步到团队库（复制模式）
+                        try:
+                            if data and team_folder:
+                                import mimetypes as _mt
+                                mime = _mt.guess_type(d['file_name'] or '')[0] or 'application/octet-stream'
+                                kb_db.upload_document(team_folder, admin_id, d['file_name'], d['file_name'], mime, data)
+                        except Exception as e:
+                            log('[A4] 同步到团队失败 doc=%s: %s' % (d['document_id'], e))
+                    conn.commit()
+                    log('[A4] 账号 %s 个人库已转交 admin（%d 篇，文件夹=%s）' % (name, copied, folder_name))
+                finally:
+                    conn.close()
+        except Exception as e:
+            log('[A4] 转交异常: %s' % e)
 
     def _sync_team_to_master(self, doc_id, employee=None):
         """团队库文档 → 当前用户的个人库（写入 master.sqlite '团队库导入' 文件夹）。"""
@@ -1300,6 +1762,9 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             folder = self._query_param('folder')
             kw = self._query_param('q')
             if kw:
+                mode = self._query_param('mode') or 'name'
+                if mode == 'content':
+                    return self._send(200, {'data': kb_db.search_documents_fulltext(kw)})
                 return self._send(200, {'data': kb_db.search_documents(kw)})
             if not folder:
                 return self._send(200, {'data': kb_db.list_documents(None)})
@@ -1315,6 +1780,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             if not employee:
                 return self._send(401, {'error': '未登录或会话已过期'})
             folder = self._query_param('folder')
+            kw = self._query_param('q')
+            if kw:
+                mode = self._query_param('mode') or 'name'
+                return self._send(200, {'data': self._personal_search(kw, mode, employee)})
             return self._send(200, {'data': self._personal_documents(folder, employee)})
         if path.startswith('/api/personal/documents/') and path.endswith('/file'):
             employee = self._auth()
@@ -1322,6 +1791,34 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 return self._send(401, {'error': '未登录或会话已过期'})
             doc_id_str = path.split('/documents/')[1].split('/')[0]
             return self._send_personal_file(doc_id_str, employee)
+        if path == '/api/trash':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            kb_db.purge_expired_trash(24)
+            return self._send(200, {'data': kb_db.list_trash()})
+        if path == '/api/personal/trash':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            self._personal_purge_expired_trash(24)
+            return self._send(200, {'data': self._personal_trash(employee)})
+        if path == '/api/documents/export':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            ids = [x for x in (self._query_param('ids') or '').split(',') if x.strip()]
+            data = self._export_team_zip(ids, employee)
+            return self._send_zip(data, 'team_documents.zip')
+        if path == '/api/personal/documents/export':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            ids = [x for x in (self._query_param('ids') or '').split(',') if x.strip()]
+            data = self._export_personal_zip(ids, employee)
+            if data is None:
+                return self._send(404, {'error': '主库不可用'})
+            return self._send_zip(data, 'personal_documents.zip')
         return self._send(404, {'error': '接口不存在'})
 
     def _kb_DELETE(self):
@@ -1336,7 +1833,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 return self._send(404, {'error': '文件夹不存在'})
             if employee['role'] != 'admin' and folder['owner_id'] != employee['id']:
                 return self._send(403, {'error': '只能删除自己创建的文件夹'})
-            ok, err = kb_db.delete_folder(m.group(1))
+            ok, err = kb_db.delete_folder(m.group(1), employee['id'])
             if not ok:
                 return self._send(400, {'error': err})
             audit_event(
@@ -1351,7 +1848,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 return self._send(404, {'error': '文档不存在'})
             if employee['role'] != 'admin' and doc['owner_id'] != employee['id']:
                 return self._send(403, {'error': '只能删除自己上传的文档'})
-            ok, err = kb_db.delete_document(m.group(1))
+            ok, err = kb_db.delete_document(m.group(1), employee['id'])
             if not ok:
                 return self._send(400, {'error': err})
             audit_event(
@@ -1371,6 +1868,16 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 role=employee.get('role'), action='folder', target_type='personal_folder', target_id=folder_id,
                 detail='删除个人文件夹: %s' % err_or_name, ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '文件夹已删除'})
+        m = re.match(r'^/api/personal/documents/([^/]+)$', path)
+        if m:
+            ok, err = self._personal_delete_document(m.group(1), employee)
+            if not ok:
+                return self._send(400, {'error': err})
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                role=employee.get('role'), action='doc', target_type='personal_document', target_id=m.group(1),
+                detail='删除个人文档（进回收站）', ip=_client_ip(self))
+            return self._send(200, {'success': True, 'message': '文档已删除'})
         m = re.match(r'^/api/admin/groups/(\d+)/members/(\d+)$', path)
         if m:
             admin = self._is_admin()
@@ -1418,9 +1925,82 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             data = self._read_json()
             if data is None:
                 return self._send(400, {'error': '请求体不是合法 JSON'})
+        employee = self._auth()
+        if not employee:
+            return self._send(401, {'error': '未登录或会话已过期'})
+        m = re.match(r'^/api/folders/(\d+)$', path)
+        if m:
+            folder = kb_db.get_folder(m.group(1))
+            if not folder:
+                return self._send(404, {'error': '文件夹不存在'})
+            if employee['role'] != 'admin' and folder['owner_id'] != employee['id']:
+                return self._send(403, {'error': '只能修改自己创建的文件夹'})
+            # 重命名优先（传了 name）
+            if data.get('name'):
+                ok, err = kb_db.rename_folder(m.group(1), data.get('name'))
+                if not ok:
+                    return self._send(400, {'error': err})
+                audit_event(
+                    account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                    role=employee.get('role'), action='folder', target_type='folder', target_id=m.group(1),
+                    detail='重命名文件夹: %s' % data.get('name'), ip=_client_ip(self))
+                return self._send(200, {'success': True, 'message': '文件夹已重命名'})
+            # 否则按移动处理（parent_id 可为 None/0 = 根目录）
+            new_parent_id = data.get('parent_id')
+            ok, err = kb_db.move_folder(m.group(1), new_parent_id)
+            if not ok:
+                return self._send(400, {'error': err})
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                role=employee.get('role'), action='folder', target_type='folder', target_id=m.group(1),
+                detail='移动文件夹到: %s' % (new_parent_id or '根目录'), ip=_client_ip(self))
+            return self._send(200, {'success': True, 'message': '文件夹已移动'})
+        m = re.match(r'^/api/documents/(\d+)$', path)
+        if m:
+            doc = kb_db.get_document(m.group(1))
+            if not doc:
+                return self._send(404, {'error': '文档不存在'})
+            if employee['role'] != 'admin' and doc.get('owner_id') is not None and doc['owner_id'] != employee['id']:
+                return self._send(403, {'error': '只能移动自己上传的文档'})
+            new_folder_id = data.get('folder_id')
+            if new_folder_id in (None, '', 0, '0'):
+                return self._send(400, {'error': '缺少目标文件夹'})
+            ok, err = kb_db.move_document(m.group(1), new_folder_id)
+            if not ok:
+                return self._send(400, {'error': err})
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                role=employee.get('role'), action='doc', target_type='document', target_id=m.group(1),
+                detail='移动文档到文件夹: %s' % new_folder_id, ip=_client_ip(self))
+            return self._send(200, {'success': True, 'message': '文档已移动'})
+        m = re.match(r'^/api/personal/documents/([^/]+)$', path)
+        if m:
+            doc_id = m.group(1)
+            new_folder_id = data.get('folder_id')
+            if new_folder_id in (None, '', 0, '0'):
+                return self._send(400, {'error': '缺少目标文件夹'})
+            ok, err = self._personal_move_document(doc_id, new_folder_id, employee)
+            if not ok:
+                return self._send(400, {'error': err})
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                role=employee.get('role'), action='doc', target_type='personal_document', target_id=doc_id,
+                detail='移动个人文档到文件夹: %s' % new_folder_id, ip=_client_ip(self))
+            return self._send(200, {'success': True, 'message': '文档已移动'})
         m = re.match(r'^/api/personal/folders/([^/]+)$', path)
         if m:
             folder_id = m.group(1)
+            # 重命名优先（传了 name）
+            if data.get('name'):
+                ok, err = self._personal_rename_folder(folder_id, data.get('name'), employee)
+                if not ok:
+                    return self._send(400, {'error': err})
+                audit_event(
+                    account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                    role=employee.get('role'), action='folder', target_type='personal_folder', target_id=folder_id,
+                    detail='重命名个人文件夹: %s' % data.get('name'), ip=_client_ip(self))
+                return self._send(200, {'success': True, 'message': '文件夹已重命名'})
+            # 否则按移动处理
             new_parent_id = data.get('parent_id')
             ok, err = self._personal_move_folder(folder_id, new_parent_id, employee)
             if not ok:
@@ -1451,12 +2031,19 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             # 拒绝把自己降级为员工，避免误锁门禁
             if str(m.group(1)) == str(admin['id']) and data.get('role') == 'employee':
                 return self._send(400, {'error': '不能把自己降级为员工'})
-            ok, err = kb_db.update_employee(m.group(1), data)
+            target_user_id = m.group(1)
+            ok, err = kb_db.update_employee(target_user_id, data)
             if not ok:
                 return self._send(400, {'error': err})
+            # A4：账号被禁用时，自动把其个人库转交 admin 并同步到团队库
+            if data.get('status') == 'disabled':
+                try:
+                    self._transfer_personal_on_disable(target_user_id, admin)
+                except Exception as e:
+                    log('[A4] 个人库转交失败: %s' % e)
             audit_event(
                 account_id=admin['id'], account_name=admin.get('display_name') or admin['username'],
-                role='admin', action='admin', target_type='employee', target_id=m.group(1),
+                role='admin', action='admin', target_type='employee', target_id=target_user_id,
                 detail='更新账号: %s' % (', '.join('%s=%s' % (k, v) for k, v in data.items() if k != 'password')),
                 ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '账号已更新'})
@@ -1472,11 +2059,26 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 if __name__ == '__main__':
+    import time
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(MASTER_ZIP), exist_ok=True)
     os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
     log('yibiao-combined single-port starting on :%d (sync=/sync/*, kb=/)' % PORT)
     srv = ThreadingHTTPServer(('', PORT), CombinedHandler)
+
+    def _purge_loop():
+        while True:
+            try:
+                kb_db.purge_expired_trash(24)
+            except Exception:
+                pass
+            try:
+                CombinedHandler._personal_purge_expired_trash(CombinedHandler, 24)
+            except Exception:
+                pass
+            time.sleep(3600)
+
+    threading.Thread(target=_purge_loop, daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

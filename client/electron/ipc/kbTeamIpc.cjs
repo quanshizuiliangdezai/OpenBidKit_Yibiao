@@ -108,6 +108,90 @@ function registerKbTeamIpc({ kbTeamService, kbAuthService }) {
       return { success: false, error: error?.message || '下载文档失败' };
     }
   });
+
+  // C1 重命名文件夹
+  ipcMain.handle('kb-team:rename-folder', async (_event, folderId, name) => {
+    try {
+      if (!kbAuthService.isLoggedIn()) return { success: false, error: '未登录团队库', needLogin: true };
+      const result = await kbTeamService.renameFolder(folderId, name);
+      return { success: true, data: result };
+    } catch (error) {
+      return { success: false, error: error?.message || '重命名文件夹失败' };
+    }
+  });
+
+  // E2 移动文件夹
+  ipcMain.handle('kb-team:move-folder', async (_event, folderId, parentId) => {
+    try {
+      if (!kbAuthService.isLoggedIn()) return { success: false, error: '未登录团队库', needLogin: true };
+      const result = await kbTeamService.moveFolder(folderId, parentId);
+      return { success: true, data: result };
+    } catch (error) {
+      return { success: false, error: error?.message || '移动文件夹失败' };
+    }
+  });
+
+  // E2 移动文档
+  ipcMain.handle('kb-team:move-document', async (_event, documentId, folderId) => {
+    try {
+      if (!kbAuthService.isLoggedIn()) return { success: false, error: '未登录团队库', needLogin: true };
+      const result = await kbTeamService.moveDocument(documentId, folderId);
+      return { success: true, data: result };
+    } catch (error) {
+      return { success: false, error: error?.message || '移动文档失败' };
+    }
+  });
+
+  // C5 搜索（name / content 双模式）
+  ipcMain.handle('kb-team:search', async (_event, query, mode) => {
+    try {
+      if (!kbAuthService.isLoggedIn()) return { success: false, error: '未登录团队库', needLogin: true };
+      const docs = await kbTeamService.searchDocuments(query, mode);
+      return { success: true, data: docs };
+    } catch (error) {
+      return { success: false, error: error?.message || '搜索失败' };
+    }
+  });
+
+  // C3 回收站列表
+  ipcMain.handle('kb-team:list-trash', async () => {
+    try {
+      if (!kbAuthService.isLoggedIn()) return { success: false, error: '未登录团队库', needLogin: true };
+      const data = await kbTeamService.listTrash();
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, error: error?.message || '获取回收站失败' };
+    }
+  });
+
+  // C3 从回收站恢复
+  ipcMain.handle('kb-team:restore-from-trash', async (_event, type, id) => {
+    try {
+      if (!kbAuthService.isLoggedIn()) return { success: false, error: '未登录团队库', needLogin: true };
+      const data = await kbTeamService.restoreFromTrash(type, id);
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, error: error?.message || '恢复失败' };
+    }
+  });
+
+  // C2 批量导出 zip（弹保存对话框）
+  ipcMain.handle('kb-team:export-zip', async (_event, ids) => {
+    try {
+      if (!kbAuthService.isLoggedIn()) return { success: false, error: '未登录团队库', needLogin: true };
+      if (!Array.isArray(ids) || ids.length === 0) return { success: false, error: '未选择文档' };
+      const result = await dialog.showSaveDialog({
+        title: '导出为 ZIP',
+        defaultPath: path.join(os.homedir(), 'team_documents.zip'),
+        filters: [{ name: 'ZIP 压缩包', extensions: ['zip'] }],
+      });
+      if (result.canceled || !result.filePath) return { success: false, canceled: true };
+      await kbTeamService.exportZip(ids, result.filePath);
+      return { success: true, data: { localPath: result.filePath } };
+    } catch (error) {
+      return { success: false, error: error?.message || '导出失败' };
+    }
+  });
 }
 
 module.exports = { registerKbTeamIpc };

@@ -72,9 +72,16 @@ function createKbPersonalService({ app, kbAuthService }) {
     }
   }
 
-  async function searchDocuments(keyword) {
+  /**
+   * 个人库搜索。mode='name' 仅文件名；mode='content' 全文检索。
+   * 服务端契约：GET /api/personal/documents?q=<kw>&mode=name|content
+   */
+  async function searchDocuments(keyword, mode) {
     try {
-      const res = await fetch(`${baseUrl()}/api/documents?q=${encodeURIComponent(keyword)}`, {
+      const params = new URLSearchParams();
+      params.set('q', keyword);
+      if (mode) params.set('mode', mode);
+      const res = await fetch(`${baseUrl()}/api/personal/documents?${params.toString()}`, {
         headers: authHeaders(),
       });
       if (!res.ok) return [];
@@ -126,6 +133,18 @@ function createKbPersonalService({ app, kbAuthService }) {
     return data;
   }
 
+  /** 个人库删除文档（进回收站）：DELETE /api/personal/documents/{id} */
+  async function deleteDocument(documentId) {
+    try { fs.rmSync(path.join(CACHE_DIR, `${documentId}.json`), { force: true }); } catch { /* noop */ }
+    const res = await fetch(`${baseUrl()}/api/personal/documents/${encodeURIComponent(documentId)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error || `删除文档失败（${res.status}）`);
+    return data?.data || data || { success: true };
+  }
+
   /** 个人库移动文件夹（parentId 为空表示移动到根目录） */
   async function moveFolder(folderId, parentId) {
     const res = await fetch(`${baseUrl()}/api/personal/folders/${encodeURIComponent(folderId)}`, {
@@ -136,6 +155,70 @@ function createKbPersonalService({ app, kbAuthService }) {
     const data = await res.json().catch(() => null);
     if (!res.ok) throw new Error(data?.error || `移动文件夹失败（${res.status}）`);
     return data;
+  }
+
+  /** 个人库重命名文件夹：PUT /api/personal/folders/{id} body {name} */
+  async function renameFolder(folderId, name) {
+    const res = await fetch(`${baseUrl()}/api/personal/folders/${encodeURIComponent(folderId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error || `重命名文件夹失败（${res.status}）`);
+    return data;
+  }
+
+  /** 个人库移动文档：PUT /api/personal/documents/{id} body {folder_id} */
+  async function moveDocument(documentId, folderId) {
+    const res = await fetch(`${baseUrl()}/api/personal/documents/${encodeURIComponent(documentId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ folder_id: folderId }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error || `移动文档失败（${res.status}）`);
+    return data;
+  }
+
+  /** 个人库回收站列表（24h 内可恢复） */
+  async function listTrash() {
+    try {
+      const res = await fetch(`${baseUrl()}/api/personal/trash`, { headers: authHeaders() });
+      if (!res.ok) return { folders: [], documents: [] };
+      const data = await res.json();
+      return data?.data || { folders: [], documents: [] };
+    } catch {
+      return { folders: [], documents: [] };
+    }
+  }
+
+  /** 个人库从回收站恢复：POST /api/personal/trash/restore body {type, id} */
+  async function restoreFromTrash(type, id) {
+    const res = await fetch(`${baseUrl()}/api/personal/trash/restore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ type, id }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error || `恢复失败（${res.status}）`);
+    return data || { success: true };
+  }
+
+  /** 个人库导出选中文档为 zip 保存到 destPath。ids: (string|number)[] */
+  async function exportZip(ids, destPath) {
+    const idStr = (Array.isArray(ids) ? ids : [ids]).map(String).join(',');
+    const url = `${baseUrl()}/api/personal/documents/export?ids=${encodeURIComponent(idStr)}`;
+    const res = await fetch(url, { headers: authHeaders() });
+    if (!res.ok) {
+      let msg = `导出失败（${res.status}）`;
+      try { const j = await res.json(); if (j?.error) msg = j.error; } catch { /* noop */ }
+      throw new Error(msg);
+    }
+    const buffer = Buffer.from(await res.arrayBuffer());
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    fs.writeFileSync(destPath, buffer);
+    return destPath;
   }
 
   /** 个人库文档 → 团队库（documentIds: string[]，targetTeamFolderId: 团队库目标文件夹，folderIds: 个人库文件夹id[] 整文件夹同步） */
@@ -174,7 +257,13 @@ function createKbPersonalService({ app, kbAuthService }) {
     createFolder,
     uploadDocument,
     deleteFolder,
+    deleteDocument,
     moveFolder,
+    renameFolder,
+    moveDocument,
+    listTrash,
+    restoreFromTrash,
+    exportZip,
     importToTeam,
     importFromTeam,
   };

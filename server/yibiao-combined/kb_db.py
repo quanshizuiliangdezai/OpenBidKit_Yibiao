@@ -126,6 +126,8 @@ def init_db():
     # 一次性迁移：旧库 owner_id 为 NOT NULL 且无 ON DELETE 规则，删员工会被外键挡住。
     # 迁移为可空 + ON DELETE SET NULL，配套 update_employee / delete_employee 实现「只删账号、保 KB」。
     _migrate_owner_id_to_nullable()
+    # 回收站软删列 + 全文检索列（向后兼容旧库）
+    _migrate_recycle_and_fulltext_columns()
     _ensure_admin()
 
 
@@ -214,6 +216,29 @@ def _migrate_owner_id_to_nullable():
             conn.commit()
         finally:
             conn.execute("PRAGMA foreign_keys=ON")
+    finally:
+        conn.close()
+
+
+def _migrate_recycle_and_fulltext_columns():
+    """向后兼容迁移：给知识库表加回收站软删列 + 全文检索列。
+
+    - knowledge_folders / knowledge_documents 增加 deleted_at（软删时间戳，NULL=未删）
+    - knowledge_documents 增加 content_text（上传时抽取的纯文本，供全文检索）
+    只迁移一次，已存在的列跳过。
+    """
+    conn = _conn()
+    try:
+        for tbl in ('knowledge_folders', 'knowledge_documents'):
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(%s)" % tbl).fetchall()}
+            if 'deleted_at' not in cols:
+                conn.execute("ALTER TABLE %s ADD COLUMN deleted_at TEXT" % tbl)
+            if 'deleted_by' not in cols:
+                conn.execute("ALTER TABLE %s ADD COLUMN deleted_by TEXT" % tbl)
+        doc_cols = {r[1] for r in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()}
+        if 'content_text' not in doc_cols:
+            conn.execute("ALTER TABLE knowledge_documents ADD COLUMN content_text TEXT")
+        conn.commit()
     finally:
         conn.close()
 
@@ -832,15 +857,21 @@ def ensure_all_root_folders():
 
 # ---------- 文件夹 CRUD ----------
 
-def _subtree_ids(root_id):
-    """返回 root_id 及其所有后代文件夹 id 集合（BFS）。"""
+def _subtree_ids(root_id, include_deleted=False):
+    """返回 root_id 及其所有后代文件夹 id 集合（BFS）。
+
+    include_deleted=True 时连已被软删的文件夹也纳入（用于回收站级联删除/恢复）。
+    """
     result = {root_id}
     queue = [root_id]
     conn = _conn()
     try:
         while queue:
             cur = queue.pop()
-            rows = conn.execute("SELECT id FROM knowledge_folders WHERE parent_id=?", (cur,)).fetchall()
+            q = "SELECT id FROM knowledge_folders WHERE parent_id=?"
+            if not include_deleted:
+                q += " AND (deleted_at IS NULL OR deleted_at='')"
+            rows = conn.execute(q, (cur,)).fetchall()
             for r in rows:
                 if r['id'] not in result:
                     result.add(r['id'])
@@ -881,22 +912,28 @@ def create_folder(name, parent_id, owner_id):
             conn.close()
 
 
-def list_folders():
+def list_folders(include_deleted=False):
     with _lock:
         conn = _conn()
         try:
-            rows = conn.execute(
-                "SELECT id,name,parent_id,owner_id,created_at FROM knowledge_folders ORDER BY name").fetchall()
+            q = ("SELECT id,name,parent_id,owner_id,created_at,deleted_at FROM knowledge_folders"
+                 " WHERE (deleted_at IS NULL OR deleted_at='')" if not include_deleted
+                 else "SELECT id,name,parent_id,owner_id,created_at,deleted_at FROM knowledge_folders")
+            q += " ORDER BY name"
+            rows = conn.execute(q).fetchall()
             return [dict(r) for r in rows]
         finally:
             conn.close()
 
 
-def get_folder(folder_id):
+def get_folder(folder_id, include_deleted=False):
     with _lock:
         conn = _conn()
         try:
-            r = conn.execute("SELECT * FROM knowledge_folders WHERE id=?", (int(folder_id),)).fetchone()
+            q = "SELECT * FROM knowledge_folders WHERE id=?"
+            if not include_deleted:
+                q += " AND (deleted_at IS NULL OR deleted_at='')"
+            r = conn.execute(q, (int(folder_id),)).fetchone()
             return dict(r) if r else None
         finally:
             conn.close()
@@ -913,20 +950,141 @@ def _remove_file(rel_path):
         pass
 
 
-def delete_folder(folder_id):
-    """硬删：先删物理文件，再删文件夹行（外键级联删子文件夹与文档行）。"""
+def delete_folder(folder_id, deleted_by=None):
+    """软删（进回收站）：标记文件夹及其所有后代文件夹、文档的 deleted_at。
+
+    物理文件保留，待 purge_expired_trash 超时后物理删除。
+    返回 (True, None) 或 (False, 错误)。
+    """
     with _lock:
         conn = _conn()
         try:
-            ids = list(_subtree_ids(int(folder_id)))
+            ids = list(_subtree_ids(int(folder_id), include_deleted=True))
             if not ids:
                 return False, '文件夹不存在'
+            ts = datetime.datetime.now().isoformat()
+            ph = ','.join('?' * len(ids))
+            # 级联标记后代文件夹
+            conn.execute(
+                "UPDATE knowledge_folders SET deleted_at=?, deleted_by=? WHERE id IN (%s)" % ph,
+                [ts, str(deleted_by) if deleted_by is not None else None] + ids)
+            # 级联标记其下所有文档
+            docs = conn.execute(
+                "SELECT id FROM knowledge_documents WHERE folder_id IN (%s)" % ph, ids).fetchall()
+            if docs:
+                dph = ','.join('?' * len(docs))
+                conn.execute(
+                    "UPDATE knowledge_documents SET deleted_at=?, deleted_by=? WHERE id IN (%s)" % dph,
+                    [ts, str(deleted_by) if deleted_by is not None else None] + [d['id'] for d in docs])
+            conn.commit()
+            return True, None
+        finally:
+            conn.close()
+
+
+def _hard_delete_folder_tree(folder_id):
+    """物理硬删：彻底删除文件夹树及其文档与物理文件（回收站清理用）。"""
+    with _lock:
+        conn = _conn()
+        try:
+            ids = list(_subtree_ids(int(folder_id), include_deleted=True))
             ph = ','.join('?' * len(ids))
             docs = conn.execute(
                 "SELECT id,file_path FROM knowledge_documents WHERE folder_id IN (%s)" % ph, ids).fetchall()
             for d in docs:
                 _remove_file(d['file_path'])
+            conn.execute("DELETE FROM knowledge_documents WHERE folder_id IN (%s)" % ph, ids)
             conn.execute("DELETE FROM knowledge_folders WHERE id IN (%s)" % ph, ids)
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def restore_folder(folder_id):
+    """从回收站恢复：取消文件夹及其后代、文档的 deleted_at。"""
+    with _lock:
+        conn = _conn()
+        try:
+            ids = list(_subtree_ids(int(folder_id), include_deleted=True))
+            if not ids:
+                return False, '文件夹不存在'
+            ph = ','.join('?' * len(ids))
+            conn.execute(
+                "UPDATE knowledge_folders SET deleted_at=NULL WHERE id IN (%s)" % ph, ids)
+            conn.execute(
+                "UPDATE knowledge_documents SET deleted_at=NULL WHERE folder_id IN (%s)" % ph, ids)
+            conn.commit()
+            return True, None
+        finally:
+            conn.close()
+
+
+def rename_folder(folder_id, name):
+    name = (name or '').strip()
+    if not name:
+        return False, '文件夹名不能为空'
+    with _lock:
+        conn = _conn()
+        try:
+            r = conn.execute(
+                "SELECT id FROM knowledge_folders WHERE id=? AND (deleted_at IS NULL OR deleted_at='')",
+                (int(folder_id),)).fetchone()
+            if not r:
+                return False, '文件夹不存在'
+            conn.execute("UPDATE knowledge_folders SET name=? WHERE id=?", (name, int(folder_id)))
+            conn.commit()
+            return True, None
+        finally:
+            conn.close()
+
+
+def move_folder(folder_id, new_parent_id):
+    """移动文件夹到 new_parent_id 下（None/0 表示根目录）。含防环校验：不能移到自身或自己的后代下。"""
+    fid = int(folder_id)
+    with _lock:
+        conn = _conn()
+        try:
+            r = conn.execute(
+                "SELECT id FROM knowledge_folders WHERE id=? AND (deleted_at IS NULL OR deleted_at='')",
+                (fid,)).fetchone()
+            if not r:
+                return False, '文件夹不存在'
+            pid = None if new_parent_id in (None, '', 0, '0') else int(new_parent_id)
+            if pid is not None:
+                p = conn.execute(
+                    "SELECT id FROM knowledge_folders WHERE id=? AND (deleted_at IS NULL OR deleted_at='')",
+                    (pid,)).fetchone()
+                if not p:
+                    return False, '目标文件夹不存在'
+                # 防环：目标不能是自身或自己的后代
+                subtree = _subtree_ids(fid, include_deleted=True)
+                if pid in subtree:
+                    return False, '不能移动到自身或其子文件夹下'
+            conn.execute("UPDATE knowledge_folders SET parent_id=? WHERE id=?", (pid, fid))
+            conn.commit()
+            return True, None
+        finally:
+            conn.close()
+
+
+def move_document(doc_id, new_folder_id):
+    """移动文档到 new_folder_id 下。校验文档与目标文件夹均存在且未删除。"""
+    did = int(doc_id)
+    with _lock:
+        conn = _conn()
+        try:
+            d = conn.execute(
+                "SELECT id FROM knowledge_documents WHERE id=? AND (deleted_at IS NULL OR deleted_at='')",
+                (did,)).fetchone()
+            if not d:
+                return False, '文档不存在'
+            fid = int(new_folder_id)
+            f = conn.execute(
+                "SELECT id FROM knowledge_folders WHERE id=? AND (deleted_at IS NULL OR deleted_at='')",
+                (fid,)).fetchone()
+            if not f:
+                return False, '目标文件夹不存在'
+            conn.execute("UPDATE knowledge_documents SET folder_id=? WHERE id=?", (fid, did))
             conn.commit()
             return True, None
         finally:
@@ -935,10 +1093,42 @@ def delete_folder(folder_id):
 
 # ---------- 文档（上传/列表/下载/硬删）----------
 
+def _extract_text_for_search(data, file_name, mime_type):
+    """从上传内容中抽取纯文本，供全文检索。仅对文本类文件尽力而为，其它类型返回空。"""
+    try:
+        ext = (file_name or '').lower().rsplit('.', 1)[-1] if '.' in (file_name or '') else ''
+        textish = {'txt', 'md', 'markdown', 'csv', 'json', 'log', 'xml', 'html', 'htm', 'text', 'yaml', 'yml', 'ini', 'conf'}
+        if ext in textish or (mime_type or '').startswith('text/'):
+            try:
+                return data[:200000].decode('utf-8', 'replace')
+            except Exception:
+                return ''
+        # PDF / DOCX 全文：若服务器装了对应库则抽取，否则跳过（不阻断上传）
+        if ext == 'pdf':
+            try:
+                from PyPDF2 import PdfReader
+                import io as _io
+                reader = PdfReader(_io.BytesIO(data))
+                return '\n'.join((p.extract_text() or '') for p in reader.pages)[:200000]
+            except Exception:
+                return ''
+        if ext in ('docx', 'doc'):
+            try:
+                import docx
+                d = docx.Document(_io.BytesIO(data))
+                return '\n'.join(par.text for par in d.paragraphs)[:200000]
+            except Exception:
+                return ''
+    except Exception:
+        return ''
+    return ''
+
+
 def upload_document(folder_id, owner_id, title, file_name, mime_type, data):
     folder_id = int(folder_id)
     if not data:
         return None, '文件内容为空'
+    content_text = _extract_text_for_search(data, file_name, mime_type)
     with _lock:
         conn = _conn()
         try:
@@ -948,9 +1138,9 @@ def upload_document(folder_id, owner_id, title, file_name, mime_type, data):
             now = datetime.datetime.now().isoformat()
             cur = conn.execute(
                 "INSERT INTO knowledge_documents "
-                "(folder_id,owner_id,title,file_name,file_path,file_size,mime_type,created_at) "
-                "VALUES (?,?,?,?,?,?,?,?)",
-                (folder_id, owner_id, title, file_name, '', 0, mime_type, now))
+                "(folder_id,owner_id,title,file_name,file_path,file_size,mime_type,created_at,content_text) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (folder_id, owner_id, title, file_name, '', 0, mime_type, now, content_text))
             doc_id = cur.lastrowid
             # 物理文件以 doc_id 命名存入 KB_DATA_DIR（避免中文/特殊文件名问题）
             rel = str(doc_id)
@@ -968,35 +1158,58 @@ def upload_document(folder_id, owner_id, title, file_name, mime_type, data):
             conn.close()
 
 
-def list_documents(folder_id=None):
-    """folder_id=None 时返回所有文档（无参数调用）。"""
+def list_documents(folder_id=None, include_deleted=False):
+    """folder_id=None 时返回所有文档（无参数调用）。默认过滤已进回收站的文档。"""
     with _lock:
         conn = _conn()
         try:
+            base = ("SELECT id,folder_id,owner_id,title,file_name,file_size,mime_type,created_at,deleted_at "
+                    "FROM knowledge_documents")
+            if not include_deleted:
+                base += " WHERE (deleted_at IS NULL OR deleted_at='')"
             if folder_id is None:
-                rows = conn.execute(
-                    "SELECT id,folder_id,owner_id,title,file_name,file_size,mime_type,created_at "
-                    "FROM knowledge_documents ORDER BY title").fetchall()
+                q = base + " ORDER BY title" if include_deleted else base + " ORDER BY title"
             else:
-                rows = conn.execute(
-                    "SELECT id,folder_id,owner_id,title,file_name,file_size,mime_type,created_at "
-                    "FROM knowledge_documents WHERE folder_id=? ORDER BY title",
-                    (int(folder_id),)).fetchall()
+                q = (base + " AND folder_id=?" if not include_deleted
+                     else base + " WHERE folder_id=?") + " ORDER BY title"
+                rows = conn.execute(q, (int(folder_id),)).fetchall()
+                return [dict(r) for r in rows]
+            rows = conn.execute(q).fetchall()
             return [dict(r) for r in rows]
         finally:
             conn.close()
 
 
 def search_documents(keyword):
-    """模糊搜索知识库文档标题/文件名。"""
+    """按文件名/标题模糊搜索（回收站外）。"""
     with _lock:
         conn = _conn()
         try:
             pattern = '%{}%'.format(keyword.replace('%', '').replace('_', ''))
             rows = conn.execute(
                 "SELECT id,folder_id,owner_id,title,file_name,file_size,mime_type,created_at "
-                "FROM knowledge_documents WHERE title LIKE ? OR file_name LIKE ? ORDER BY title",
+                "FROM knowledge_documents "
+                "WHERE (deleted_at IS NULL OR deleted_at='') AND (title LIKE ? OR file_name LIKE ?) "
+                "ORDER BY title",
                 (pattern, pattern)).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+
+def search_documents_fulltext(keyword):
+    """全文检索：标题/文件名/抽取正文（content_text）模糊匹配。"""
+    with _lock:
+        conn = _conn()
+        try:
+            pattern = '%{}%'.format(keyword.replace('%', '').replace('_', ''))
+            rows = conn.execute(
+                "SELECT id,folder_id,owner_id,title,file_name,file_size,mime_type,created_at "
+                "FROM knowledge_documents "
+                "WHERE (deleted_at IS NULL OR deleted_at='') AND "
+                "(title LIKE ? OR file_name LIKE ? OR COALESCE(content_text,'') LIKE ?) "
+                "ORDER BY title",
+                (pattern, pattern, pattern)).fetchall()
             return [dict(r) for r in rows]
         finally:
             conn.close()
@@ -1012,8 +1225,27 @@ def get_document(doc_id):
             conn.close()
 
 
-def delete_document(doc_id):
-    """硬删：删行 + 物理删文件。"""
+def delete_document(doc_id, deleted_by=None):
+    """软删（进回收站）：标记 deleted_at，物理文件保留待清理。"""
+    with _lock:
+        conn = _conn()
+        try:
+            r = conn.execute(
+                "SELECT id FROM knowledge_documents WHERE id=? AND (deleted_at IS NULL OR deleted_at='')",
+                (int(doc_id),)).fetchone()
+            if not r:
+                return False, '文档不存在'
+            ts = datetime.datetime.now().isoformat()
+            conn.execute(
+                "UPDATE knowledge_documents SET deleted_at=?, deleted_by=? WHERE id=?",
+                (ts, str(deleted_by) if deleted_by is not None else None, int(doc_id)))
+            conn.commit()
+            return True, None
+        finally:
+            conn.close()
+
+
+def _hard_delete_document(doc_id):
     with _lock:
         conn = _conn()
         try:
@@ -1024,5 +1256,62 @@ def delete_document(doc_id):
             conn.execute("DELETE FROM knowledge_documents WHERE id=?", (int(doc_id),))
             conn.commit()
             return True, None
+        finally:
+            conn.close()
+
+
+def restore_document(doc_id):
+    with _lock:
+        conn = _conn()
+        try:
+            r = conn.execute("SELECT id FROM knowledge_documents WHERE id=?", (int(doc_id),)).fetchone()
+            if not r:
+                return False, '文档不存在'
+            conn.execute("UPDATE knowledge_documents SET deleted_at=NULL WHERE id=?", (int(doc_id),))
+            conn.commit()
+            return True, None
+        finally:
+            conn.close()
+
+
+def list_trash():
+    """返回回收站内容：已软删的文件夹与文档（含 deleted_by 供恢复权限判断）。"""
+    with _lock:
+        conn = _conn()
+        try:
+            folders = conn.execute(
+                "SELECT id,name,parent_id,owner_id,created_at,deleted_at,deleted_by FROM knowledge_folders "
+                "WHERE deleted_at IS NOT NULL AND deleted_at<>'' ORDER BY deleted_at DESC").fetchall()
+            docs = conn.execute(
+                "SELECT id,folder_id,owner_id,title,file_name,file_size,mime_type,created_at,deleted_at,deleted_by "
+                "FROM knowledge_documents WHERE deleted_at IS NOT NULL AND deleted_at<>'' ORDER BY deleted_at DESC").fetchall()
+            return {
+                'folders': [dict(r) for r in folders],
+                'documents': [dict(r) for r in docs],
+            }
+        finally:
+            conn.close()
+
+
+def purge_expired_trash(hours=24):
+    """物理清理超过 hours 小时的回收站内容。返回 (folders, docs) 清理数量。"""
+    cutoff = (datetime.datetime.now() - datetime.timedelta(hours=hours)).isoformat()
+    nf = nd = 0
+    with _lock:
+        conn = _conn()
+        try:
+            frows = conn.execute(
+                "SELECT id FROM knowledge_folders WHERE deleted_at IS NOT NULL AND deleted_at<>'' AND deleted_at<?",
+                (cutoff,)).fetchall()
+            for f in frows:
+                _hard_delete_folder_tree(f['id'])
+                nf += 1
+            drows = conn.execute(
+                "SELECT id FROM knowledge_documents WHERE deleted_at IS NOT NULL AND deleted_at<>'' AND deleted_at<?",
+                (cutoff,)).fetchall()
+            for d in drows:
+                _hard_delete_document(d['id'])
+                nd += 1
+            return nf, nd
         finally:
             conn.close()
