@@ -430,7 +430,7 @@ async function fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, 
     return response;
   }
 
-  const error = await createAiHttpErrorFromResponse(response, fallbackMessage, {
+  let error = await createAiHttpErrorFromResponse(response, fallbackMessage, {
     source: options.source || 'openai-compatible-image-model',
     responseFormatUnsupportedChecker: isResponseFormatUnsupported,
   });
@@ -441,6 +441,12 @@ async function fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, 
     const retryResponse = await sendRequest(retryBody);
     await ensureOk(retryResponse, fallbackMessage, { source: options.source || 'openai-compatible-image-model' });
     return retryResponse;
+  }
+
+  // agnes 图片生成路径偶发返回 422 Invalid request（上游瞬时故障，proxy 已重试仍可能落到客户端）。
+  // 这里仅对生图路径标记可重试，交给上层 runWithAiRetry 自动重试；文本/Chat 请求的 422 不受影响。
+  if (response.status === 422 && !error.responseFormatUnsupported) {
+    error = markAiRequestError(error, { retryable: true });
   }
 
   throw error;
