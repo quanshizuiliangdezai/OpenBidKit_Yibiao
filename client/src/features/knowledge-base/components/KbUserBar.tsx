@@ -10,7 +10,7 @@ interface KbUserBarProps {
 function KbUserBar({ status, onLogout, onManage }: KbUserBarProps) {
   const employee = status.employee;
   const displayName = employee?.display_name || employee?.username || '未知用户';
-  const roleLabel = employee?.role === 'admin' ? '管理员' : '员工';
+  const roleLabel = employee?.role === 'admin' ? '管理员' : '成员';
   const isAdmin = employee?.role === 'admin';
 
   return (

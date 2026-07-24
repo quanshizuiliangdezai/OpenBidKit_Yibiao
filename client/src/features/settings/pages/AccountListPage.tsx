@@ -74,10 +74,10 @@ export default function AccountListPage() {
     setLoading(true);
     try {
       const res = await window.yibiao.kbAuth.listEmployees();
-      if (!res?.success) throw new Error(res?.error || '获取员工列表失败');
+      if (!res?.success) throw new Error(res?.error || '获取成员列表失败');
       setEmployees((res.data || []) as EmployeeRow[]);
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '获取员工列表失败', 'error');
+      showToast(error instanceof Error ? error.message : '获取成员列表失败', 'error');
     } finally {
       setLoading(false);
     }
@@ -349,7 +349,7 @@ export default function AccountListPage() {
                       <td>{e.display_name || '-'}</td>
                       <td>{e.username}</td>
                       <td>{typeof e.department === 'string' && e.department ? e.department : '-'}</td>
-                      <td>{e.role === 'admin' ? '管理员' : '员工'}</td>
+                      <td>{e.role === 'admin' ? '管理员' : '成员'}</td>
                       <td>
                         {e.groups && e.groups.length ? (
                           <span className="account-group-tags">
@@ -412,7 +412,7 @@ export default function AccountListPage() {
                 <label>
                   角色
                   <select value={addForm.role} onChange={(ev) => setAddForm({ ...addForm, role: ev.target.value })}>
-                    <option value="employee">员工</option>
+                    <option value="employee">成员</option>
                     <option value="admin">管理员</option>
                   </select>
                 </label>
@@ -483,7 +483,7 @@ export default function AccountListPage() {
                 <label>
                   角色（权限）
                   <select value={editForm.role} onChange={(ev) => setEditForm({ ...editForm, role: ev.target.value })}>
-                    <option value="employee">员工</option>
+                    <option value="employee">成员</option>
                     <option value="admin">管理员</option>
                   </select>
                 </label>

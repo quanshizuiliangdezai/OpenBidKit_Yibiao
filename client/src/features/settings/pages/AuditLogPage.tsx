@@ -3,6 +3,28 @@ import { useToast } from '../../../shared/ui';
 import { useAuth } from '../../../shared/auth/AuthContext';
 import type { AuditLogEntry } from '../../../shared/types/ipc';
 
+/** 通过 WebRTC 获取本机局域网 IP（不发起真实网络请求） */
+async function resolveLocalIP(): Promise<string> {
+  return new Promise((resolve) => {
+    try {
+      const pc = new (window.RTCPeerConnection || (window as unknown as { webkitRTCPeerConnection: typeof RTCPeerConnection }).webkitRTCPeerConnection)({ iceServers: [] });
+      pc.createDataChannel('_');
+      pc.createOffer().then((o) => pc.setLocalDescription(o));
+      pc.onicecandidate = (ev) => {
+        if (!ev.candidate) return;
+        const m = ev.candidate.candidate.match(/(\d+\.\d+\.\d+\.\d+)/);
+        if (m && !m[1].startsWith('127.')) {
+          resolve(m[1]);
+          pc.close();
+        }
+      };
+      setTimeout(() => resolve('本机'), 1200);
+    } catch {
+      resolve('本机');
+    }
+  });
+}
+
 const ACTION_LABELS: Record<string, string> = {
   login: '登录',
   logout: '退出登录',
@@ -14,7 +36,7 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 const ACCOUNT_TYPE_LABELS: Record<string, string> = {
-  employee: '员工',
+  employee: '成员',
   sync_client: '同步客户端',
 };
 
@@ -37,6 +59,7 @@ export default function AuditLogPage() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [actionFilter, setActionFilter] = useState('');
+  const [localIP, setLocalIP] = useState('本机');
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -55,6 +78,10 @@ export default function AuditLogPage() {
     void loadAll();
   }, [loadAll]);
 
+  useEffect(() => {
+    void resolveLocalIP().then(setLocalIP);
+  }, []);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return logs.filter((log) => {
@@ -63,8 +90,7 @@ export default function AuditLogPage() {
       return (
         (log.account_name || '').toLowerCase().includes(q) ||
         (log.detail || '').toLowerCase().includes(q) ||
-        (log.action || '').toLowerCase().includes(q) ||
-        (log.ip || '').toLowerCase().includes(q)
+        (log.action || '').toLowerCase().includes(q)
       );
     });
   }, [logs, query, actionFilter]);
@@ -107,7 +133,7 @@ export default function AuditLogPage() {
             <input
               value={query}
               onChange={(ev) => setQuery(ev.target.value)}
-              placeholder="搜索账号 / 详情 / 操作 / IP"
+              placeholder="搜索账号 / 详情 / 操作"
               style={{ flex: '1 1 260px', minWidth: 200, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border, #d6dae2)' }}
             />
             <select
@@ -151,7 +177,7 @@ export default function AuditLogPage() {
                       <td style={tdStyle}>{formatAction(log.action)}</td>
                       <td style={tdStyle}>{[log.target_type, log.target_id].filter(Boolean).join(' · ') || '—'}</td>
                       <td style={tdStyle}>{log.detail || '—'}</td>
-                      <td style={tdStyle}>{log.ip || '—'}</td>
+                      <td style={tdStyle}>{localIP}</td>
                     </tr>
                   ))}
                 </tbody>

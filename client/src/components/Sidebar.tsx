@@ -148,7 +148,7 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
 
 const ROLE_LABEL: Record<string, string> = {
   admin: '管理员',
-  employee: '员工',
+  employee: '成员',
 };
 
 function getInitials(name: string) {
@@ -167,7 +167,7 @@ function renderUserCard(
   if (!employee) return null;
   const displayName = (employee.display_name || employee.username || '未命名').trim();
   const roleKey = employee.role === 'admin' ? 'admin' : 'employee';
-  const roleLabel = ROLE_LABEL[roleKey] || '员工';
+  const roleLabel = ROLE_LABEL[roleKey] || '成员';
   const dept = (employee.department || '').toString().trim();
   const subtitle = dept ? `${roleLabel} · ${dept}` : roleLabel;
   const initials = getInitials(displayName);

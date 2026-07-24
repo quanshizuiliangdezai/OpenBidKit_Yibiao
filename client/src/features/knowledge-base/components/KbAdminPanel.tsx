@@ -33,11 +33,11 @@ function KbAdminPanel({ status, onClose }: KbAdminPanelProps) {
     try {
       const res = await window.yibiao?.kbAuth.listEmployees();
       if (!res?.success) {
-        throw new Error(res?.error || '获取员工列表失败');
+        throw new Error(res?.error || '获取成员列表失败');
       }
       setEmployees(res.data || []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '获取员工列表失败');
+      setError(err instanceof Error ? err.message : '获取成员列表失败');
     } finally {
       setLoading(false);
     }
@@ -156,7 +156,7 @@ function KbAdminPanel({ status, onClose }: KbAdminPanelProps) {
         {loading ? (
           <div className="kb-admin-empty">加载中...</div>
         ) : employees.length === 0 ? (
-          <div className="kb-admin-empty">暂无员工</div>
+          <div className="kb-admin-empty">暂无成员</div>
         ) : (
           <table className="kb-admin-table">
             <thead>
@@ -175,7 +175,7 @@ function KbAdminPanel({ status, onClose }: KbAdminPanelProps) {
                   <td>{e.username}</td>
                   <td>{e.display_name || '-'}</td>
                   <td>{typeof e.department === 'string' ? e.department : '-'}</td>
-                  <td>{e.role === 'admin' ? '管理员' : '员工'}</td>
+                  <td>{e.role === 'admin' ? '管理员' : '成员'}</td>
                   <td>
                     <span className={`kb-admin-tag ${STATUS_CLASS[e.status || 'pending'] || 'pending'}`}>
                       {STATUS_LABEL[e.status || 'pending'] || e.status}
