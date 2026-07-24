@@ -53,20 +53,21 @@ function adaptServerDocument(
 
 // 个人库文档适配：master.sqlite 已有分析状态字段，直接从服务器返回中提取
 function adaptPersonalDocument(server: KbTeamDocument): KnowledgeDocument {
+  const srv = server as Record<string, unknown>;
   return {
     id: String(server.id),
     folder_id: String(server.folder_id || ''),
-    file_name: server.title || server.name || server.original_name || '未知文档',
-    status: (server as Record<string, unknown>).status as KnowledgeDocumentStatus || ('pending' as KnowledgeDocumentStatus),
-    progress: (server as Record<string, unknown>).progress as number || 0,
-    message: (server as Record<string, unknown>).message as string || '未分析',
-    item_count: (server as Record<string, unknown>).item_count as number || 0,
-    block_count: (server as Record<string, unknown>).block_count as number || 0,
-    filtered_block_count: (server as Record<string, unknown>).filtered_block_count as number || 0,
-    candidate_item_count: (server as Record<string, unknown>).candidate_item_count as number || 0,
+    file_name: ((srv.title || server.name || server.original_name || '未知文档') as string),
+    status: (srv.status as KnowledgeDocumentStatus) || ('pending' as KnowledgeDocumentStatus),
+    progress: (srv.progress as number) || 0,
+    message: (srv.message as string) || '未分析',
+    item_count: (srv.item_count as number) || 0,
+    block_count: (srv.block_count as number) || 0,
+    filtered_block_count: (srv.filtered_block_count as number) || 0,
+    candidate_item_count: (srv.candidate_item_count as number) || 0,
     created_at: server.created_at || '',
-    updated_at: server.updated_at || server.created_at || '',
-    uploaded_by_name: (server as Record<string, unknown>).owner_name || server.uploaded_by_name,
+    updated_at: ((srv.updated_at || server.created_at || '') as string),
+    uploaded_by_name: ((srv.owner_name || server.uploaded_by_name) as string | undefined),
   };
 }
 
