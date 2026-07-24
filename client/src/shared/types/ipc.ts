@@ -663,6 +663,10 @@ export interface YibiaoBridge {
     update: (pluginId: string) => Promise<void>;
     openConfig: (pluginId: string) => Promise<void>;
     refreshMarket: () => Promise<void>;
+    clearUpdateFailedState: (pluginId: string) => Promise<boolean>;
+  },
+  kbPersonal: {
+    getTree: () => Promise<{ success: boolean; data?: KbTeamTree; error?: string; needLogin?: boolean }>;
   },
 }
 
@@ -694,6 +698,11 @@ export interface AvailablePlugin {
   enabled: boolean;
   hasConfig: boolean;
   hasUpdate?: boolean;
+  updating?: boolean;
+  updateFailed?: {
+    stage: string;
+    message: string;
+  };
 }
 
 

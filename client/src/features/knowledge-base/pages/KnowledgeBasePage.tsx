@@ -2,7 +2,7 @@ import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef,
 import * as Dialog from '@radix-ui/react-dialog';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
-import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../types';
+import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeDocument, KnowledgeDocumentStatus, KnowledgeFolder, KnowledgeItem } from '../types';
 import type { KbAuthStatus, KbTeamDocument, KbTeamFolder } from '../../../shared/types/ipc';
 import KbUserBar from '../components/KbUserBar';
 import { useAuth } from '../../../shared/auth/AuthContext';
@@ -45,6 +45,25 @@ function adaptServerDocument(
     block_count: localStatus?.block_count || 0,
     filtered_block_count: localStatus?.filtered_block_count || 0,
     candidate_item_count: localStatus?.candidate_item_count || 0,
+    created_at: server.created_at || '',
+    updated_at: server.created_at || '',
+    uploaded_by_name: server.uploaded_by_name,
+  };
+}
+
+// 个人库文档适配：master.sqlite 已有分析状态字段，直接从服务器返回中提取
+function adaptPersonalDocument(server: KbTeamDocument): KnowledgeDocument {
+  return {
+    id: String(server.id),
+    folder_id: String(server.folder_id || ''),
+    file_name: server.name || server.original_name || '未知文档',
+    status: (server as Record<string, unknown>).status as KnowledgeDocumentStatus || ('pending' as KnowledgeDocumentStatus),
+    progress: (server as Record<string, unknown>).progress as number || 0,
+    message: (server as Record<string, unknown>).message as string || '未分析',
+    item_count: (server as Record<string, unknown>).item_count as number || 0,
+    block_count: (server as Record<string, unknown>).block_count as number || 0,
+    filtered_block_count: (server as Record<string, unknown>).filtered_block_count as number || 0,
+    candidate_item_count: (server as Record<string, unknown>).candidate_item_count as number || 0,
     created_at: server.created_at || '',
     updated_at: server.created_at || '',
     uploaded_by_name: server.uploaded_by_name,
@@ -330,6 +349,7 @@ function KnowledgeBasePage() {
   const [loading, setLoading] = useState(false);
   const [authStatus, setAuthStatus] = useState<KbAuthStatus | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [kbTab, setKbTab] = useState<'team' | 'personal'>('team');
   const [viewer, setViewer] = useState<KnowledgeViewer | null>(null);
   const [viewerLoading, setViewerLoading] = useState(false);
   const [viewerTrace, setViewerTrace] = useState<RenderDebugTrace | null>(null);
@@ -368,8 +388,19 @@ function KnowledgeBasePage() {
   const visibleDocuments = documents.slice(0, Math.min(visibleDocumentCount, documents.length));
 
   useEffect(() => {
-    trackPageView(viewer ? `knowledge-base/viewer/${viewer.mode}` : 'knowledge-base/library');
-  }, [viewer?.mode]);
+    trackPageView(viewer ? `knowledge-base/viewer/${viewer.mode}` : `knowledge-base/${kbTab === 'team' ? 'team' : 'personal'}`);
+  }, [viewer?.mode, kbTab]);
+
+  // 切换 tab 时重新加载数据
+  useEffect(() => {
+    if (authStatus?.loggedIn) {
+      if (kbTab === 'team') {
+        void loadTeamTree();
+      } else {
+        void loadPersonalTree();
+      }
+    }
+  }, [kbTab]);
 
   // 方案 D：启动时检查登录状态
   useEffect(() => {
@@ -452,7 +483,11 @@ function KnowledgeBasePage() {
       const status = await window.yibiao?.kbAuth.getStatus();
       setAuthStatus(status);
       if (status?.loggedIn) {
-        await loadTeamTree();
+        if (kbTab === 'team') {
+          await loadTeamTree();
+        } else {
+          await loadPersonalTree();
+        }
       }
     } catch (error) {
       console.warn('检查团队库登录状态失败', error);
@@ -491,6 +526,35 @@ function KnowledgeBasePage() {
       ));
     } catch (error) {
       showToast(error instanceof Error ? error.message : '获取团队库失败', 'error');
+    } finally {
+      setListLoading(false);
+    }
+  };
+
+  // 从服务器获取个人库文件夹+文档列表（master.sqlite，已有分析状态）
+  const loadPersonalTree = async () => {
+    try {
+      setListLoading(true);
+      const result = await window.yibiao?.kbPersonal.getTree();
+      if (!result?.success || !result.data) {
+        if (result?.needLogin) {
+          showToast('登录已过期，请重新登录', 'error');
+          void auth.logout();
+        } else if (result?.error) {
+          showToast(result.error, 'error');
+        }
+        return;
+      }
+      const { folders: serverFolders, documents: serverDocuments } = result.data;
+      const folders = serverFolders.map(adaptServerFolder);
+      // 个人库文档已有 status/progress 等字段，无需查本地状态
+      const documents = serverDocuments.map(adaptPersonalDocument);
+      setIndex({ folders, documents });
+      setActiveFolderId((currentId) => (
+        folders.some((folder: KnowledgeFolder) => folder.id === currentId) ? currentId : folders[0]?.id || ''
+      ));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '获取个人库失败', 'error');
     } finally {
       setListLoading(false);
     }
@@ -824,7 +888,7 @@ function KnowledgeBasePage() {
     return (
       <div className="page-stack knowledge-page">
         <div className="knowledge-empty-box large">
-          <strong>正在加载团队知识库...</strong>
+          <strong>正在加载知识库...</strong>
           <p>请稍候。</p>
         </div>
       </div>
@@ -858,16 +922,24 @@ function KnowledgeBasePage() {
       <div className="page-stack knowledge-page">
         <section className="knowledge-workspace-bar">
         <div className="knowledge-breadcrumb">
-          <span>团队知识库</span>
+          <span>知识库</span>
           <strong>{activeFolder?.name || '未选择文件夹'}</strong>
           <small>{index.folders.length} 个文件夹 / {index.documents.length} 个文档</small>
         </div>
+        <div className="knowledge-toolbar-tabs">
+          <button type="button" className={`kb-tab ${kbTab === 'team' ? 'is-active' : ''}`} onClick={() => setKbTab('team')}>团队知识库</button>
+          <button type="button" className={`kb-tab ${kbTab === 'personal' ? 'is-active' : ''}`} onClick={() => setKbTab('personal')}>个人知识库</button>
+        </div>
         <div className="knowledge-toolbar-actions">
           {authStatus && <KbUserBar status={authStatus} onLogout={() => void handleLogout()} />}
-          <button type="button" className="secondary-action" onClick={() => setShowCreateFolder((value) => !value)} disabled={listLoading}>新建文件夹</button>
-          <button type="button" className="primary-action" onClick={uploadDocuments} disabled={loading || !activeFolder}>
-            {loading ? '处理中...' : '上传文档'}
-          </button>
+          {kbTab === 'team' && (
+            <>
+              <button type="button" className="secondary-action" onClick={() => setShowCreateFolder((value) => !value)} disabled={listLoading}>新建文件夹</button>
+              <button type="button" className="primary-action" onClick={uploadDocuments} disabled={loading || !activeFolder}>
+                {loading ? '处理中...' : '上传文档'}
+              </button>
+            </>
+          )}
         </div>
       </section>
 
