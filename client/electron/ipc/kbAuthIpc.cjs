@@ -155,6 +155,15 @@ function registerKbAuthIpc({ kbAuthService }) {
       return { success: false, error: error?.message || '创建账号失败' };
     }
   });
+
+  ipcMain.handle('kb-auth:list-audit', async (_event, payload) => {
+    try {
+      const limit = payload?.limit;
+      return { success: true, data: await kbAuthService.listAudit(limit ? { limit } : undefined) };
+    } catch (error) {
+      return { success: false, error: error?.message || '获取操作日志失败' };
+    }
+  });
 }
 
 module.exports = { registerKbAuthIpc };

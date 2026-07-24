@@ -42,6 +42,7 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   settings: GearIcon,
   'account-list': UserIcon,
   'permission-list': KeyIcon,
+  'audit-log': ListIcon,
 };
 
 const USER_GUIDE_URL = 'https://wiki.agnet.top/';
@@ -452,6 +453,19 @@ function LogoutIcon(props: SVGProps<SVGSVGElement>) {
       <path d="M15 3.5h3.5a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H15" />
       <path d="M10 17l-5-5 5-5" />
       <path d="M5 12h11" />
+    </svg>
+  );
+}
+
+function ListIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M8 6h11" />
+      <path d="M8 12h11" />
+      <path d="M8 18h11" />
+      <circle cx="4.5" cy="6" r="1.1" />
+      <circle cx="4.5" cy="12" r="1.1" />
+      <circle cx="4.5" cy="18" r="1.1" />
     </svg>
   );
 }

@@ -138,6 +138,12 @@ export const appMenuItems: AppMenuItem[] = [
     description: '权限分组与权限分配管理',
     requiredPermission: 'permission_manage',
   },
+  {
+    id: 'audit-log',
+    label: '操作日志',
+    description: '查看账号登录、文档操作与同步推送等审计记录',
+    requiredPermission: 'permission_manage',
+  },
 ];
 
 const developerMenuItems: AppMenuItem[] = [

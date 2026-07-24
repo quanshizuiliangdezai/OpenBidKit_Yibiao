@@ -27,6 +27,7 @@ export type SectionId =
   | 'settings'
   | 'account-list'
   | 'permission-list'
+  | 'audit-log'
   | 'plugin-manager';
 
 export interface AppMenuNotice {

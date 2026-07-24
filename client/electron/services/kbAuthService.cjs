@@ -301,6 +301,13 @@ function createKbAuthService({ app }) {
     return employee;
   }
 
+  // 拉取操作审计日志（需已登录且为 admin，apiFetch 自动注入 Bearer token）
+  async function listAudit({ limit = 200 } = {}) {
+    const { ok, status, data } = await apiFetch(`/api/admin/audit?limit=${encodeURIComponent(limit)}`);
+    if (!ok) throw new Error(data?.error || `获取操作日志失败（${status}）`);
+    return data?.data || [];
+  }
+
   function setServerUrl(serverUrl) {
     if (!serverUrl || !String(serverUrl).trim()) {
       throw new Error('服务器地址不能为空');
@@ -345,6 +352,7 @@ function createKbAuthService({ app }) {
     addGroupMember,
     removeGroupMember,
     adminCreateEmployee,
+    listAudit,
   };
 }
 

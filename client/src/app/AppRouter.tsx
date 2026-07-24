@@ -17,6 +17,7 @@ import PluginsPage from '../features/plugins/pages/PluginsPage';
 import SettingsPage from '../features/settings/pages/SettingsPage';
 import AccountListPage from '../features/settings/pages/AccountListPage';
 import PermissionListPage from '../features/settings/pages/PermissionListPage';
+import AuditLogPage from '../features/settings/pages/AuditLogPage';
 import TechnicalPlanHome from '../features/technical-plan/pages/TechnicalPlanHome';
 import SecondaryMenuPage from '../shared/ui/SecondaryMenuPage';
 
@@ -87,6 +88,8 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <AccountListPage />;
     case 'permission-list':
       return <PermissionListPage />;
+    case 'audit-log':
+      return <AuditLogPage />;
     default:
       return null;
   }

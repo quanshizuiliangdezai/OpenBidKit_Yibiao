@@ -217,6 +217,7 @@ const bridge = {
     addGroupMember: (payload) => ipcRenderer.invoke('kb-auth:add-group-member', payload),
     removeGroupMember: (payload) => ipcRenderer.invoke('kb-auth:remove-group-member', payload),
     adminCreateEmployee: (payload) => ipcRenderer.invoke('kb-auth:admin-create-employee', payload),
+    listAudit: (payload) => ipcRenderer.invoke('kb-auth:list-audit', payload),
   },
   kbTeam: {
     getTree: () => ipcRenderer.invoke('kb-team:get-tree'),

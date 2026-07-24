@@ -360,6 +360,20 @@ export interface AgentSelfCheckReportExportResult {
   message: string;
 }
 
+export interface AuditLogEntry {
+  id: number;
+  account_id: string | number | null;
+  account_name: string | null;
+  account_type: string;
+  role: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  detail: string;
+  ip: string;
+  created_at: string;
+}
+
 export interface KbAuthEmployee {
   id: string | number;
   username: string;
@@ -626,6 +640,7 @@ export interface YibiaoBridge {
     addGroupMember: (payload: { group_id: string | number; employee_id: string | number }) => Promise<{ success: boolean; error?: string }>;
     removeGroupMember: (payload: { group_id: string | number; employee_id: string | number }) => Promise<{ success: boolean; error?: string }>;
     adminCreateEmployee: (payload: { username: string; password: string; display_name: string; department?: string; role?: string; status?: string }) => Promise<{ success: boolean; error?: string; message?: string }>;
+    listAudit: (payload?: { limit?: number }) => Promise<{ success: boolean; data?: AuditLogEntry[]; error?: string }>;
   };
   kbTeam: {
     getTree: () => Promise<{ success: boolean; data?: KbTeamTree; error?: string; needLogin?: boolean }>;
