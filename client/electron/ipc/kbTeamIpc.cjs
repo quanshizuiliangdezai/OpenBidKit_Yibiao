@@ -40,6 +40,7 @@ function registerKbTeamIpc({ kbTeamService, kbAuthService }) {
       const result = await kbTeamService.deleteFolder(folderId);
       return { success: true, data: result };
     } catch (error) {
+      console.error('[kb-team:delete-folder] error:', error);
       return { success: false, error: error?.message || '删除文件夹失败' };
     }
   });

@@ -68,7 +68,8 @@ CREATE TABLE IF NOT EXISTS knowledge_migration_meta (
 );
 CREATE TABLE IF NOT EXISTS knowledge_folders (
   folder_id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  parent_id TEXT, owner_id INTEGER, owner_name TEXT
 );
 CREATE TABLE IF NOT EXISTS knowledge_documents (
   document_id TEXT PRIMARY KEY, folder_id TEXT NOT NULL, file_name TEXT NOT NULL,
@@ -81,6 +82,7 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
   last_batch_size INTEGER, parser_label TEXT, sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   uploaded_by TEXT, uploaded_at TEXT,
+  owner_id INTEGER, owner_name TEXT,
   is_deleted INTEGER NOT NULL DEFAULT 0,
   deleted_at TEXT,
   FOREIGN KEY (folder_id) REFERENCES knowledge_folders(folder_id) ON DELETE CASCADE

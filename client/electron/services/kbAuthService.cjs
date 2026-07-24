@@ -88,7 +88,15 @@ function createKbAuthService({ app }) {
         init.body = JSON.stringify(body);
       }
     }
-    const res = await fetch(url, init);
+    let res;
+    try {
+      res = await fetch(url, init);
+    } catch (networkError) {
+      // Node.js fetch 失败时默认消息是 "fetch failed"，没有 URL/method，这里补全便于排查
+      const message = networkError?.message || String(networkError);
+      console.error('[apiFetch] network error:', { method: init.method, url, message }, networkError);
+      throw new Error(`请求失败 (${init.method || 'GET'} ${url}): ${message}`);
+    }
     let data = null;
     const text = await res.text();
     if (text) {

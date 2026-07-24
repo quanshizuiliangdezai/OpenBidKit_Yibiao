@@ -63,6 +63,7 @@ function createKbTeamService({ kbAuthService, app }) {
     const { ok, status, data } = await api(`/api/folders/${folderId}`, { method: 'DELETE' });
     if (!ok) {
       const msg = data?.error || `删除文件夹失败（${status}）`;
+      console.error('[kbTeamService.deleteFolder] server error:', { folderId, status, data });
       throw new Error(msg);
     }
     return data?.data || data || { success: true };

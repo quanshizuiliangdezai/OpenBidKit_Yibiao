@@ -40,6 +40,9 @@ MERGE_SCRIPT = os.environ.get('YIBIAO_MERGE_SCRIPT', '/toubiao/yibiao-sync/merge
 if 'YIBIAO_SYNC_TOKEN' not in os.environ:
     print('[warn] YIBIAO_SYNC_TOKEN 未通过环境变量注入，正在使用内置默认值，生产环境请务必覆盖', flush=True)
 
+# 主库（master.sqlite）写操作并发锁（防止多线程同时写导致 database is locked）
+_MASTER_LOCK = threading.RLock()
+
 # kb_db 配置（import 后覆盖模块级变量，再 init）
 kb_db.DB_PATH = os.environ.get('KB_DB', '/toubiao/yibiao-kb-server/kb.sqlite')
 kb_db.KB_DATA_DIR = os.environ.get('KB_DATA_DIR', '/toubiao/yibiao-kb-server/knowledge-base')
@@ -93,7 +96,9 @@ def _client_ip(handler):
 def _master_db_conn():
     if not os.path.exists(MASTER_DB):
         return None
-    return __import__('sqlite3').connect(MASTER_DB)
+    conn = __import__('sqlite3').connect(MASTER_DB)
+    conn.execute('PRAGMA busy_timeout = 5000')
+    return conn
 
 
 def build_manifest():
@@ -647,7 +652,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             name = (data.get('name') or '').strip()
             if not name:
                 return self._send(400, {'error': '文件夹名称不能为空'})
-            folder, err = self._personal_create_folder(name, data.get('parent_id'))
+            folder, err = self._personal_create_folder(name, data.get('parent_id'), employee)
             if err:
                 return self._send(400, {'error': err})
             audit_event(
@@ -667,8 +672,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             f = files.get('file')
             if not folder_id or not f:
                 return self._send(400, {'error': '缺少 folder_id 或 file'})
-            owner = employee.get('display_name') or employee['username']
-            doc, err = self._personal_upload(folder_id, f['filename'], f['data'], owner)
+            doc, err = self._personal_upload(folder_id, f['filename'], f['data'], employee)
             if err:
                 return self._send(400, {'error': err})
             audit_event(
@@ -698,7 +702,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 doc_id = item.get('document_id') or item.get('id')
                 if not doc_id:
                     continue
-                remote, ierr = self._import_personal_doc_to_team(str(doc_id), int(folder_id), employee['id'])
+                remote, ierr = self._import_personal_doc_to_team(str(doc_id), int(folder_id), employee)
                 if remote is None:
                     failed.append({'document_id': doc_id, 'error': ierr or '导入失败'})
                     continue
@@ -717,7 +721,6 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 return self._send(401, {'error': '未登录或会话已过期'})
             if not data or 'documents' not in data:
                 return self._send(400, {'error': '缺少 documents 数组'})
-            owner = employee.get('display_name') or employee['username']
             synced = []
             for item in data['documents']:
                 doc_id = item.get('id') or item.get('document_id')
@@ -725,7 +728,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     did = int(doc_id)
                 except (ValueError, TypeError):
                     continue
-                ok, msg = self._sync_team_to_master(did, owner)
+                ok, msg = self._sync_team_to_master(did, employee)
                 synced.append({'id': did, 'ok': bool(ok), 'msg': msg})
             audit_event(
                 account_id=employee['id'], account_name=owner,
@@ -752,42 +755,78 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             conn.execute("ALTER TABLE knowledge_folders ADD COLUMN parent_id TEXT")
             conn.commit()
 
-    def _personal_folders(self):
-        """从 master.sqlite 读取文件夹列表（含 parent_id，支持子文件夹）。"""
+    @staticmethod
+    def _ensure_owner_cols(conn):
+        """给主库 knowledge_folders / knowledge_documents 补 owner 隔离列（向后兼容）。"""
+        folder_cols = CombinedHandler._master_folder_cols(conn)
+        if 'owner_id' not in folder_cols:
+            conn.execute("ALTER TABLE knowledge_folders ADD COLUMN owner_id INTEGER")
+        if 'owner_name' not in folder_cols:
+            conn.execute("ALTER TABLE knowledge_folders ADD COLUMN owner_name TEXT")
+        doc_cols = {c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()}
+        if 'owner_id' not in doc_cols:
+            conn.execute("ALTER TABLE knowledge_documents ADD COLUMN owner_id INTEGER")
+        if 'owner_name' not in doc_cols:
+            conn.execute("ALTER TABLE knowledge_documents ADD COLUMN owner_name TEXT")
+        conn.commit()
+
+    def _personal_folders(self, employee):
+        """从 master.sqlite 读取当前用户的文件夹列表（含 parent_id，支持子文件夹）。"""
         conn = _master_db_conn()
         if conn is None:
             return []
         try:
+            self._ensure_owner_cols(conn)
             has_parent = 'parent_id' in self._master_folder_cols(conn)
-            sel = "folder_id, name, sort_order, created_at, updated_at" + (", parent_id" if has_parent else "")
-            rows = conn.execute(
-                "SELECT %s FROM knowledge_folders ORDER BY sort_order, name" % sel).fetchall()
-            return [{
-                'id': r[0], 'name': r[1], 'sort_order': r[2],
-                'created_at': r[3], 'updated_at': r[4],
-                'parent_id': r[5] if has_parent else None,
-            } for r in rows]
+            has_owner = 'owner_id' in self._master_folder_cols(conn)
+            sel = "folder_id, name, sort_order, created_at, updated_at" + (", parent_id" if has_parent else "") + (", owner_id" if has_owner else "")
+            q = "SELECT %s FROM knowledge_folders" % sel
+            args = ()
+            if has_owner and employee and employee.get('role') != 'admin':
+                q += " WHERE owner_id=? OR owner_id IS NULL"
+                args = (employee['id'],)
+            q += " ORDER BY sort_order, name"
+            rows = conn.execute(q, args).fetchall()
+            out = []
+            for r in rows:
+                d = {
+                    'id': r[0], 'name': r[1], 'sort_order': r[2],
+                    'created_at': r[3], 'updated_at': r[4],
+                    'parent_id': r[5] if has_parent else None,
+                }
+                if has_owner:
+                    d['owner_id'] = r[6] if has_parent else r[5]
+                out.append(d)
+            return out
         finally:
             conn.close()
 
-    def _personal_documents(self, folder_id):
-        """从 master.sqlite 读取文档列表（folder_id 为空 = 全部）。"""
+    def _personal_documents(self, folder_id, employee):
+        """从 master.sqlite 读取当前用户的文档列表（folder_id 为空 = 全部）。"""
         conn = _master_db_conn()
         if conn is None:
             return []
         try:
+            self._ensure_owner_cols(conn)
             cols = [c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()]
             want = ['document_id', 'folder_id', 'file_name', 'status', 'progress',
-                    'item_count', 'block_count', 'created_at', 'updated_at', 'uploaded_by']
+                    'item_count', 'block_count', 'created_at', 'updated_at', 'uploaded_by', 'owner_id']
             sel = [c for c in want if c in cols]
-            where = "COALESCE(is_deleted,0)=0" if 'is_deleted' in cols else "1=1"
-            q = "SELECT %s FROM knowledge_documents WHERE %s" % (','.join(sel), where)
-            args = ()
+            conditions = []
+            args = []
+            if 'is_deleted' in cols:
+                conditions.append("COALESCE(is_deleted,0)=0")
+            if 'owner_id' in cols and employee and employee.get('role') != 'admin':
+                conditions.append("(owner_id=? OR owner_id IS NULL)")
+                args.append(employee['id'])
+            q = "SELECT %s FROM knowledge_documents" % ','.join(sel)
+            if conditions:
+                q += " WHERE " + " AND ".join(conditions)
             if folder_id not in (None, '', '0', 'null'):
-                q += " AND folder_id=?"
-                args = (str(folder_id),)
+                q += (" AND " if conditions else " WHERE ") + "folder_id=?"
+                args.append(str(folder_id))
             q += " ORDER BY created_at DESC"
-            rows = conn.execute(q, args).fetchall()
+            rows = conn.execute(q, tuple(args)).fetchall()
             out = []
             for r in rows:
                 d = dict(zip(sel, r))
@@ -801,20 +840,23 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
     def _personal_doc_dir(self, folder_id, doc_id):
         return os.path.join(MASTER_KB, 'folders', str(folder_id), 'documents', str(doc_id))
 
-    def _send_personal_file(self, doc_id_str):
-        """发送个人库文件（document_id 为 TEXT 主键）。"""
+    def _send_personal_file(self, doc_id_str, employee):
+        """发送个人库文件（document_id 为 TEXT 主键），非管理员只能访问自己的文件。"""
         conn = _master_db_conn()
         if conn is None:
             return self._send(404, {'error': '主库不可用'})
         try:
+            self._ensure_owner_cols(conn)
             row = conn.execute(
-                "SELECT document_id, folder_id, file_name FROM knowledge_documents WHERE document_id=?",
+                "SELECT document_id, folder_id, file_name, owner_id FROM knowledge_documents WHERE document_id=?",
                 (str(doc_id_str),)).fetchone()
         finally:
             conn.close()
         if not row:
             return self._send(404, {'error': '文档不存在'})
-        doc_id, folder_id, file_name = row
+        doc_id, folder_id, file_name, owner_id = row
+        if employee and employee.get('role') != 'admin' and owner_id is not None and owner_id != employee['id']:
+            return self._send(403, {'error': '无权访问该文档'})
         base = self._personal_doc_dir(folder_id, doc_id)
         candidates = []
         if os.path.isdir(base):
@@ -834,139 +876,163 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         mime = mimetypes.guess_type(fp)[0] or 'application/octet-stream'
         self._send_file(fp, file_name or os.path.basename(fp), mime)
 
-    def _personal_create_folder(self, name, parent_id=None):
-        """个人库新建文件夹（支持 parent_id 子文件夹）。"""
-        conn = _master_db_conn()
-        if conn is None:
-            return None, '个人库尚未初始化（先在桌面端同步一次）'
-        try:
-            self._ensure_parent_col(conn)
-            if parent_id:
-                exists = conn.execute(
-                    "SELECT 1 FROM knowledge_folders WHERE folder_id=?", (str(parent_id),)).fetchone()
-                if not exists:
-                    return None, '父文件夹不存在'
-            now = datetime.datetime.now().isoformat()
-            fid = uuid.uuid4().hex
-            conn.execute(
-                "INSERT INTO knowledge_folders (folder_id, name, sort_order, created_at, updated_at, parent_id) "
-                "VALUES (?,?,?,?,?,?)",
-                (fid, name, 0, now, now, str(parent_id) if parent_id else None))
-            conn.commit()
-            return {'id': fid, 'name': name, 'parent_id': parent_id,
-                    'created_at': now, 'updated_at': now}, None
-        finally:
-            conn.close()
+    def _personal_create_folder(self, name, parent_id=None, employee=None):
+        """个人库新建文件夹（支持 parent_id 子文件夹），写入当前用户 owner。"""
+        with _MASTER_LOCK:
+            conn = _master_db_conn()
+            if conn is None:
+                return None, '个人库尚未初始化（先在桌面端同步一次）'
+            try:
+                self._ensure_parent_col(conn)
+                self._ensure_owner_cols(conn)
+                if parent_id:
+                    exists = conn.execute(
+                        "SELECT 1 FROM knowledge_folders WHERE folder_id=?", (str(parent_id),)).fetchone()
+                    if not exists:
+                        return None, '父文件夹不存在'
+                now = datetime.datetime.now().isoformat()
+                fid = uuid.uuid4().hex
+                owner_id = employee['id'] if employee else None
+                owner_name = (employee.get('display_name') or employee.get('username')) if employee else None
+                conn.execute(
+                    "INSERT INTO knowledge_folders (folder_id, name, sort_order, created_at, updated_at, parent_id, owner_id, owner_name) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (fid, name, 0, now, now, str(parent_id) if parent_id else None, owner_id, owner_name))
+                conn.commit()
+                return {'id': fid, 'name': name, 'parent_id': parent_id,
+                        'created_at': now, 'updated_at': now, 'owner_id': owner_id, 'owner_name': owner_name}, None
+            finally:
+                conn.close()
 
-    def _personal_upload(self, folder_id, filename, data, owner_name):
-        """个人库上传文档：写 master.sqlite + 落物理文件。"""
+    def _personal_upload(self, folder_id, filename, data, employee):
+        """个人库上传文档：写 master.sqlite + 落物理文件，绑定当前用户 owner。"""
         if not data:
             return None, '文件内容为空'
         filename = os.path.basename((filename or '').replace('\\', '/')) or 'file'
-        conn = _master_db_conn()
-        if conn is None:
-            return None, '个人库尚未初始化（先在桌面端同步一次）'
-        try:
-            exists = conn.execute(
-                "SELECT 1 FROM knowledge_folders WHERE folder_id=?", (str(folder_id),)).fetchone()
-            if not exists:
-                return None, '目标文件夹不存在'
-            cols = {c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()}
-            now = datetime.datetime.now().isoformat()
-            doc_id = uuid.uuid4().hex
-            doc_dir_rel = 'folders/%s/documents/%s' % (folder_id, doc_id)
-            fields = {
-                'document_id': doc_id, 'folder_id': str(folder_id), 'file_name': filename,
-                'document_dir': doc_dir_rel, 'source_path': '%s/%s' % (doc_dir_rel, filename),
-                'markdown_path': '', 'status': 'success', 'progress': 100,
-                'message': '通过服务器上传', 'created_at': now, 'updated_at': now,
-            }
-            if 'uploaded_by' in cols:
-                fields['uploaded_by'] = owner_name
-            if 'uploaded_at' in cols:
-                fields['uploaded_at'] = now
-            if 'is_deleted' in cols:
-                fields['is_deleted'] = 0
-            keys = [k for k in fields if k in cols]
-            conn.execute(
-                "INSERT INTO knowledge_documents (%s) VALUES (%s)" % (
-                    ','.join(keys), ','.join('?' * len(keys))),
-                tuple(fields[k] for k in keys))
-            conn.commit()
-        finally:
-            conn.close()
+        with _MASTER_LOCK:
+            conn = _master_db_conn()
+            if conn is None:
+                return None, '个人库尚未初始化（先在桌面端同步一次）'
+            try:
+                self._ensure_owner_cols(conn)
+                exists = conn.execute(
+                    "SELECT 1 FROM knowledge_folders WHERE folder_id=?", (str(folder_id),)).fetchone()
+                if not exists:
+                    return None, '目标文件夹不存在'
+                # 非管理员只能上传到自己的文件夹
+                if employee and employee.get('role') != 'admin':
+                    folder_owner = conn.execute(
+                        "SELECT owner_id FROM knowledge_folders WHERE folder_id=?", (str(folder_id),)).fetchone()
+                    if folder_owner and folder_owner[0] is not None and folder_owner[0] != employee['id']:
+                        return None, '只能上传到自己创建的个人文件夹'
+                cols = {c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()}
+                now = datetime.datetime.now().isoformat()
+                doc_id = uuid.uuid4().hex
+                doc_dir_rel = 'folders/%s/documents/%s' % (folder_id, doc_id)
+                owner_id = employee['id'] if employee else None
+                owner_name = (employee.get('display_name') or employee.get('username')) if employee else None
+                fields = {
+                    'document_id': doc_id, 'folder_id': str(folder_id), 'file_name': filename,
+                    'document_dir': doc_dir_rel, 'source_path': '%s/%s' % (doc_dir_rel, filename),
+                    'markdown_path': '', 'status': 'success', 'progress': 100,
+                    'message': '通过服务器上传', 'created_at': now, 'updated_at': now,
+                    'owner_id': owner_id, 'owner_name': owner_name,
+                }
+                if 'uploaded_by' in cols:
+                    fields['uploaded_by'] = owner_name
+                if 'uploaded_at' in cols:
+                    fields['uploaded_at'] = now
+                if 'is_deleted' in cols:
+                    fields['is_deleted'] = 0
+                keys = [k for k in fields if k in cols]
+                conn.execute(
+                    "INSERT INTO knowledge_documents (%s) VALUES (%s)" % (
+                        ','.join(keys), ','.join('?' * len(keys))),
+                    tuple(fields[k] for k in keys))
+                conn.commit()
+            finally:
+                conn.close()
         dst_dir = self._personal_doc_dir(folder_id, doc_id)
         os.makedirs(dst_dir, exist_ok=True)
         with open(os.path.join(dst_dir, filename), 'wb') as fh:
             fh.write(data)
         return {'id': doc_id, 'folder_id': folder_id, 'title': filename,
-                'file_name': filename, 'file_size': len(data), 'created_at': now}, None
+                'file_name': filename, 'file_size': len(data), 'created_at': now,
+                'owner_id': owner_id, 'owner_name': owner_name}, None
 
-    def _sync_team_to_master(self, doc_id, owner_name='system'):
-        """团队库文档 → 个人库（写入 master.sqlite '团队库导入' 文件夹）。"""
+    def _sync_team_to_master(self, doc_id, employee=None):
+        """团队库文档 → 当前用户的个人库（写入 master.sqlite '团队库导入' 文件夹）。"""
         team_doc = kb_db.get_document(doc_id)
         if not team_doc:
             return False, '文档不存在'
-        conn = _master_db_conn()
-        if conn is None:
-            return False, '个人库尚未初始化（先在桌面端同步一次）'
-        try:
-            now = datetime.datetime.now().isoformat()
-            new_doc_id = 'team-%s' % team_doc['id']
-            if conn.execute("SELECT 1 FROM knowledge_documents WHERE document_id=?",
-                            (new_doc_id,)).fetchone():
-                return True, '已存在，跳过'
-            folder_id = 'team-import'
-            conn.execute(
-                "INSERT OR IGNORE INTO knowledge_folders "
-                "(folder_id, name, sort_order, created_at, updated_at) VALUES (?,?,?,?,?)",
-                (folder_id, '团队库导入', 9999, now, now))
-            cols = {c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()}
-            doc_dir_rel = 'folders/%s/documents/%s' % (folder_id, new_doc_id)
-            fname = team_doc.get('file_name') or team_doc.get('title') or 'file'
-            fields = {
-                'document_id': new_doc_id, 'folder_id': folder_id, 'file_name': fname,
-                'document_dir': doc_dir_rel, 'source_path': '%s/%s' % (doc_dir_rel, fname),
-                'markdown_path': '', 'status': 'success', 'progress': 100,
-                'message': '来自团队库', 'created_at': now, 'updated_at': now,
-            }
-            if 'uploaded_by' in cols:
-                fields['uploaded_by'] = owner_name
-            if 'uploaded_at' in cols:
-                fields['uploaded_at'] = now
-            if 'is_deleted' in cols:
-                fields['is_deleted'] = 0
-            keys = [k for k in fields if k in cols]
-            conn.execute(
-                "INSERT INTO knowledge_documents (%s) VALUES (%s)" % (
-                    ','.join(keys), ','.join('?' * len(keys))),
-                tuple(fields[k] for k in keys))
-            conn.commit()
-            src = os.path.join(kb_db.KB_DATA_DIR, team_doc['file_path'])
-            dst_dir = os.path.join(MASTER_KB, doc_dir_rel)
-            os.makedirs(dst_dir, exist_ok=True)
-            if os.path.isfile(src):
-                shutil.copy2(src, os.path.join(dst_dir, fname))
-            return True, '同步成功'
-        except Exception as e:
-            return False, str(e)
-        finally:
-            conn.close()
+        owner_id = employee['id'] if employee else None
+        owner_name = (employee.get('display_name') or employee.get('username')) if employee else 'system'
+        with _MASTER_LOCK:
+            conn = _master_db_conn()
+            if conn is None:
+                return False, '个人库尚未初始化（先在桌面端同步一次）'
+            try:
+                self._ensure_owner_cols(conn)
+                now = datetime.datetime.now().isoformat()
+                new_doc_id = 'team-%s-%s' % (team_doc['id'], owner_id)
+                if conn.execute("SELECT 1 FROM knowledge_documents WHERE document_id=?",
+                                (new_doc_id,)).fetchone():
+                    return True, '已存在，跳过'
+                folder_id = 'team-import-%s' % owner_id
+                conn.execute(
+                    "INSERT OR IGNORE INTO knowledge_folders "
+                    "(folder_id, name, sort_order, created_at, updated_at, owner_id, owner_name) VALUES (?,?,?,?,?,?,?)",
+                    (folder_id, '团队库导入', 9999, now, now, owner_id, owner_name))
+                cols = {c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()}
+                doc_dir_rel = 'folders/%s/documents/%s' % (folder_id, new_doc_id)
+                fname = team_doc.get('file_name') or team_doc.get('title') or 'file'
+                fields = {
+                    'document_id': new_doc_id, 'folder_id': folder_id, 'file_name': fname,
+                    'document_dir': doc_dir_rel, 'source_path': '%s/%s' % (doc_dir_rel, fname),
+                    'markdown_path': '', 'status': 'success', 'progress': 100,
+                    'message': '来自团队库', 'created_at': now, 'updated_at': now,
+                    'owner_id': owner_id, 'owner_name': owner_name,
+                }
+                if 'uploaded_by' in cols:
+                    fields['uploaded_by'] = owner_name
+                if 'uploaded_at' in cols:
+                    fields['uploaded_at'] = now
+                if 'is_deleted' in cols:
+                    fields['is_deleted'] = 0
+                keys = [k for k in fields if k in cols]
+                conn.execute(
+                    "INSERT INTO knowledge_documents (%s) VALUES (%s)" % (
+                        ','.join(keys), ','.join('?' * len(keys))),
+                    tuple(fields[k] for k in keys))
+                conn.commit()
+                src = os.path.join(kb_db.KB_DATA_DIR, team_doc['file_path'])
+                dst_dir = os.path.join(MASTER_KB, doc_dir_rel)
+                os.makedirs(dst_dir, exist_ok=True)
+                if os.path.isfile(src):
+                    shutil.copy2(src, os.path.join(dst_dir, fname))
+                return True, '同步成功'
+            except Exception as e:
+                return False, str(e)
+            finally:
+                conn.close()
 
-    def _import_personal_doc_to_team(self, master_doc_id, team_folder_id, owner_id):
-        """个人库（master.sqlite）文档 → 团队库（kb.sqlite）。返回 (团队文档id, 错误)。"""
+    def _import_personal_doc_to_team(self, master_doc_id, team_folder_id, employee):
+        """个人库（master.sqlite）文档 → 团队库（kb.sqlite），只能导入自己的文档。返回 (团队文档id, 错误)。"""
         conn = _master_db_conn()
         if conn is None:
             return None, '个人库不可用'
         try:
+            self._ensure_owner_cols(conn)
             row = conn.execute(
-                "SELECT document_id, folder_id, file_name FROM knowledge_documents WHERE document_id=?",
+                "SELECT document_id, folder_id, file_name, owner_id FROM knowledge_documents WHERE document_id=?",
                 (str(master_doc_id),)).fetchone()
         finally:
             conn.close()
         if not row:
             return None, '个人库文档不存在'
-        doc_id, folder_id, file_name = row
+        doc_id, folder_id, file_name, owner_id = row
+        if employee and employee.get('role') != 'admin' and owner_id is not None and owner_id != employee['id']:
+            return None, '只能导入自己个人库中的文档'
         base = self._personal_doc_dir(folder_id, doc_id)
         fp = None
         if os.path.isdir(base):
@@ -987,7 +1053,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         import mimetypes
         mime = mimetypes.guess_type(file_name or fp)[0] or 'application/octet-stream'
         title = file_name or os.path.basename(fp)
-        doc, err = kb_db.upload_document(team_folder_id, owner_id, title, title, mime, data)
+        doc, err = kb_db.upload_document(team_folder_id, employee['id'] if employee else owner_id, title, title, mime, data)
         if err:
             return None, err
         return doc['id'], None
@@ -1084,19 +1150,22 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             return self._send(200, {'data': kb_db.list_documents(folder)})
         # ==================== /api/personal/* （需登录会话，个人库/主库）====================
         if path == '/api/personal/folders':
-            if not self._auth():
+            employee = self._auth()
+            if not employee:
                 return self._send(401, {'error': '未登录或会话已过期'})
-            return self._send(200, {'data': self._personal_folders()})
+            return self._send(200, {'data': self._personal_folders(employee)})
         if path == '/api/personal/documents':
-            if not self._auth():
+            employee = self._auth()
+            if not employee:
                 return self._send(401, {'error': '未登录或会话已过期'})
             folder = self._query_param('folder')
-            return self._send(200, {'data': self._personal_documents(folder)})
+            return self._send(200, {'data': self._personal_documents(folder, employee)})
         if path.startswith('/api/personal/documents/') and path.endswith('/file'):
-            if not self._auth():
+            employee = self._auth()
+            if not employee:
                 return self._send(401, {'error': '未登录或会话已过期'})
             doc_id_str = path.split('/documents/')[1].split('/')[0]
-            return self._send_personal_file(doc_id_str)
+            return self._send_personal_file(doc_id_str, employee)
         return self._send(404, {'error': '接口不存在'})
 
     def _kb_DELETE(self):

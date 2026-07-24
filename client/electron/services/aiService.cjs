@@ -58,6 +58,19 @@ function trimBaseUrl(baseUrl) {
   return String(baseUrl || '').trim().replace(/\/+$/, '');
 }
 
+/**
+ * 把用户常填的简写模型名补成 sub2api / OpenAI 白名单里的正式名。
+ * 例如 "image-2" → "gpt-image-2"，"image-1" → "gpt-image-1"。
+ * 无 provider 特异性，因为正规 OpenAI-like 接口不会用裸 "image-2" 作为模型名。
+ */
+function normalizeImageModelName(modelName) {
+  const raw = String(modelName || '').trim();
+  if (/^image-\d+(\.\d+)?$/.test(raw) && !raw.toLowerCase().startsWith('gpt-')) {
+    return `gpt-${raw}`;
+  }
+  return raw;
+}
+
 function requireBaseUrl(baseUrl, message) {
   const trimmed = trimBaseUrl(baseUrl);
   if (!trimmed) {
@@ -1333,7 +1346,7 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
   const requestId = createRequestId();
   const logTitle = `AI生图测试-${meta.label}`;
   const requestBody = {
-    model: imageConfig.model_name,
+    model: normalizeImageModelName(imageConfig.model_name),
     prompt: '大字报，内容是“易标AI老好了”',
     size: normalizeOpenAICompatibleImageSize(imageConfig),
     response_format: 'url',
@@ -1532,7 +1545,7 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
   const logTitle = resolveAiLogTitle(request, request.title ? `AI生图-${request.title}` : 'AI生图');
   const requestMode = normalizeImageRequestMode(imageConfig);
   const requestBody = {
-    model: imageConfig.model_name,
+    model: normalizeImageModelName(imageConfig.model_name),
     prompt: normalizeImagePrompt(request),
     size: normalizeOpenAICompatibleImageSize(imageConfig, request.size),
     response_format: 'url',
