@@ -527,6 +527,132 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
 
         return self._send(404, {'error': '接口不存在'})
 
+    # ==================== 个人库（主库）辅助方法 ====================
+    def _personal_folders(self):
+        """从 master.sqlite 读取文件夹树。"""
+        import sqlite3 as sql
+        conn = _master_db_conn()
+        if conn is None:
+            return []
+        try:
+            cur = conn.execute(
+                "SELECT id, parent_id, name, created_at FROM knowledge_folders ORDER BY id")
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def _personal_documents(self, folder_id):
+        """从 master.sqlite 读取指定文件夹下的文档列表。"""
+        import sqlite3 as sql
+        conn = _master_db_conn()
+        if conn is None:
+            return []
+        try:
+            cols = [c[1] for c in conn.execute('PRAGMA table_info(knowledge_documents)').fetchall()]
+            need = ['document_id', 'folder_id', 'is_deleted', 'updated_at']
+            have = [c for c in need if c in cols]
+            query_parts = ['id', 'folder_id', 'title', 'file_name', 'file_size', 'mime_type', 'status']
+            have2 = [p for p in query_parts if p in cols]
+            col_str = ','.join(have2 + have) if have2 and have else ','.join(have2 + ['folder_id'])
+            if not have2:
+                col_str = ','.join(have)
+            if folder_id:
+                pid = int(folder_id) if str(folder_id) not in ('0', 'null', '') else None
+                q = 'SELECT {} FROM knowledge_documents'.format(col_str)
+                if pid is not None:
+                    q += ' WHERE folder_id=?'
+                else:
+                    q += ' WHERE is_deleted=0'
+                rows = conn.execute(q, (pid,) if pid is not None else ()).fetchall()
+            else:
+                rows = conn.execute(
+                    'SELECT {} FROM knowledge_documents WHERE is_deleted=0 ORDER BY document_id'.format(col_str),
+                ).fetchall()
+            return [dict(zip([c.replace('-','_') if '-' in c else c for c in [desc[1] for desc in cur.description]], r)) for r in rows]
+        finally:
+            conn.close()
+
+    def _send_personal_file(self, doc_id_str):
+        """发送个人库文件（只读）。"""
+        conn = _master_db_conn()
+        if conn is None:
+            return self._send(404, {'error': '主库不可用'})
+        try:
+            cur = conn.execute("PRAGMA table_info(knowledge_documents)")
+            cols = [c[1] for c in cur.fetchall()]
+            mapping = {
+                'document_id': 'document_id',
+                'file_path': 'file_path' if 'file_path' in cols else None,
+                'folder_id': 'folder_id',
+            }
+            doc_id = int(doc_id_str)
+            q = 'SELECT document_id'
+            has_fp = False
+            for item in [
+                ('file_path', 'file_path'),
+                ('folder_id', 'folder_id'),
+            ]:
+                if item[0] in cols:
+                    q += ',{}'.format(item[1])
+            q += ' FROM knowledge_documents WHERE document_id=?'
+            row = conn.execute(q, (doc_id,)).fetchone()
+            if not row:
+                return self._send(404, {'error': '文档不存在'})
+            d = dict(zip(['document_id','file_path','folder_id'], row))
+            fp = d.get('file_path') or ''
+            # fallback：try to find by document_id
+            if not os.path.isfile(fp):
+                for f in conn.execute("SELECT document_id FROM knowledge_documents").fetchall():
+                    pass  # skip
+                # Construct path from folders/documents pattern
+                fid = d.get('folder_id', 'default')
+                candidate = os.path.join(MASTER_KB, 'folders', fid, 'documents', str(doc_id))
+                if os.path.isdir(candidate):
+                    files = os.listdir(candidate)
+                    if files:
+                        fp = os.path.join(candidate, files[0])
+                elif not fp:
+                    return self._send(404, {'error': '文件路径未知'})
+            if not os.path.isfile(fp):
+                return self._send(404, {'error': '文件已丢失'})
+            mtype = d.get('mime_type') or 'application/octet-stream'
+            self._send_file(fp, os.path.basename(fp), mtype)
+        finally:
+            conn.close()
+
+    def _sync_team_to_master(self, doc_id, owner_name='system'):
+        """团队库文档 → 个人库（拷贝到 master.sqlite）。"""
+        import shutil
+        team_doc = kb_db.get_document(doc_id)
+        if not team_doc:
+            return False, '文档不存在'
+        master_conn = _master_db_conn()
+        if master_conn is None:
+            return False, '主库不可用'
+        try:
+            master_conn.execute(
+                """INSERT INTO knowledge_documents
+                    (document_id, folder_id, title, file_name, file_size, mime_type, status, progress, item_count, block_count, owner_name, created_at, updated_at, is_deleted)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)""",
+                (team_doc['id'], team_doc['folder_id'], team_doc['title'],
+                 team_doc['file_name'], team_doc['file_size'], team_doc.get('mime_type'),
+                 team_doc.get('status', 'ok'), 100, 0, 0, owner_name)
+            )
+            master_conn.commit()
+            new_id = master_conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            # Copy file
+            src = os.path.join(kb_db.KB_DATA_DIR, team_doc['file_path'])
+            dst_folder = os.path.join(MASTER_KB, 'folders', str(new_id), 'documents')
+            os.makedirs(dst_folder, exist_ok=True)
+            if os.path.isfile(src):
+                shutil.copy2(src, dst_folder)
+            return True, '同步成功'
+        except Exception as e:
+            return False, str(e)
+        finally:
+            master_conn.close()
+
     def _kb_GET(self):
         path = urlparse(self.path).path
         if path in ('/', '/admin'):
@@ -560,6 +686,29 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             if not self._is_admin():
                 return self._send(403, {'error': '需要管理员权限'})
             return self._send(200, {'data': kb_db.list_permission_groups()})
+        if path == '/api/admin/audit':
+            if not self._is_admin():
+                return self._send(403, {'error': '需要管理员权限'})
+            import sqlite3 as _sql
+            try:
+                limit = int(self._query_param('limit') or 200)
+            except (TypeError, ValueError):
+                limit = 200
+            if limit <= 0 or limit > 1000:
+                limit = 200
+            conn = _sql.connect(kb_db.DB_PATH)
+            try:
+                cur = conn.execute(
+                    "SELECT id, account_id, account_name, account_type, role, action, "
+                    "target_type, target_id, detail, ip, created_at "
+                    "FROM operation_log ORDER BY id DESC LIMIT ?", (limit,))
+                cols = [d[0] for d in cur.description]
+                rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+            except Exception as e:
+                return self._send(500, {'error': '读取审计日志失败: %s' % e})
+            finally:
+                conn.close()
+            return self._send(200, {'success': True, 'data': rows})
         m = re.match(r'^/api/documents/(\d+)/file$', path)
         if m:
             employee = self._auth()
@@ -588,9 +737,64 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             if not employee:
                 return self._send(401, {'error': '未登录或会话已过期'})
             folder = self._query_param('folder')
+            kw = self._query_param('q')
+            if kw:
+                return self._send(200, {'data': kb_db.search_documents(kw)})
             if not folder:
-                return self._send(400, {'error': '缺少 folder 参数'})
+                return self._send(200, {'data': kb_db.list_documents(None)})
             return self._send(200, {'data': kb_db.list_documents(folder)})
+        # ==================== /api/personal/* （Bearer token，个人库/主库）====================
+        if path == '/api/personal/folders':
+            return self._send(200, {'data': self._personal_folders()})
+        if path == '/api/personal/documents':
+            folder = self._query_param('folder')
+            return self._send(200, {'data': self._personal_documents(folder)})
+        if path.startswith('/api/personal/documents/') and path.endswith('/file'):
+            doc_id_str = path.split('/documents/')[1].split('/')[0]
+            return self._send_personal_file(doc_id_str)
+        if path == '/api/import/personal':
+            """个人库 → 团队库导入（管理员审核通过后才可写）。"""
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            body = self._read_json()
+            if not body or 'documents' not in body:
+                return self._send(400, {'error': '缺少 documents 数组'})
+            created = []
+            for item in body['documents']:
+                doc_id = item.get('document_id')
+                folder_id = item.get('folder_id')
+                try:
+                    fid = int(folder_id) if folder_id else None
+                except (ValueError, TypeError):
+                    fid = 0
+                    continue
+                remote = kb_db.create_document_from_personal(int(doc_id), fid, employee['id'])
+                if remote is None:
+                    continue
+                created.append({'document_id': doc_id, 'remote_id': remote})
+            return self._send(200, {'created': created})
+        if path == '/api/import/team':
+            """团队库 → 个人库共享（只读浏览）。"""
+            auth_header = self.headers.get('Authorization', '')
+            if auth_header.startswith('Bearer '):
+                token = auth_header[7:]
+            else:
+                return self._send(401, {'error': '缺少 Bearer token'})
+            body = self._read_json()
+            if not body or 'documents' not in body:
+                return self._send(400, {'error': '缺少 documents 数组'})
+            synced = []
+            for item in body['documents']:
+                doc_id = item.get('id')
+                try:
+                    did = int(doc_id)
+                except (ValueError, TypeError):
+                    continue
+                    # skip
+                ok, msg = self._sync_team_to_master(did, body.get('owner_name', 'system'))
+                synced.append({'id': did, 'ok': bool(ok), 'msg': msg})
+            return self._send(200, {'synced': synced})
         return self._send(404, {'error': '接口不存在'})
 
     def _kb_DELETE(self):
