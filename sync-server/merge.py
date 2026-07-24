@@ -259,11 +259,21 @@ def rebuild_master_zip():
             z.write(remote_cfg, 'user_config.json')
 
 
+def safe_extractall(z, dest):
+    """Zip Slip 防护：逐成员校验解压路径必须落在 dest 目录内。"""
+    dest_real = os.path.realpath(dest)
+    for member in z.namelist():
+        target = os.path.realpath(os.path.join(dest, member))
+        if target != dest_real and not target.startswith(dest_real + os.sep):
+            raise ValueError("非法压缩包成员路径（Zip Slip）: %s" % member)
+    z.extractall(dest)
+
+
 def process_package(zip_path, master):
     tmp = tempfile.mkdtemp(prefix='yibiao-merge-')
     try:
         with zipfile.ZipFile(zip_path, 'r') as z:
-            z.extractall(tmp)
+            safe_extractall(z, tmp)
         pkg_db = os.path.join(tmp, 'knowledge.sqlite')
         if not os.path.exists(pkg_db):
             print("[SKIP] %s: 缺少 knowledge.sqlite" % os.path.basename(zip_path))

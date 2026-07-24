@@ -106,6 +106,21 @@ def init_db():
             FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE,
             FOREIGN KEY(group_id) REFERENCES permission_groups(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS operation_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id  INTEGER,
+            account_name TEXT,
+            account_type TEXT NOT NULL DEFAULT 'employee',
+            role        TEXT,
+            action      TEXT NOT NULL,
+            target_type TEXT,
+            target_id   TEXT,
+            detail      TEXT,
+            ip          TEXT,
+            created_at  TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_operation_log_created_at ON operation_log(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_operation_log_account ON operation_log(account_id);
         ''')
     conn.close()
     # 一次性迁移：旧库 owner_id 为 NOT NULL 且无 ON DELETE 规则，删员工会被外键挡住。
@@ -353,6 +368,31 @@ def public_fields(e):
     base['groups'] = get_employee_groups(e['id'])
     base['permissions'] = get_employee_permissions(e)
     return base
+
+
+# ---------- 审计日志 ----------
+
+def audit_log(action, target_type=None, target_id=None, detail=None,
+              account_id=None, account_name=None, account_type='employee',
+              role=None, ip=None):
+    """写入操作审计日志。异常会被静默捕获，避免影响主流程。"""
+    try:
+        with _lock:
+            conn = _conn()
+            try:
+                conn.execute(
+                    """INSERT INTO operation_log
+                        (account_id, account_name, account_type, role, action, target_type, target_id, detail, ip, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (account_id, account_name, account_type, role, action,
+                     target_type, target_id, detail, ip,
+                     datetime.datetime.now().isoformat()))
+                conn.commit()
+            finally:
+                conn.close()
+    except Exception:
+        # 审计失败不应阻断业务，静默吞掉
+        pass
 
 
 # ---------- 账号管理（管理员操作）----------
@@ -924,63 +964,6 @@ def upload_document(folder_id, owner_id, title, file_name, mime_type, data):
             return dict(row), None
         finally:
             conn.close()
-
-
-def create_document_from_personal(master_doc_id, folder_id, owner_id):
-    """将 master.sqlite 中的文档导入到团队库 kb.sqlite。返回创建后的 rowid，失败返回 None。"""
-    import sqlite3 as sql
-    master_conn = _master_db_conn()
-    if master_conn is None:
-        return None
-    try:
-        cur = master_conn.execute("PRAGMA table_info(knowledge_documents)")
-        cols = [c[1] for c in cur.fetchall()]
-        q = 'SELECT document_id'
-        if 'title' in cols:
-            q += ', title'
-        if 'file_name' in cols:
-            q += ', file_name'
-        if 'file_size' in cols:
-            q += ', file_size'
-        if 'mime_type' in cols:
-            q += ', mime_type'
-        if 'folder_id' in cols:
-            q += ', folder_id'
-        q += ' FROM knowledge_documents WHERE document_id=?'
-        row = master_conn.execute(q, (master_doc_id,)).fetchone()
-        if not row:
-            return None
-        d = dict(zip([c.replace('-','_') if '-' in c else c for c in ['document_id','title','file_name','file_size','mime_type','folder_id']], row))
-        title = d.get('title') or d.get('file_name') or 'unknown'
-        mime = d.get('mime_type') or 'application/octet-stream'
-        fsize = d.get('file_size') or 0
-        target_fid = folder_id
-        # 拷贝文件
-        src = os.path.join(MASTER_KB, 'folders', str(d.get('folder_id') or 0), 'documents', str(master_doc_id))
-        team_doc = upload_document(target_fid, owner_id, title, d.get('file_name') or 'file', mime, None)
-        if team_doc and os.path.isdir(src):
-            for fname in os.listdir(src):
-                fp = os.path.join(src, fname)
-                if os.path.isfile(fp):
-                    with open(fp, 'rb') as fh:
-                        data = fh.read()
-                    rel = str(team_doc['id'])
-                    full = os.path.join(KB_DATA_DIR, rel)
-                    os.makedirs(KB_DATA_DIR, exist_ok=True)
-                    with open(full, 'wb') as out:
-                        out.write(data)
-                    conn2 = _conn()
-                    try:
-                        conn2.execute("UPDATE knowledge_documents SET file_path=?, file_size=? WHERE id=?", (rel, len(data), team_doc['id']))
-                        conn2.commit()
-                    finally:
-                        conn2.close()
-                    break
-        elif team_doc:
-            pass  # no source dir, just metadata
-        return team_doc['id'] if team_doc else None
-    finally:
-        master_conn.close()
 
 
 def list_documents(folder_id=None):

@@ -233,6 +233,10 @@ const bridge = {
     listDocuments: (folderId) => ipcRenderer.invoke('kb-personal:list-documents', folderId),
     downloadDocument: (documentId, destPath) => ipcRenderer.invoke('kb-personal:download-document', documentId, destPath),
     searchDocuments: (keyword) => ipcRenderer.invoke('kb-personal:search', keyword),
+    createFolder: (name, parentId) => ipcRenderer.invoke('kb-personal:create-folder', name, parentId),
+    uploadDocument: (folderId) => ipcRenderer.invoke('kb-personal:upload-document', folderId),
+    importToTeam: (documentIds, targetTeamFolderId) => ipcRenderer.invoke('kb-personal:import-to-team', documentIds, targetTeamFolderId),
+    importFromTeam: (documentIds) => ipcRenderer.invoke('kb-personal:import-from-team', documentIds),
   },
   plugins: {
     getAvailablePlugins: () => ipcRenderer.invoke('plugins:getAvailablePlugins'),

@@ -11,9 +11,14 @@
 # ============================================================
 import http.server
 import socketserver
+import io
 import json
 import os
 import re
+import shutil
+import subprocess
+import sys
+import uuid
 import datetime
 import tempfile
 import zipfile
@@ -30,6 +35,10 @@ MASTER_DB = os.environ.get('YIBIAO_MASTER_DB', '/toubiao/yibiao-master/master.sq
 MASTER_KB = os.environ.get('YIBIAO_MASTER_KB', '/toubiao/yibiao-master/knowledge-base')
 AUTH_TOKEN = os.environ.get('YIBIAO_SYNC_TOKEN', 'yibiao-sync-2026')
 LOG_FILE = os.environ.get('COMBINED_LOG', '/toubiao/yibiao-combined/server.log')
+# 同步包合并脚本（收到 push 后实时触发）；不存在时仅落盘等 cron
+MERGE_SCRIPT = os.environ.get('YIBIAO_MERGE_SCRIPT', '/toubiao/yibiao-sync/merge.py')
+if 'YIBIAO_SYNC_TOKEN' not in os.environ:
+    print('[warn] YIBIAO_SYNC_TOKEN 未通过环境变量注入，正在使用内置默认值，生产环境请务必覆盖', flush=True)
 
 # kb_db 配置（import 后覆盖模块级变量，再 init）
 kb_db.DB_PATH = os.environ.get('KB_DB', '/toubiao/yibiao-kb-server/kb.sqlite')
@@ -291,15 +300,24 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                         zip_content = content
                         break
             if zip_name and zip_content:
+                # 路径穿越防护：只取文件名部分，剔除目录分隔符；强制 .zip 后缀
+                zip_name = os.path.basename(zip_name.replace('\\', '/'))
+                if not zip_name or not zip_name.endswith('.zip') or zip_name.startswith('.'):
+                    self._send_json(400, {'error': '非法文件名'})
+                    return
                 os.makedirs(UPLOAD_DIR, exist_ok=True)
                 dest = os.path.join(UPLOAD_DIR, zip_name)
+                # 双保险：确认落盘路径仍在 UPLOAD_DIR 内
+                if os.path.realpath(os.path.dirname(dest)) != os.path.realpath(UPLOAD_DIR):
+                    self._send_json(400, {'error': '非法文件路径'})
+                    return
                 with open(dest, 'wb') as f:
                     f.write(zip_content)
                 log('upload received: %s (%d bytes)' % (zip_name, len(zip_content)))
                 # 尝试从 zip manifest 提取用户名用于审计
                 sync_user = 'unknown'
                 try:
-                    with zipfile.ZipFile(zip_content) as zf:
+                    with zipfile.ZipFile(io.BytesIO(zip_content)) as zf:
                         for n in zf.namelist():
                             if 'manifest' in n.lower():
                                 m = json.loads(zf.read(n))
@@ -311,6 +329,20 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     account_name=sync_user, account_type='sync_client',
                     action='sync_push', detail='同步推送: %s (%d bytes)' % (zip_name, len(zip_content)),
                     ip=_client_ip(self))
+                # 实时触发合并（异步子进程，失败不影响响应；无脚本时等 cron 兜底）
+                try:
+                    if os.path.isfile(MERGE_SCRIPT):
+                        env = dict(os.environ)
+                        env.update({
+                            'YIBIAO_MASTER_DB': MASTER_DB,
+                            'YIBIAO_MASTER_KB': MASTER_KB,
+                            'YIBIAO_INCOMING': UPLOAD_DIR,
+                            'YIBIAO_MASTER_ZIP': MASTER_ZIP,
+                        })
+                        subprocess.Popen([sys.executable, MERGE_SCRIPT], env=env,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception as e:
+                    log('merge trigger failed: %s' % e)
                 self._send_json(200, {'ok': True, 'received': zip_name, 'size': len(zip_content)})
             else:
                 self._send_json(400, {'error': '未找到 zip 文件'})
@@ -607,133 +639,358 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 detail='上传文档: %s (%.1fKB)' % (title, (len(f['data']) / 1024)), ip=_client_ip(self))
             return self._send(200, {'success': True, 'data': {k: doc[k] for k in ('id', 'folder_id', 'owner_id', 'title', 'file_name', 'file_size', 'mime_type', 'created_at')}})
 
+        # ==================== 个人库写接口（需登录会话）====================
+        if path == '/api/personal/folders':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            name = (data.get('name') or '').strip()
+            if not name:
+                return self._send(400, {'error': '文件夹名称不能为空'})
+            folder, err = self._personal_create_folder(name, data.get('parent_id'))
+            if err:
+                return self._send(400, {'error': err})
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                role=employee.get('role'), action='folder', target_type='personal_folder',
+                target_id=folder.get('id'), detail='个人库创建文件夹: %s' % name, ip=_client_ip(self))
+            return self._send(200, {'success': True, 'data': folder})
+
+        if path == '/api/personal/documents':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            if 'multipart/form-data' not in ctype:
+                return self._send(400, {'error': '上传需使用 multipart/form-data'})
+            fields, files = self._parse_multipart()
+            folder_id = fields.get('folder_id')
+            f = files.get('file')
+            if not folder_id or not f:
+                return self._send(400, {'error': '缺少 folder_id 或 file'})
+            owner = employee.get('display_name') or employee['username']
+            doc, err = self._personal_upload(folder_id, f['filename'], f['data'], owner)
+            if err:
+                return self._send(400, {'error': err})
+            audit_event(
+                account_id=employee['id'], account_name=owner,
+                role=employee.get('role'), action='doc', target_type='personal_document',
+                target_id=doc.get('id'),
+                detail='个人库上传文档: %s (%.1fKB)' % (doc['file_name'], len(f['data']) / 1024),
+                ip=_client_ip(self))
+            return self._send(200, {'success': True, 'data': doc})
+
+        # ==================== 双向同步 ====================
+        if path == '/api/import/personal':
+            # 个人库 → 团队库（需登录会话）
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            if not data or 'documents' not in data:
+                return self._send(400, {'error': '缺少 documents 数组'})
+            folder_id = data.get('folder_id')
+            if not folder_id:
+                return self._send(400, {'error': '缺少目标团队文件夹 folder_id'})
+            ok, err = self._can_write_folder(employee, folder_id)
+            if not ok:
+                return self._send(403, {'error': err})
+            created, failed = [], []
+            for item in data['documents']:
+                doc_id = item.get('document_id') or item.get('id')
+                if not doc_id:
+                    continue
+                remote, ierr = self._import_personal_doc_to_team(str(doc_id), int(folder_id), employee['id'])
+                if remote is None:
+                    failed.append({'document_id': doc_id, 'error': ierr or '导入失败'})
+                    continue
+                created.append({'document_id': doc_id, 'remote_id': remote})
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                role=employee.get('role'), action='import', target_type='document',
+                detail='个人库→团队库: 成功 %d, 失败 %d' % (len(created), len(failed)),
+                ip=_client_ip(self))
+            return self._send(200, {'success': True, 'created': created, 'failed': failed})
+
+        if path == '/api/import/team':
+            # 团队库 → 个人库（需登录会话）
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            if not data or 'documents' not in data:
+                return self._send(400, {'error': '缺少 documents 数组'})
+            owner = employee.get('display_name') or employee['username']
+            synced = []
+            for item in data['documents']:
+                doc_id = item.get('id') or item.get('document_id')
+                try:
+                    did = int(doc_id)
+                except (ValueError, TypeError):
+                    continue
+                ok, msg = self._sync_team_to_master(did, owner)
+                synced.append({'id': did, 'ok': bool(ok), 'msg': msg})
+            audit_event(
+                account_id=employee['id'], account_name=owner,
+                role=employee.get('role'), action='import', target_type='document',
+                detail='团队库→个人库: %d 篇' % len(synced), ip=_client_ip(self))
+            return self._send(200, {'success': True, 'synced': synced})
+
         return self._send(404, {'error': '接口不存在'})
 
-    # ==================== 个人库（主库）辅助方法 ====================
+    # ==================== 个人库（主库 master.sqlite）辅助方法 ====================
+    # 真实 schema（见 sync-server/merge.py SCHEMA_SQL）：
+    #   knowledge_folders(folder_id TEXT PK, name, sort_order, created_at, updated_at [, parent_id 动态加列])
+    #   knowledge_documents(document_id TEXT PK, folder_id TEXT, file_name, status, progress, ...)
+    #   物理文件在 MASTER_KB/folders/<folder_id>/documents/<document_id>/ 下
+
+    @staticmethod
+    def _master_folder_cols(conn):
+        return {r[1] for r in conn.execute("PRAGMA table_info(knowledge_folders)").fetchall()}
+
+    @staticmethod
+    def _ensure_parent_col(conn):
+        """给主库 knowledge_folders 补 parent_id 列（子文件夹支持，向后兼容）。"""
+        if 'parent_id' not in CombinedHandler._master_folder_cols(conn):
+            conn.execute("ALTER TABLE knowledge_folders ADD COLUMN parent_id TEXT")
+            conn.commit()
+
     def _personal_folders(self):
-        """从 master.sqlite 读取文件夹树。"""
-        import sqlite3 as sql
+        """从 master.sqlite 读取文件夹列表（含 parent_id，支持子文件夹）。"""
         conn = _master_db_conn()
         if conn is None:
             return []
         try:
-            cur = conn.execute(
-                "SELECT id, parent_id, name, created_at FROM knowledge_folders ORDER BY id")
-            rows = cur.fetchall()
-            return [dict(r) for r in rows]
+            has_parent = 'parent_id' in self._master_folder_cols(conn)
+            sel = "folder_id, name, sort_order, created_at, updated_at" + (", parent_id" if has_parent else "")
+            rows = conn.execute(
+                "SELECT %s FROM knowledge_folders ORDER BY sort_order, name" % sel).fetchall()
+            return [{
+                'id': r[0], 'name': r[1], 'sort_order': r[2],
+                'created_at': r[3], 'updated_at': r[4],
+                'parent_id': r[5] if has_parent else None,
+            } for r in rows]
         finally:
             conn.close()
 
     def _personal_documents(self, folder_id):
-        """从 master.sqlite 读取指定文件夹下的文档列表。"""
-        import sqlite3 as sql
+        """从 master.sqlite 读取文档列表（folder_id 为空 = 全部）。"""
         conn = _master_db_conn()
         if conn is None:
             return []
         try:
-            cols = [c[1] for c in conn.execute('PRAGMA table_info(knowledge_documents)').fetchall()]
-            need = ['document_id', 'folder_id', 'is_deleted', 'updated_at']
-            have = [c for c in need if c in cols]
-            query_parts = ['id', 'folder_id', 'title', 'file_name', 'file_size', 'mime_type', 'status']
-            have2 = [p for p in query_parts if p in cols]
-            col_str = ','.join(have2 + have) if have2 and have else ','.join(have2 + ['folder_id'])
-            if not have2:
-                col_str = ','.join(have)
-            if folder_id:
-                pid = int(folder_id) if str(folder_id) not in ('0', 'null', '') else None
-                q = 'SELECT {} FROM knowledge_documents'.format(col_str)
-                if pid is not None:
-                    q += ' WHERE folder_id=?'
-                else:
-                    q += ' WHERE is_deleted=0'
-                rows = conn.execute(q, (pid,) if pid is not None else ()).fetchall()
-            else:
-                rows = conn.execute(
-                    'SELECT {} FROM knowledge_documents WHERE is_deleted=0 ORDER BY document_id'.format(col_str),
-                ).fetchall()
-            return [dict(zip([c.replace('-','_') if '-' in c else c for c in [desc[1] for desc in cur.description]], r)) for r in rows]
+            cols = [c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()]
+            want = ['document_id', 'folder_id', 'file_name', 'status', 'progress',
+                    'item_count', 'block_count', 'created_at', 'updated_at', 'uploaded_by']
+            sel = [c for c in want if c in cols]
+            where = "COALESCE(is_deleted,0)=0" if 'is_deleted' in cols else "1=1"
+            q = "SELECT %s FROM knowledge_documents WHERE %s" % (','.join(sel), where)
+            args = ()
+            if folder_id not in (None, '', '0', 'null'):
+                q += " AND folder_id=?"
+                args = (str(folder_id),)
+            q += " ORDER BY created_at DESC"
+            rows = conn.execute(q, args).fetchall()
+            out = []
+            for r in rows:
+                d = dict(zip(sel, r))
+                d['id'] = d.get('document_id')
+                d['title'] = d.get('file_name')
+                out.append(d)
+            return out
         finally:
             conn.close()
 
+    def _personal_doc_dir(self, folder_id, doc_id):
+        return os.path.join(MASTER_KB, 'folders', str(folder_id), 'documents', str(doc_id))
+
     def _send_personal_file(self, doc_id_str):
-        """发送个人库文件（只读）。"""
+        """发送个人库文件（document_id 为 TEXT 主键）。"""
         conn = _master_db_conn()
         if conn is None:
             return self._send(404, {'error': '主库不可用'})
         try:
-            cur = conn.execute("PRAGMA table_info(knowledge_documents)")
-            cols = [c[1] for c in cur.fetchall()]
-            mapping = {
-                'document_id': 'document_id',
-                'file_path': 'file_path' if 'file_path' in cols else None,
-                'folder_id': 'folder_id',
-            }
-            doc_id = int(doc_id_str)
-            q = 'SELECT document_id'
-            has_fp = False
-            for item in [
-                ('file_path', 'file_path'),
-                ('folder_id', 'folder_id'),
-            ]:
-                if item[0] in cols:
-                    q += ',{}'.format(item[1])
-            q += ' FROM knowledge_documents WHERE document_id=?'
-            row = conn.execute(q, (doc_id,)).fetchone()
-            if not row:
-                return self._send(404, {'error': '文档不存在'})
-            d = dict(zip(['document_id','file_path','folder_id'], row))
-            fp = d.get('file_path') or ''
-            # fallback：try to find by document_id
-            if not os.path.isfile(fp):
-                for f in conn.execute("SELECT document_id FROM knowledge_documents").fetchall():
-                    pass  # skip
-                # Construct path from folders/documents pattern
-                fid = d.get('folder_id', 'default')
-                candidate = os.path.join(MASTER_KB, 'folders', fid, 'documents', str(doc_id))
-                if os.path.isdir(candidate):
-                    files = os.listdir(candidate)
-                    if files:
-                        fp = os.path.join(candidate, files[0])
-                elif not fp:
-                    return self._send(404, {'error': '文件路径未知'})
-            if not os.path.isfile(fp):
-                return self._send(404, {'error': '文件已丢失'})
-            mtype = d.get('mime_type') or 'application/octet-stream'
-            self._send_file(fp, os.path.basename(fp), mtype)
+            row = conn.execute(
+                "SELECT document_id, folder_id, file_name FROM knowledge_documents WHERE document_id=?",
+                (str(doc_id_str),)).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return self._send(404, {'error': '文档不存在'})
+        doc_id, folder_id, file_name = row
+        base = self._personal_doc_dir(folder_id, doc_id)
+        candidates = []
+        if os.path.isdir(base):
+            for root, _dirs, files in os.walk(base):
+                for f in files:
+                    candidates.append(os.path.join(root, f))
+        fp = None
+        for c in candidates:  # 优先同名原始文件
+            if os.path.basename(c) == file_name:
+                fp = c
+                break
+        if fp is None and candidates:
+            fp = candidates[0]
+        if fp is None or not os.path.isfile(fp):
+            return self._send(404, {'error': '文件已丢失'})
+        import mimetypes
+        mime = mimetypes.guess_type(fp)[0] or 'application/octet-stream'
+        self._send_file(fp, file_name or os.path.basename(fp), mime)
+
+    def _personal_create_folder(self, name, parent_id=None):
+        """个人库新建文件夹（支持 parent_id 子文件夹）。"""
+        conn = _master_db_conn()
+        if conn is None:
+            return None, '个人库尚未初始化（先在桌面端同步一次）'
+        try:
+            self._ensure_parent_col(conn)
+            if parent_id:
+                exists = conn.execute(
+                    "SELECT 1 FROM knowledge_folders WHERE folder_id=?", (str(parent_id),)).fetchone()
+                if not exists:
+                    return None, '父文件夹不存在'
+            now = datetime.datetime.now().isoformat()
+            fid = uuid.uuid4().hex
+            conn.execute(
+                "INSERT INTO knowledge_folders (folder_id, name, sort_order, created_at, updated_at, parent_id) "
+                "VALUES (?,?,?,?,?,?)",
+                (fid, name, 0, now, now, str(parent_id) if parent_id else None))
+            conn.commit()
+            return {'id': fid, 'name': name, 'parent_id': parent_id,
+                    'created_at': now, 'updated_at': now}, None
         finally:
             conn.close()
 
+    def _personal_upload(self, folder_id, filename, data, owner_name):
+        """个人库上传文档：写 master.sqlite + 落物理文件。"""
+        if not data:
+            return None, '文件内容为空'
+        filename = os.path.basename((filename or '').replace('\\', '/')) or 'file'
+        conn = _master_db_conn()
+        if conn is None:
+            return None, '个人库尚未初始化（先在桌面端同步一次）'
+        try:
+            exists = conn.execute(
+                "SELECT 1 FROM knowledge_folders WHERE folder_id=?", (str(folder_id),)).fetchone()
+            if not exists:
+                return None, '目标文件夹不存在'
+            cols = {c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()}
+            now = datetime.datetime.now().isoformat()
+            doc_id = uuid.uuid4().hex
+            doc_dir_rel = 'folders/%s/documents/%s' % (folder_id, doc_id)
+            fields = {
+                'document_id': doc_id, 'folder_id': str(folder_id), 'file_name': filename,
+                'document_dir': doc_dir_rel, 'source_path': '%s/%s' % (doc_dir_rel, filename),
+                'markdown_path': '', 'status': 'success', 'progress': 100,
+                'message': '通过服务器上传', 'created_at': now, 'updated_at': now,
+            }
+            if 'uploaded_by' in cols:
+                fields['uploaded_by'] = owner_name
+            if 'uploaded_at' in cols:
+                fields['uploaded_at'] = now
+            if 'is_deleted' in cols:
+                fields['is_deleted'] = 0
+            keys = [k for k in fields if k in cols]
+            conn.execute(
+                "INSERT INTO knowledge_documents (%s) VALUES (%s)" % (
+                    ','.join(keys), ','.join('?' * len(keys))),
+                tuple(fields[k] for k in keys))
+            conn.commit()
+        finally:
+            conn.close()
+        dst_dir = self._personal_doc_dir(folder_id, doc_id)
+        os.makedirs(dst_dir, exist_ok=True)
+        with open(os.path.join(dst_dir, filename), 'wb') as fh:
+            fh.write(data)
+        return {'id': doc_id, 'folder_id': folder_id, 'title': filename,
+                'file_name': filename, 'file_size': len(data), 'created_at': now}, None
+
     def _sync_team_to_master(self, doc_id, owner_name='system'):
-        """团队库文档 → 个人库（拷贝到 master.sqlite）。"""
-        import shutil
+        """团队库文档 → 个人库（写入 master.sqlite '团队库导入' 文件夹）。"""
         team_doc = kb_db.get_document(doc_id)
         if not team_doc:
             return False, '文档不存在'
-        master_conn = _master_db_conn()
-        if master_conn is None:
-            return False, '主库不可用'
+        conn = _master_db_conn()
+        if conn is None:
+            return False, '个人库尚未初始化（先在桌面端同步一次）'
         try:
-            master_conn.execute(
-                """INSERT INTO knowledge_documents
-                    (document_id, folder_id, title, file_name, file_size, mime_type, status, progress, item_count, block_count, owner_name, created_at, updated_at, is_deleted)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)""",
-                (team_doc['id'], team_doc['folder_id'], team_doc['title'],
-                 team_doc['file_name'], team_doc['file_size'], team_doc.get('mime_type'),
-                 team_doc.get('status', 'ok'), 100, 0, 0, owner_name)
-            )
-            master_conn.commit()
-            new_id = master_conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-            # Copy file
+            now = datetime.datetime.now().isoformat()
+            new_doc_id = 'team-%s' % team_doc['id']
+            if conn.execute("SELECT 1 FROM knowledge_documents WHERE document_id=?",
+                            (new_doc_id,)).fetchone():
+                return True, '已存在，跳过'
+            folder_id = 'team-import'
+            conn.execute(
+                "INSERT OR IGNORE INTO knowledge_folders "
+                "(folder_id, name, sort_order, created_at, updated_at) VALUES (?,?,?,?,?)",
+                (folder_id, '团队库导入', 9999, now, now))
+            cols = {c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()}
+            doc_dir_rel = 'folders/%s/documents/%s' % (folder_id, new_doc_id)
+            fname = team_doc.get('file_name') or team_doc.get('title') or 'file'
+            fields = {
+                'document_id': new_doc_id, 'folder_id': folder_id, 'file_name': fname,
+                'document_dir': doc_dir_rel, 'source_path': '%s/%s' % (doc_dir_rel, fname),
+                'markdown_path': '', 'status': 'success', 'progress': 100,
+                'message': '来自团队库', 'created_at': now, 'updated_at': now,
+            }
+            if 'uploaded_by' in cols:
+                fields['uploaded_by'] = owner_name
+            if 'uploaded_at' in cols:
+                fields['uploaded_at'] = now
+            if 'is_deleted' in cols:
+                fields['is_deleted'] = 0
+            keys = [k for k in fields if k in cols]
+            conn.execute(
+                "INSERT INTO knowledge_documents (%s) VALUES (%s)" % (
+                    ','.join(keys), ','.join('?' * len(keys))),
+                tuple(fields[k] for k in keys))
+            conn.commit()
             src = os.path.join(kb_db.KB_DATA_DIR, team_doc['file_path'])
-            dst_folder = os.path.join(MASTER_KB, 'folders', str(new_id), 'documents')
-            os.makedirs(dst_folder, exist_ok=True)
+            dst_dir = os.path.join(MASTER_KB, doc_dir_rel)
+            os.makedirs(dst_dir, exist_ok=True)
             if os.path.isfile(src):
-                shutil.copy2(src, dst_folder)
+                shutil.copy2(src, os.path.join(dst_dir, fname))
             return True, '同步成功'
         except Exception as e:
             return False, str(e)
         finally:
-            master_conn.close()
+            conn.close()
+
+    def _import_personal_doc_to_team(self, master_doc_id, team_folder_id, owner_id):
+        """个人库（master.sqlite）文档 → 团队库（kb.sqlite）。返回 (团队文档id, 错误)。"""
+        conn = _master_db_conn()
+        if conn is None:
+            return None, '个人库不可用'
+        try:
+            row = conn.execute(
+                "SELECT document_id, folder_id, file_name FROM knowledge_documents WHERE document_id=?",
+                (str(master_doc_id),)).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return None, '个人库文档不存在'
+        doc_id, folder_id, file_name = row
+        base = self._personal_doc_dir(folder_id, doc_id)
+        fp = None
+        if os.path.isdir(base):
+            cands = []
+            for root, _dirs, files in os.walk(base):
+                for f in files:
+                    cands.append(os.path.join(root, f))
+            for c in cands:
+                if os.path.basename(c) == file_name:
+                    fp = c
+                    break
+            if fp is None and cands:
+                fp = cands[0]
+        if fp is None or not os.path.isfile(fp):
+            return None, '个人库物理文件缺失'
+        with open(fp, 'rb') as fh:
+            data = fh.read()
+        import mimetypes
+        mime = mimetypes.guess_type(file_name or fp)[0] or 'application/octet-stream'
+        title = file_name or os.path.basename(fp)
+        doc, err = kb_db.upload_document(team_folder_id, owner_id, title, title, mime, data)
+        if err:
+            return None, err
+        return doc['id'], None
 
     def _kb_GET(self):
         path = urlparse(self.path).path
@@ -825,58 +1082,21 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             if not folder:
                 return self._send(200, {'data': kb_db.list_documents(None)})
             return self._send(200, {'data': kb_db.list_documents(folder)})
-        # ==================== /api/personal/* （Bearer token，个人库/主库）====================
+        # ==================== /api/personal/* （需登录会话，个人库/主库）====================
         if path == '/api/personal/folders':
+            if not self._auth():
+                return self._send(401, {'error': '未登录或会话已过期'})
             return self._send(200, {'data': self._personal_folders()})
         if path == '/api/personal/documents':
+            if not self._auth():
+                return self._send(401, {'error': '未登录或会话已过期'})
             folder = self._query_param('folder')
             return self._send(200, {'data': self._personal_documents(folder)})
         if path.startswith('/api/personal/documents/') and path.endswith('/file'):
+            if not self._auth():
+                return self._send(401, {'error': '未登录或会话已过期'})
             doc_id_str = path.split('/documents/')[1].split('/')[0]
             return self._send_personal_file(doc_id_str)
-        if path == '/api/import/personal':
-            """个人库 → 团队库导入（管理员审核通过后才可写）。"""
-            employee = self._auth()
-            if not employee:
-                return self._send(401, {'error': '未登录或会话已过期'})
-            body = self._read_json()
-            if not body or 'documents' not in body:
-                return self._send(400, {'error': '缺少 documents 数组'})
-            created = []
-            for item in body['documents']:
-                doc_id = item.get('document_id')
-                folder_id = item.get('folder_id')
-                try:
-                    fid = int(folder_id) if folder_id else None
-                except (ValueError, TypeError):
-                    fid = 0
-                    continue
-                remote = kb_db.create_document_from_personal(int(doc_id), fid, employee['id'])
-                if remote is None:
-                    continue
-                created.append({'document_id': doc_id, 'remote_id': remote})
-            return self._send(200, {'created': created})
-        if path == '/api/import/team':
-            """团队库 → 个人库共享（只读浏览）。"""
-            auth_header = self.headers.get('Authorization', '')
-            if auth_header.startswith('Bearer '):
-                token = auth_header[7:]
-            else:
-                return self._send(401, {'error': '缺少 Bearer token'})
-            body = self._read_json()
-            if not body or 'documents' not in body:
-                return self._send(400, {'error': '缺少 documents 数组'})
-            synced = []
-            for item in body['documents']:
-                doc_id = item.get('id')
-                try:
-                    did = int(doc_id)
-                except (ValueError, TypeError):
-                    continue
-                    # skip
-                ok, msg = self._sync_team_to_master(did, body.get('owner_name', 'system'))
-                synced.append({'id': did, 'ok': bool(ok), 'msg': msg})
-            return self._send(200, {'synced': synced})
         return self._send(404, {'error': '接口不存在'})
 
     def _kb_DELETE(self):

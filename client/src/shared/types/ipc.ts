@@ -669,8 +669,12 @@ export interface YibiaoBridge {
     getTree: () => Promise<{ success: boolean; data?: KbTeamTree; error?: string; needLogin?: boolean }>;
     listFolders: () => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
     listDocuments: (folderId: string) => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
-    downloadDocument: (documentId: string, destPath: string) => Promise<{ success: boolean; data?: string; error?: string }>;
-    search: (keyword: string) => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
+    downloadDocument: (documentId: string, destPath?: string) => Promise<{ success: boolean; data?: string; error?: string }>;
+    searchDocuments: (keyword: string) => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
+    createFolder: (name: string, parentId?: string | null) => Promise<{ success: boolean; data?: KbTeamFolder; error?: string }>;
+    uploadDocument: (folderId: string) => Promise<{ success: boolean; data?: { uploaded: Array<{ file: string; doc: KbTeamDocument }>; failed: Array<{ file: string; error: string }>; canceled: boolean }; error?: string }>;
+    importToTeam: (documentIds: Array<string | number>, targetTeamFolderId: string | number) => Promise<{ success: boolean; data?: { created: Array<{ document_id: string | number; remote_id: number }>; failed: Array<{ document_id: string | number; error: string }> }; error?: string }>;
+    importFromTeam: (documentIds: Array<string | number>) => Promise<{ success: boolean; data?: { synced: Array<{ id: number; ok: boolean; msg: string }> }; error?: string }>;
   },
 }
 
