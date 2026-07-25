@@ -119,6 +119,7 @@ function createKbTeamService({ kbAuthService, app }) {
    * 下载文档 + 离线缓存：先查本地缓存，命中则直接返回；未命中则从服务器下载并写入缓存。
    */
   async function downloadDocument(documentId, destPath) {
+    if (!destPath) destPath = cacheKey(documentId);
     const cached = cacheKey(documentId);
     const cachedMetaPath = cached + '.meta.json';
 

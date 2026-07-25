@@ -49,7 +49,7 @@ function adaptServerDocument(
   return {
     id: String(server.id),
     folder_id: String(server.folder_id || ''),
-    file_name: server.name || server.original_name || '未知文档',
+    file_name: String(server.title || server.file_name || server.name || server.original_name || '未知文档'),
     status: localStatus?.status || 'pending',
     progress: localStatus?.progress || 0,
     message: localStatus?.message || '未分析',
@@ -917,12 +917,12 @@ function KnowledgeBasePage() {
         // 为每个上传成功的文档下载并启动本地分析
         for (const doc of result.uploaded) {
           try {
-            const downloadResult = await window.yibiao?.kbTeam.downloadDocument(doc.id, doc.name || doc.original_name);
+            const downloadResult = await window.yibiao?.kbTeam.downloadDocument(doc.id, String(doc.file_name || doc.title || doc.name || doc.original_name));
             if (downloadResult?.success && downloadResult.data?.localPath) {
               await window.yibiao?.knowledgeBase.analyzeExternalFile(
                 String(doc.id),
                 downloadResult.data.localPath,
-                doc.name || doc.original_name || 'document',
+                String(doc.file_name || doc.title || doc.name || doc.original_name || 'document'),
                 String(targetFolder.id),
               );
             }
