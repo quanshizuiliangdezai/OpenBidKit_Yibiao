@@ -54,23 +54,26 @@ function adaptServerDocument(
   };
 }
 
-// 个人库文档适配：master.sqlite 已有分析状态字段，直接从服务器返回中提取
-function adaptPersonalDocument(server: KbTeamDocument): KnowledgeDocument {
+// 个人库文档适配：master.sqlite 保存元数据，实际分析状态以本地 store 为准（与团队库一致）
+function adaptPersonalDocument(
+  server: KbTeamDocument,
+  localStatus: LocalDocPartial | null,
+): KnowledgeDocument {
   const srv = server as Record<string, unknown>;
   return {
     id: String(server.id),
     folder_id: String(server.folder_id || ''),
     file_name: ((srv.title || server.name || server.original_name || '未知文档') as string),
-    status: (srv.status as KnowledgeDocumentStatus) || ('pending' as KnowledgeDocumentStatus),
-    progress: (srv.progress as number) || 0,
-    message: (srv.message as string) || '未分析',
-    item_count: (srv.item_count as number) || 0,
-    block_count: (srv.block_count as number) || 0,
-    filtered_block_count: (srv.filtered_block_count as number) || 0,
-    candidate_item_count: (srv.candidate_item_count as number) || 0,
+    status: localStatus?.status || (srv.status as KnowledgeDocumentStatus) || ('pending' as KnowledgeDocumentStatus),
+    progress: localStatus?.progress || (srv.progress as number) || 0,
+    message: localStatus?.message || (srv.message as string) || '未分析',
+    item_count: localStatus?.item_count || (srv.item_count as number) || 0,
+    block_count: localStatus?.block_count || (srv.block_count as number) || 0,
+    filtered_block_count: localStatus?.filtered_block_count || (srv.filtered_block_count as number) || 0,
+    candidate_item_count: localStatus?.candidate_item_count || (srv.candidate_item_count as number) || 0,
     created_at: server.created_at || '',
     updated_at: ((srv.updated_at || server.created_at || '') as string),
-    uploaded_by_name: ((srv.owner_name || server.uploaded_by_name) as string | undefined),
+    uploaded_by_name: ((srv.owner_name || server.uploaded_by_name || srv.uploaded_by) as string | undefined),
     uploaded_by: (srv.owner_id as string | number | undefined),
   };
 }
@@ -678,8 +681,13 @@ function KnowledgeBasePage() {
       }
       const { folders: serverFolders, documents: serverDocuments } = result.data;
       const folders = serverFolders.map(adaptServerFolder);
-      // 个人库文档已有 status/progress 等字段，无需查本地状态
-      const documents = serverDocuments.map(adaptPersonalDocument);
+      // 个人库文档分析在本地 store 完成，需合并本地状态
+      const documents = await Promise.all(
+        serverDocuments.map(async (doc) => {
+          const localStatus = await window.yibiao?.knowledgeBase.getLocalStatus(doc.id);
+          return adaptPersonalDocument(doc, localStatus);
+        }),
+      );
       setIndex({ folders, documents });
       setActiveFolderId((currentId) => (
         folders.some((folder: KnowledgeFolder) => folder.id === currentId) ? currentId : folders[0]?.id || ''
@@ -861,8 +869,31 @@ function KnowledgeBasePage() {
         }
         const uploadedCount = result.data?.uploaded?.length || 0;
         const failedCount = result.data?.failed?.length || 0;
-        await loadPersonalTree();
         if (uploadedCount) {
+          // 个人库上传后同样启动本地分析（服务端只存文件，分析在本地完成）
+          for (const entry of result.data?.uploaded || []) {
+            const doc = entry.doc;
+            if (!doc?.id) continue;
+            const docId = String(doc.id);
+            const fileName = String(doc.file_name || entry.file || 'document');
+            try {
+              const downloadResult = await window.yibiao?.kbPersonal.downloadDocument(
+                docId,
+                fileName,
+              );
+              if (downloadResult?.success && downloadResult.data?.localPath) {
+                await window.yibiao?.knowledgeBase.analyzeExternalFile(
+                  docId,
+                  downloadResult.data.localPath,
+                  fileName,
+                  String(targetFolder.id),
+                );
+              }
+            } catch (analyzeError) {
+              console.warn(`个人库文档 ${docId} 启动分析失败`, analyzeError);
+            }
+          }
+          await loadPersonalTree();
           showToast(`已上传 ${uploadedCount} 个文档${failedCount ? `，${failedCount} 个失败` : ''}`, 'success');
         } else if (failedCount) {
           showToast(`上传失败：${result.data?.failed?.map((entry) => entry.file).join('、')}`, 'error');
@@ -1016,7 +1047,10 @@ function KnowledgeBasePage() {
       } else {
         const res = await window.yibiao?.kbPersonal.searchDocuments(q, mode);
         if (!res?.success) throw new Error(res?.error || '搜索失败');
-        results = (res.data || []).map(adaptPersonalDocument);
+        results = await Promise.all((res.data || []).map(async (doc) => {
+          const localStatus = await window.yibiao?.knowledgeBase.getLocalStatus(doc.id);
+          return adaptPersonalDocument(doc, localStatus);
+        }));
       }
       setSearchResults(results);
       setSearchActive(true);
@@ -1246,7 +1280,10 @@ function KnowledgeBasePage() {
     setRetryingDocumentIds((prev) => new Set(prev).add(document.id));
     try {
       // 从服务器重新下载文件并重新分析
-      const downloadResult = await window.yibiao?.kbTeam.downloadDocument(document.id, document.file_name);
+      const downloadResult =
+        kbTab === 'personal'
+          ? await window.yibiao?.kbPersonal.downloadDocument(document.id, document.file_name)
+          : await window.yibiao?.kbTeam.downloadDocument(document.id, document.file_name);
       if (!downloadResult?.success || !downloadResult.data?.localPath) {
         throw new Error(downloadResult?.error || '下载文档失败');
       }

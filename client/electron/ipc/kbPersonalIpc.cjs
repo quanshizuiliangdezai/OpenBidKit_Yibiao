@@ -52,7 +52,7 @@ function registerKbPersonalIpc({ kbAuthService, app }) {
         destPath = path.join(app.getPath('userData'), 'personal-doc-cache', String(documentId));
       }
       const resolved = await personalService.downloadDocument(documentId, destPath);
-      return { success: true, data: resolved };
+      return { success: true, data: { localPath: resolved } };
     } catch (err) {
       return { error: err.message || '下载文档失败' };
     }

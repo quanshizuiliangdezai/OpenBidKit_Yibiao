@@ -704,7 +704,7 @@ export interface YibiaoBridge {
     getTree: () => Promise<{ success: boolean; data?: KbTeamTree; error?: string; needLogin?: boolean }>;
     listFolders: () => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
     listDocuments: (folderId: string) => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
-    downloadDocument: (documentId: string, destPath?: string) => Promise<{ success: boolean; data?: string; error?: string }>;
+    downloadDocument: (documentId: string, destPath?: string) => Promise<{ success: boolean; data?: { localPath: string }; error?: string }>;
     searchDocuments: (keyword: string, mode?: 'name' | 'content') => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
     createFolder: (name: string, parentId?: string | null) => Promise<{ success: boolean; data?: KbTeamFolder; error?: string }>;
     uploadDocument: (folderId: string) => Promise<{ success: boolean; data?: { uploaded: Array<{ file: string; doc: KbTeamDocument }>; failed: Array<{ file: string; error: string }>; canceled: boolean }; error?: string }>;

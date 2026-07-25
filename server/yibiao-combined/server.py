@@ -883,7 +883,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             self._ensure_owner_cols(conn)
             cols = [c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()]
             want = ['document_id', 'folder_id', 'file_name', 'status', 'progress',
-                    'item_count', 'block_count', 'created_at', 'updated_at', 'uploaded_by', 'owner_id']
+                    'item_count', 'block_count', 'created_at', 'updated_at', 'uploaded_by', 'owner_id', 'owner_name']
             sel = [c for c in want if c in cols]
             conditions = []
             args = []

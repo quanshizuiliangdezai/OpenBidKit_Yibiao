@@ -64,9 +64,13 @@ function createKbPersonalService({ app, kbAuthService }) {
       const res = await fetch(url, { headers: authHeaders() });
       if (!res.ok) throw new Error(`下载文档失败（${res.status}）`);
       const buffer = Buffer.from(await res.arrayBuffer());
-      fs.mkdirSync(path.dirname(destPath), { recursive: true });
-      fs.writeFileSync(destPath, buffer);
-      return destPath;
+      // 若调用方只传文件名/空，落到专用缓存目录（与团队库 downloadDocument 行为一致）
+      const target = destPath && path.isAbsolute(destPath)
+        ? destPath
+        : path.join(CACHE_DIR, String(documentId), path.basename(destPath || 'file'));
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, buffer);
+      return target;
     } catch (err) {
       throw new Error(`下载文档失败: ${err.message}`);
     }
