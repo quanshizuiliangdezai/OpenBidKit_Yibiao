@@ -1163,15 +1163,17 @@ def list_documents(folder_id=None, include_deleted=False):
     with _lock:
         conn = _conn()
         try:
-            base = ("SELECT id,folder_id,owner_id,title,file_name,file_size,mime_type,created_at,deleted_at "
-                    "FROM knowledge_documents")
+            base = ("SELECT d.id,d.folder_id,d.owner_id,d.title,d.file_name,d.file_size,d.mime_type,"
+                    "d.created_at,d.deleted_at,COALESCE(e.display_name,e.username) AS uploaded_by_name,"
+                    "d.owner_id AS uploaded_by "
+                    "FROM knowledge_documents d LEFT JOIN employees e ON e.id=d.owner_id")
             if not include_deleted:
-                base += " WHERE (deleted_at IS NULL OR deleted_at='')"
+                base += " WHERE (d.deleted_at IS NULL OR d.deleted_at='')"
             if folder_id is None:
-                q = base + " ORDER BY title" if include_deleted else base + " ORDER BY title"
+                q = base + " ORDER BY d.title" if include_deleted else base + " ORDER BY d.title"
             else:
-                q = (base + " AND folder_id=?" if not include_deleted
-                     else base + " WHERE folder_id=?") + " ORDER BY title"
+                q = (base + " AND d.folder_id=?" if not include_deleted
+                     else base + " WHERE d.folder_id=?") + " ORDER BY d.title"
                 rows = conn.execute(q, (int(folder_id),)).fetchall()
                 return [dict(r) for r in rows]
             rows = conn.execute(q).fetchall()
@@ -1187,10 +1189,11 @@ def search_documents(keyword):
         try:
             pattern = '%{}%'.format(keyword.replace('%', '').replace('_', ''))
             rows = conn.execute(
-                "SELECT id,folder_id,owner_id,title,file_name,file_size,mime_type,created_at "
-                "FROM knowledge_documents "
-                "WHERE (deleted_at IS NULL OR deleted_at='') AND (title LIKE ? OR file_name LIKE ?) "
-                "ORDER BY title",
+                "SELECT d.id,d.folder_id,d.owner_id,d.title,d.file_name,d.file_size,d.mime_type,d.created_at,"
+                "COALESCE(e.display_name,e.username) AS uploaded_by_name,d.owner_id AS uploaded_by "
+                "FROM knowledge_documents d LEFT JOIN employees e ON e.id=d.owner_id "
+                "WHERE (d.deleted_at IS NULL OR d.deleted_at='') AND (d.title LIKE ? OR d.file_name LIKE ?) "
+                "ORDER BY d.title",
                 (pattern, pattern)).fetchall()
             return [dict(r) for r in rows]
         finally:
@@ -1204,11 +1207,12 @@ def search_documents_fulltext(keyword):
         try:
             pattern = '%{}%'.format(keyword.replace('%', '').replace('_', ''))
             rows = conn.execute(
-                "SELECT id,folder_id,owner_id,title,file_name,file_size,mime_type,created_at "
-                "FROM knowledge_documents "
-                "WHERE (deleted_at IS NULL OR deleted_at='') AND "
-                "(title LIKE ? OR file_name LIKE ? OR COALESCE(content_text,'') LIKE ?) "
-                "ORDER BY title",
+                "SELECT d.id,d.folder_id,d.owner_id,d.title,d.file_name,d.file_size,d.mime_type,d.created_at,"
+                "COALESCE(e.display_name,e.username) AS uploaded_by_name,d.owner_id AS uploaded_by "
+                "FROM knowledge_documents d LEFT JOIN employees e ON e.id=d.owner_id "
+                "WHERE (d.deleted_at IS NULL OR d.deleted_at='') AND "
+                "(d.title LIKE ? OR d.file_name LIKE ? OR COALESCE(d.content_text,'') LIKE ?) "
+                "ORDER BY d.title",
                 (pattern, pattern, pattern)).fetchall()
             return [dict(r) for r in rows]
         finally:

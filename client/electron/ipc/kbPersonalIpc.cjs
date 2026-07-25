@@ -15,10 +15,7 @@ function registerKbPersonalIpc({ kbAuthService, app }) {
   // 获取文件夹树 + 所有文档（loadPersonalTree 使用）
   ipcMain.handle('kb-personal:get-tree', async () => {
     try {
-      const [folders, documents] = await Promise.all([
-        personalService.listFolders(),
-        personalService.listDocuments(null),  // null = 全部文件夹
-      ]);
+      const { folders, documents } = await personalService.getTree();
       return { success: true, data: { folders, documents } };
     } catch (err) {
       return { error: err.message || '获取个人库失败' };

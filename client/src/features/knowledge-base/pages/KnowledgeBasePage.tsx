@@ -1546,7 +1546,7 @@ function KnowledgeBasePage() {
               <button type="button" className="secondary-action" onClick={() => setShowBatchMove(true)} disabled={batchProcessing || syncing}>
                 批量移动（{selectedDocumentIds.size + selectedFolderIds.size}）
               </button>
-              <button type="button" className="is-danger" onClick={() => void handleBatchDelete()} disabled={batchProcessing || syncing}>
+              <button type="button" className="danger-action" onClick={() => void handleBatchDelete()} disabled={batchProcessing || syncing}>
                 {batchProcessing ? '处理中...' : `批量删除（${selectedDocumentIds.size + selectedFolderIds.size}）`}
               </button>
               {selectedDocumentIds.size > 0 && (

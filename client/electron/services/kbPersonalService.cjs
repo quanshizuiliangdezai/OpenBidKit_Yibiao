@@ -77,6 +77,46 @@ function createKbPersonalService({ app, kbAuthService }) {
   }
 
   /**
+   * 个人库整棵树：所有文件夹 + 全部原始文档（供 get-tree IPC 使用）
+   */
+  async function getTree() {
+    try {
+      const [foldersRes, docsRes] = await Promise.all([
+        fetch(`${baseUrl()}/api/personal/folders`, { headers: authHeaders() }),
+        fetch(`${baseUrl()}/api/personal/documents`, { headers: authHeaders() }),
+      ]);
+      const foldersData = foldersRes.ok ? await foldersRes.json().catch(() => ({})) : {};
+      const docsData = docsRes.ok ? await docsRes.json().catch(() => ({})) : {};
+      const folders = Array.isArray(foldersData?.data) ? foldersData.data : [];
+      const rawDocs = Array.isArray(docsData?.data) ? docsData.data : [];
+      const documents = rawDocs.map((doc) => ({
+        id: doc.id || doc.document_id || 0,
+        document_id: doc.document_id || doc.id || 0,
+        folder_id: doc.folder_id || 0,
+        title: doc.title || doc.file_name || '未知',
+        file_name: doc.file_name || '',
+        file_size: doc.file_size || 0,
+        mime_type: doc.mime_type || 'application/octet-stream',
+        status: doc.status || 'ok',
+        progress: doc.progress || 0,
+        message: doc.message || '',
+        item_count: doc.item_count || 0,
+        block_count: doc.block_count || 0,
+        filtered_block_count: doc.filtered_block_count || 0,
+        candidate_item_count: doc.candidate_item_count || 0,
+        uploaded_by: doc.uploaded_by || doc.owner_name || '',
+        owner_id: doc.owner_id,
+        owner_name: doc.owner_name,
+        created_at: doc.created_at || '',
+        updated_at: doc.updated_at || doc.created_at || '',
+      }));
+      return { folders, documents };
+    } catch (err) {
+      throw new Error(`获取个人库失败: ${err.message}`);
+    }
+  }
+
+  /**
    * 个人库搜索。mode='name' 仅文件名；mode='content' 全文检索。
    * 服务端契约：GET /api/personal/documents?q=<kw>&mode=name|content
    */
@@ -256,6 +296,7 @@ function createKbPersonalService({ app, kbAuthService }) {
   return {
     listFolders,
     listDocuments,
+    getTree,
     downloadDocument,
     searchDocuments,
     createFolder,
