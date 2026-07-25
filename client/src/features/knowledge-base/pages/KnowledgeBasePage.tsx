@@ -32,6 +32,16 @@ function adaptServerFolder(server: KbTeamFolder): KnowledgeFolder {
 // 临时类型：getLocalStatus 返回的字段少于 KnowledgeDocument
 type LocalDocPartial = Pick<KnowledgeDocument, 'id' | 'status' | 'progress' | 'message' | 'item_count' | 'block_count' | 'filtered_block_count' | 'candidate_item_count' | 'file_name'>;
 
+async function getLocalStatusSafe(documentId: string | number): Promise<LocalDocPartial | null> {
+  try {
+    return await window.yibiao?.knowledgeBase.getLocalStatus(String(documentId)) ?? null;
+  } catch (err) {
+    // 本地尚未建立分析记录（老文档/未分析过）是正常情况，不要阻断列表加载
+    console.warn(`[KB] getLocalStatus failed for ${documentId}:`, err);
+    return null;
+  }
+}
+
 function adaptServerDocument(
   server: KbTeamDocument,
   localStatus: LocalDocPartial | null,
@@ -649,7 +659,7 @@ function KnowledgeBasePage() {
       // 为每个文档检查本地分析状态
       const documents = await Promise.all(
         serverDocuments.map(async (doc) => {
-          const localStatus = await window.yibiao?.knowledgeBase.getLocalStatus(doc.id);
+          const localStatus = await getLocalStatusSafe(doc.id);
           return adaptServerDocument(doc, localStatus);
         }),
       );
@@ -684,7 +694,7 @@ function KnowledgeBasePage() {
       // 个人库文档分析在本地 store 完成，需合并本地状态
       const documents = await Promise.all(
         serverDocuments.map(async (doc) => {
-          const localStatus = await window.yibiao?.knowledgeBase.getLocalStatus(doc.id);
+          const localStatus = await getLocalStatusSafe(doc.id);
           return adaptPersonalDocument(doc, localStatus);
         }),
       );
@@ -1041,14 +1051,14 @@ function KnowledgeBasePage() {
         const res = await window.yibiao?.kbTeam.search(q, mode);
         if (!res?.success) throw new Error(res?.error || '搜索失败');
         results = await Promise.all((res.data || []).map(async (doc) => {
-          const localStatus = await window.yibiao?.knowledgeBase.getLocalStatus(doc.id);
+          const localStatus = await getLocalStatusSafe(doc.id);
           return adaptServerDocument(doc, localStatus);
         }));
       } else {
         const res = await window.yibiao?.kbPersonal.searchDocuments(q, mode);
         if (!res?.success) throw new Error(res?.error || '搜索失败');
         results = await Promise.all((res.data || []).map(async (doc) => {
-          const localStatus = await window.yibiao?.knowledgeBase.getLocalStatus(doc.id);
+          const localStatus = await getLocalStatusSafe(doc.id);
           return adaptPersonalDocument(doc, localStatus);
         }));
       }

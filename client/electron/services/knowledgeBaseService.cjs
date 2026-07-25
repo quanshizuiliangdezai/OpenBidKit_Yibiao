@@ -2332,21 +2332,26 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       return savedDocument;
     },
 
-    // 检查某个文档 ID 是否有本地分析记录，返回状态摘要。
+    // 检查某个文档 ID 是否有本地分析记录，返回状态摘要；不存在时返回 null 而不是抛错。
     getLocalDocumentStatus(documentId) {
-      const document = knowledgeBaseStore.getDocument(documentId);
-      if (!document) return null;
-      return {
-        id: document.id,
-        status: document.status,
-        progress: document.progress || 0,
-        message: document.message || '',
-        item_count: document.item_count || 0,
-        block_count: document.block_count || 0,
-        filtered_block_count: document.filtered_block_count || 0,
-        candidate_item_count: document.candidate_item_count || 0,
-        file_name: document.file_name,
-      };
+      try {
+        const document = knowledgeBaseStore.getDocument(documentId);
+        if (!document) return null;
+        return {
+          id: document.id,
+          status: document.status,
+          progress: document.progress || 0,
+          message: document.message || '',
+          item_count: document.item_count || 0,
+          block_count: document.block_count || 0,
+          filtered_block_count: document.filtered_block_count || 0,
+          candidate_item_count: document.candidate_item_count || 0,
+          file_name: document.file_name,
+        };
+      } catch (err) {
+        if (String(err.message).includes('知识库文档不存在')) return null;
+        throw err;
+      }
     },
 
     // 删除某个文档 ID 的本地分析数据（不影响服务器数据）。
