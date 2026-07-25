@@ -716,7 +716,7 @@ export interface YibiaoBridge {
     listTrash: () => Promise<{ success: boolean; data?: KbTrash; error?: string }>;
     restoreFromTrash: (type: 'folder' | 'document', id: string | number) => Promise<{ success: boolean; data?: unknown; error?: string }>;
     exportZip: (ids: Array<string | number>) => Promise<{ success: boolean; data?: { localPath: string }; error?: string; canceled?: boolean }>;
-    importToTeam: (documentIds: Array<string | number>, targetTeamFolderId: string | number, folderIds?: Array<string | number>) => Promise<{ success: boolean; data?: { created: Array<{ document_id: string | number; remote_id: number }>; failed: Array<{ document_id: string | number; error: string }> }; error?: string }>;
+    importToTeam: (documentIds: Array<string | number>, targetTeamFolderId: string | number, folderIds?: Array<string | number>) => Promise<{ success: boolean; data?: { created: Array<{ document_id: string | number; remote_id: number }>; failed: Array<{ document_id: string | number; error: string }>; auto_folder?: boolean; folder_name?: string }; error?: string }>;
     importFromTeam: (documentIds: Array<string | number>, folderIds?: Array<string | number>) => Promise<{ success: boolean; data?: { synced: Array<{ id: number; ok: boolean; msg: string }> }; error?: string }>;
   },
 }

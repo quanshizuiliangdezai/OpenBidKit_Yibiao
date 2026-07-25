@@ -812,21 +812,19 @@ function KnowledgeBasePage() {
     setShowSyncToTeam(true);
   };
 
-  // 确认将选中的个人文档同步到团队库
+  // 确认将选中的个人文档同步到团队库（目标文件夹留空则自动创建）
   const confirmSyncToTeam = async () => {
-    if (!syncTargetFolderId) {
-      showToast('请选择目标团队文件夹', 'info');
-      return;
-    }
     try {
       setSyncing(true);
       const ids = Array.from(selectedDocumentIds);
       const folderIds = Array.from(selectedFolderIds);
-      const result = await window.yibiao?.kbPersonal.importToTeam(ids, syncTargetFolderId, folderIds);
+      const result = await window.yibiao?.kbPersonal.importToTeam(ids, syncTargetFolderId || '', folderIds);
       if (!result?.success) throw new Error(result?.error || '同步到团队失败');
       const created = result.data?.created?.length || 0;
       const failed = result.data?.failed?.length || 0;
-      showToast(`已同步 ${created} 个文档到团队${failed ? `，${failed} 个失败` : ''}`, 'success');
+      const autoName = result.data?.auto_folder ? result.data?.folder_name : null;
+      const tail = failed ? `，${failed} 个失败` : '';
+      showToast(`已同步 ${created} 个文档到团队${autoName ? `（自动创建文件夹「${autoName}」）` : ''}${tail}`, 'success');
       setSelectedDocumentIds(new Set());
       setSelectedFolderIds(new Set());
       setShowSyncToTeam(false);
@@ -1639,7 +1637,7 @@ function KnowledgeBasePage() {
             <div className="knowledge-sync-head">
               <Dialog.Title className="knowledge-sync-title">同步到团队知识库</Dialog.Title>
               <Dialog.Description className="knowledge-sync-desc">
-                选择目标团队文件夹，将选中的 {selectedDocumentIds.size + selectedFolderIds.size} 个文档/文件夹同步过去。
+                选择目标团队文件夹（不选则自动创建同名文件夹），将选中的 {selectedDocumentIds.size + selectedFolderIds.size} 个文档/文件夹同步过去。
               </Dialog.Description>
             </div>
             <div className="knowledge-sync-folder-list">
@@ -1657,12 +1655,12 @@ function KnowledgeBasePage() {
                   </label>
                 ))
               ) : (
-                <div className="knowledge-empty-box"><strong>团队库暂无文件夹</strong><p>请先在团队知识库创建一个文件夹。</p></div>
+                <div className="knowledge-empty-box"><strong>团队库暂无文件夹</strong><p>不选文件夹将自动创建一个新文件夹。</p></div>
               )}
             </div>
             <div className="knowledge-sync-actions">
               <button type="button" className="secondary-action" onClick={() => setShowSyncToTeam(false)} disabled={syncing}>取消</button>
-              <button type="button" className="primary-action" onClick={() => void confirmSyncToTeam()} disabled={syncing || !syncTargetFolderId}>
+              <button type="button" className="primary-action" onClick={() => void confirmSyncToTeam()} disabled={syncing}>
                 {syncing ? '同步中...' : '开始同步'}
               </button>
             </div>

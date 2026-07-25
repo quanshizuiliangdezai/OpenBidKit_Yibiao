@@ -702,11 +702,21 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             if not data or 'documents' not in data:
                 return self._send(400, {'error': '缺少 documents 数组'})
             folder_id = data.get('folder_id')
-            if not folder_id:
-                return self._send(400, {'error': '缺少目标团队文件夹 folder_id'})
-            ok, err = self._can_write_folder(employee, folder_id)
-            if not ok:
-                return self._send(403, {'error': err})
+            auto_folder = False
+            folder_name = None
+            if folder_id:
+                ok, err = self._can_write_folder(employee, folder_id)
+                if not ok:
+                    return self._send(403, {'error': err})
+            else:
+                # 未指定目标文件夹：自动在团队库创建（用选中的个人库文件夹名，否则用时间戳）
+                name = self._auto_team_folder_name(data.get('folders') or [], employee)
+                folder, ferr = kb_db.create_folder(name, None, employee['id'])
+                if ferr or not folder:
+                    return self._send(400, {'error': ferr or '创建目标团队文件夹失败'})
+                folder_id = folder['id']
+                auto_folder = True
+                folder_name = folder['name']
             created, failed = [], []
             for pfid in (data.get('folders') or []):
                 collected = []
@@ -731,7 +741,8 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 role=employee.get('role'), action='import', target_type='document',
                 detail='个人库→团队库: 成功 %d, 失败 %d' % (len(created), len(failed)),
                 ip=_client_ip(self))
-            return self._send(200, {'success': True, 'created': created, 'failed': failed})
+            return self._send(200, {'success': True, 'created': created, 'failed': failed,
+                                    'auto_folder': auto_folder, 'folder_name': folder_name})
 
         if path == '/api/import/team':
             # 团队库 → 个人库（需登录会话）
@@ -1636,6 +1647,20 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         if err:
             return None, err
         return doc['id'], None
+
+    def _auto_team_folder_name(self, folder_ids, employee):
+        """自动同步到团队库时，根据选中的个人库文件夹名决定新建文件夹名；无文件夹则用工号时间戳。"""
+        for pfid in (folder_ids or []):
+            conn = _master_db_conn()
+            try:
+                row = conn.execute(
+                    "SELECT name FROM knowledge_folders WHERE folder_id=?", (str(pfid),)).fetchone()
+            finally:
+                conn.close()
+            if row and row[0]:
+                return row[0]
+        ts = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y%m%d-%H%M')
+        return '个人库导入-%s' % ts
 
     # ---- P0-2 文件夹级同步辅助（扁平递归：整文件夹内容同步到目标库） ----
     def _collect_master_descendant_folders(self, root_id):
