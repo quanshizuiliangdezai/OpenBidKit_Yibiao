@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useAuth } from './AuthContext';
 import { useToast } from '../ui';
 
@@ -15,6 +15,11 @@ export function ClientLoginGate() {
   const [department, setDepartment] = useState('');
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER);
   const [busy, setBusy] = useState(false);
+  const usernameRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => usernameRef.current?.focus(), 0);
+    return () => clearTimeout(timer);
+  }, [mode]);
 
   async function handleLogin(event: FormEvent) {
     event.preventDefault();
@@ -89,7 +94,7 @@ export function ClientLoginGate() {
             </label>
             <label>
               用户名
-              <input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required />
+              <input ref={usernameRef} value={username} onChange={(e) => setUsername(e.target.value)} required />
             </label>
             <label>
               密码

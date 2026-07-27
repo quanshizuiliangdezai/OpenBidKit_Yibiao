@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { KbAuthStatus } from '../../../shared/types/ipc';
 
 interface KbLoginPanelProps {
@@ -16,7 +16,11 @@ function KbLoginPanel({ onLoggedIn }: KbLoginPanelProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [registered, setRegistered] = useState(false);
-
+  const usernameRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => usernameRef.current?.focus(), 0);
+    return () => clearTimeout(timer);
+  }, [mode, registered]);
   useEffect(() => {
     void window.yibiao?.kbAuth.getStatus().then((status) => {
       if (status?.serverUrl) setServerUrl(status.serverUrl);
@@ -126,7 +130,7 @@ function KbLoginPanel({ onLoggedIn }: KbLoginPanelProps) {
           </label>
           <label className="kb-login-field">
             <span>用户名</span>
-            <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="请输入用户名" disabled={submitting} autoFocus />
+            <input type="text" ref={usernameRef} value={username} onChange={(e) => setUsername(e.target.value)} placeholder="请输入用户名" disabled={submitting} />
           </label>
           <label className="kb-login-field">
             <span>密码</span>

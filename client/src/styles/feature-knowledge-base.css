@@ -325,6 +325,28 @@
   border-left: 2px solid rgba(33, 116, 253, 0.18);
 }
 
+/* 文件夹折叠箭头 */
+.knowledge-folder-collapse {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--yb-text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease;
+}
+
+.knowledge-folder-collapse:hover {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.1);
+}
+
 .knowledge-toolbar-actions .secondary-action.is-active {
   color: #ffffff;
   background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));

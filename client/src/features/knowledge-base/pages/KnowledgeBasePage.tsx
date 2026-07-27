@@ -423,6 +423,48 @@ function KnowledgeBasePage() {
   const [syncTargetFolderId, setSyncTargetFolderId] = useState('');
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<string>>(() => new Set());
   const [selectedFolderIds, setSelectedFolderIds] = useState<Set<string>>(() => new Set());
+  // 文件夹树折叠状态
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
+  const toggleCollapseFolder = (folderId: string) => {
+    setCollapsedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderId)) next.delete(folderId);
+      else next.add(folderId);
+      return next;
+    });
+  };
+  const createFolderInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (showCreateFolder && createFolderInputRef.current) {
+      const id = requestAnimationFrame(() => createFolderInputRef.current?.focus());
+      return () => cancelAnimationFrame(id);
+    }
+  }, [showCreateFolder]);
+  // 父子关系映射（用于折叠判断与折叠箭头）
+  const folderParentMap = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const f of index.folders) map.set(f.id, f.parent_id ?? null);
+    return map;
+  }, [index.folders]);
+  const folderChildrenMap = useMemo(() => {
+    const map = new Map<string, KnowledgeFolder[]>();
+    for (const f of index.folders) {
+      if (f.parent_id) {
+        const arr = map.get(f.parent_id) || [];
+        arr.push(f);
+        map.set(f.parent_id, arr);
+      }
+    }
+    return map;
+  }, [index.folders]);
+  const isFolderVisible = (folderId: string): boolean => {
+    let pid = folderParentMap.get(folderId) || null;
+    while (pid) {
+      if (collapsedFolders.has(pid)) return false;
+      pid = folderParentMap.get(pid) || null;
+    }
+    return true;
+  };
 
   // C5 搜索（name / content 双模式）
   const [searchQuery, setSearchQuery] = useState('');
@@ -435,6 +477,13 @@ function KnowledgeBasePage() {
   const [renameTarget, setRenameTarget] = useState<KnowledgeFolder | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [renaming, setRenaming] = useState(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (showRename && renameInputRef.current) {
+      const id = requestAnimationFrame(() => renameInputRef.current?.focus());
+      return () => cancelAnimationFrame(id);
+    }
+  }, [showRename]);
   // C2 导出
   const [exporting, setExporting] = useState(false);
   // C3 回收站
@@ -468,6 +517,28 @@ function KnowledgeBasePage() {
   const auth = useAuth();
 
   const activeFolder = index.folders.find((folder) => folder.id === activeFolderId) || index.folders[0];
+  // 切换 activeFolder 时自动展开其所有祖先，避免被折叠的父级隐藏当前文件夹
+  useEffect(() => {
+    if (!activeFolder) return;
+    const ancestors: string[] = [];
+    let pid = folderParentMap.get(activeFolder.id) || null;
+    while (pid) {
+      ancestors.push(pid);
+      pid = folderParentMap.get(pid) || null;
+    }
+    if (ancestors.length === 0) return;
+    setCollapsedFolders((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const id of ancestors) {
+        if (next.has(id)) {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [activeFolder, folderParentMap]);
   const documentsByFolder = useMemo(() => {
     const grouped = new Map<string, KnowledgeDocument[]>();
     index.documents.forEach((document) => {
@@ -484,6 +555,20 @@ function KnowledgeBasePage() {
   // C5：搜索激活时展示跨文件夹搜索结果，否则展示当前文件夹文档
   const displayedDocuments = searchActive ? searchResults : documents;
   const visibleDocuments = displayedDocuments.slice(0, Math.min(visibleDocumentCount, displayedDocuments.length));
+  // 处理中文档（非 success/error）禁止转移/导出/同步；选中文件夹时递归检查其下文档
+  const isProcessingDocument = (status: KnowledgeDocument['status']) => status !== 'success' && status !== 'error';
+  const hasSelectedProcessing = useMemo(() => {
+    const selectedFolderIdSet = selectedFolderIds;
+    for (const document of index.documents) {
+      if (selectedDocumentIds.has(document.id) && isProcessingDocument(document.status)) return true;
+      let fid: string | null = document.folder_id;
+      while (fid) {
+        if (selectedFolderIdSet.has(fid) && isProcessingDocument(document.status)) return true;
+        fid = folderParentMap.get(fid) ?? null;
+      }
+    }
+    return false;
+  }, [index.documents, selectedDocumentIds, selectedFolderIds, folderParentMap]);
 
   // A1/A3：当前用户与删除权限判断
   const currentUserId = authStatus?.employee?.id;
@@ -799,6 +884,10 @@ function KnowledgeBasePage() {
       showToast('请先勾选要同步到团队的文档或文件夹', 'info');
       return;
     }
+    if (hasSelectedProcessing) {
+      showToast('处理中文档不可同步到团队', 'info');
+      return;
+    }
     await fetchTeamFolders();
     setSyncTargetFolderId('');
     setShowSyncToTeam(true);
@@ -832,6 +921,10 @@ function KnowledgeBasePage() {
   const syncFromTeam = async () => {
     if (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0) {
       showToast('请先勾选要同步到个人的文档或文件夹', 'info');
+      return;
+    }
+    if (hasSelectedProcessing) {
+      showToast('处理中文档不可同步到个人', 'info');
       return;
     }
     if (!window.confirm(`确定将选中的 ${selectedDocumentIds.size} 个文档同步到个人知识库吗？`)) return;
@@ -1121,6 +1214,7 @@ function KnowledgeBasePage() {
   // ---- C2 批量导出 zip ----
   const handleExport = async () => {
     if (selectedDocumentIds.size === 0) { showToast('请先勾选要导出的文档', 'info'); return; }
+    if (hasSelectedProcessing) { showToast('处理中文档不可导出', 'info'); return; }
     try {
       setExporting(true);
       const ids = Array.from(selectedDocumentIds);
@@ -1216,6 +1310,10 @@ function KnowledgeBasePage() {
 
   const handleBatchMove = async (targetFolderId: string) => {
     if (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0) return;
+    if (hasSelectedProcessing) {
+      showToast('处理中文档不可移动', 'info');
+      return;
+    }
     // 文档必须归属某个文件夹，不支持移动到"根目录"
     if (selectedDocumentIds.size > 0 && !targetFolderId) {
       showToast('文档必须移动到文件夹，请选择目标文件夹', 'info');
@@ -1267,6 +1365,11 @@ function KnowledgeBasePage() {
     const folderId = event.dataTransfer.getData('application/x-yibiao-folder');
     setDragDocId(null);
     if (docId && docId !== folder.id) {
+      const document = index.documents.find((d) => d.id === docId);
+      if (document && isProcessingDocument(document.status)) {
+        showToast('处理中文档不可移动', 'info');
+        return;
+      }
       try {
         const result = kbTab === 'team'
           ? await window.yibiao?.kbTeam.moveDocument(docId, folder.id)
@@ -1278,6 +1381,14 @@ function KnowledgeBasePage() {
         showToast(error instanceof Error ? error.message : '移动失败', 'error');
       }
     } else if (folderId && folderId !== folder.id) {
+      const folderIdsInBranch = new Set<string>([folderId]);
+      for (const f of index.folders) {
+        if (f.parent_id && folderIdsInBranch.has(f.parent_id)) folderIdsInBranch.add(f.id);
+      }
+      if (index.documents.some((d) => folderIdsInBranch.has(d.folder_id) && isProcessingDocument(d.status))) {
+        showToast('文件夹内包含处理中文档，不可移动', 'info');
+        return;
+      }
       try {
         const result = kbTab === 'team'
           ? await window.yibiao?.kbTeam.moveFolder(folderId, folder.id)
@@ -1536,7 +1647,7 @@ function KnowledgeBasePage() {
               <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading || !activeFolder}>
                 {loading ? '处理中...' : '上传文档'}
               </button>
-              <button type="button" className="sync-action" onClick={() => void syncFromTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0)}>
+              <button type="button" className="sync-action" onClick={() => void syncFromTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0) || hasSelectedProcessing}>
                 同步到个人{(selectedDocumentIds.size + selectedFolderIds.size) ? `（${selectedDocumentIds.size + selectedFolderIds.size}）` : ''}
               </button>
             </>
@@ -1547,21 +1658,21 @@ function KnowledgeBasePage() {
               <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading || !activeFolder}>
                 {loading ? '处理中...' : '上传文档'}
               </button>
-              <button type="button" className="sync-action" onClick={() => void openSyncToTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0)}>
+              <button type="button" className="sync-action" onClick={() => void openSyncToTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0) || hasSelectedProcessing}>
                 同步到团队{(selectedDocumentIds.size + selectedFolderIds.size) ? `（${selectedDocumentIds.size + selectedFolderIds.size}）` : ''}
               </button>
             </>
           )}
           {(selectedDocumentIds.size + selectedFolderIds.size) > 0 && (
             <>
-              <button type="button" className="secondary-action" onClick={() => setShowBatchMove(true)} disabled={batchProcessing || syncing}>
+              <button type="button" className="secondary-action" onClick={() => setShowBatchMove(true)} disabled={batchProcessing || syncing || hasSelectedProcessing}>
                 批量移动（{selectedDocumentIds.size + selectedFolderIds.size}）
               </button>
               <button type="button" className="danger-action" onClick={() => void handleBatchDelete()} disabled={batchProcessing || syncing}>
                 {batchProcessing ? '处理中...' : `批量删除（${selectedDocumentIds.size + selectedFolderIds.size}）`}
               </button>
               {selectedDocumentIds.size > 0 && (
-                <button type="button" className="secondary-action" onClick={() => void handleExport()} disabled={exporting || syncing}>
+                <button type="button" className="secondary-action" onClick={() => void handleExport()} disabled={exporting || syncing || hasSelectedProcessing}>
                   {exporting ? '导出中...' : `导出（${selectedDocumentIds.size}）`}
                 </button>
               )}
@@ -1608,6 +1719,7 @@ function KnowledgeBasePage() {
         >
           <input
             autoFocus
+            ref={createFolderInputRef}
             value={newFolderName}
             onChange={(event) => setNewFolderName(event.target.value)}
             placeholder="输入文件夹名称"
@@ -1694,47 +1806,62 @@ function KnowledgeBasePage() {
             </div>
           ) : index.folders.length ? (
             <div className="knowledge-folder-list">
-              {index.folders.map((folder) => {
-                const count = documentsByFolder.get(folder.id)?.length || 0;
-                return (
-                  <article
-                    key={folder.id}
-                    className={`knowledge-folder-card ${folder.id === activeFolder?.id ? 'is-active' : ''} ${folder.parent_id ? 'is-child' : ''} ${dragOverFolderId === folder.id ? 'is-drop-target' : ''}`}
-                    draggable
-                    onDragStart={(event) => handleDragStartFolder(event, folder.id)}
-                    onDragOver={(event) => { event.preventDefault(); setDragOverFolderId(folder.id); }}
-                    onDragLeave={() => setDragOverFolderId((prev) => (prev === folder.id ? null : prev))}
-                    onDrop={(event) => void handleDropOnFolder(event, folder)}
-                    onContextMenu={(event) => openFolderContextMenu(event, folder)}
-                  >
-                    <div className="knowledge-folder-row">
-                      <label className="knowledge-document-select" onClick={(event) => event.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={selectedFolderIds.has(folder.id)}
-                          onChange={() => toggleSelectFolder(folder.id)}
-                        />
-                      </label>
-                      <button type="button" className="knowledge-folder-main" onClick={() => { if (searchActive) clearSearch(); startTransition(() => setActiveFolderId(folder.id)); }}>
-                        <span aria-hidden="true">F</span>
-                        <strong>{folder.name}</strong>
-                        <small>{count} 个文档</small>
-                      </button>
-                    </div>
-                    {kbTab === 'team' && (
-                      <div className="knowledge-folder-actions">
-                        <button
-                          type="button"
-                          className="is-danger"
-                          disabled={!canManageFolder(folder)}
-                          title={canManageFolder(folder) ? '' : '只能删除自己创建的文件夹'}
-                          onClick={() => void deleteFolder(folder.id, folder.name)}
-                        >删除</button>
+              {index.folders
+                .filter((folder) => isFolderVisible(folder.id))
+                .map((folder) => {
+                  const count = documentsByFolder.get(folder.id)?.length || 0;
+                  const hasChildren = (folderChildrenMap.get(folder.id)?.length || 0) > 0;
+                  const isCollapsed = collapsedFolders.has(folder.id);
+                  return (
+                    <article
+                      key={folder.id}
+                      className={`knowledge-folder-card ${folder.id === activeFolder?.id ? 'is-active' : ''} ${folder.parent_id ? 'is-child' : ''} ${dragOverFolderId === folder.id ? 'is-drop-target' : ''}`}
+                      draggable
+                      onDragStart={(event) => handleDragStartFolder(event, folder.id)}
+                      onDragOver={(event) => { event.preventDefault(); setDragOverFolderId(folder.id); }}
+                      onDragLeave={() => setDragOverFolderId((prev) => (prev === folder.id ? null : prev))}
+                      onDrop={(event) => void handleDropOnFolder(event, folder)}
+                      onContextMenu={(event) => openFolderContextMenu(event, folder)}
+                    >
+                      <div className="knowledge-folder-row">
+                        <label className="knowledge-document-select" onClick={(event) => event.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedFolderIds.has(folder.id)}
+                            onChange={() => toggleSelectFolder(folder.id)}
+                          />
+                        </label>
+                        {hasChildren && (
+                          <button
+                            type="button"
+                            className="knowledge-folder-collapse"
+                            title={isCollapsed ? '展开子文件夹' : '折叠子文件夹'}
+                            onClick={(event) => { event.stopPropagation(); toggleCollapseFolder(folder.id); }}
+                            aria-label={isCollapsed ? '展开子文件夹' : '折叠子文件夹'}
+                          >
+                            {isCollapsed ? '▸' : '▾'}
+                          </button>
+                        )}
+                        <button type="button" className="knowledge-folder-main" onClick={() => { if (searchActive) clearSearch(); startTransition(() => setActiveFolderId(folder.id)); }}>
+                          <span aria-hidden="true">F</span>
+                          <strong>{folder.name}</strong>
+                          <small>{count} 个文档</small>
+                        </button>
                       </div>
-                    )}
-                  </article>
-                );
-              })}
+                      {kbTab === 'team' && (
+                        <div className="knowledge-folder-actions">
+                          <button
+                            type="button"
+                            className="is-danger"
+                            disabled={!canManageFolder(folder)}
+                            title={canManageFolder(folder) ? '' : '只能删除自己创建的文件夹'}
+                            onClick={() => void deleteFolder(folder.id, folder.name)}
+                          >删除</button>
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
             </div>
           ) : (
             <div className="knowledge-empty-box">
@@ -1773,7 +1900,8 @@ function KnowledgeBasePage() {
                   <article
                     className="knowledge-document-card"
                     key={document.id}
-                    draggable
+                    draggable={!isProcessingDocument(document.status)}
+                    title={isProcessingDocument(document.status) ? '处理中，不可移动' : ''}
                     onDragStart={(event) => handleDragStartDoc(event, document.id)}
                     onDragEnd={() => setDragDocId(null)}
                   >
@@ -1980,7 +2108,7 @@ function KnowledgeBasePage() {
             </div>
             <div className="knowledge-sync-folder-list">
               <input
-                autoFocus
+                ref={renameInputRef}
                 className="knowledge-search-input"
                 value={renameValue}
                 onChange={(event) => setRenameValue(event.target.value)}
