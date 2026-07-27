@@ -35,9 +35,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Git Bash 下把 /c/... 转成 Windows 路径，避免 python 收到 C:\c\... 双重转义
+if command -v cygpath &>/dev/null; then
+  SCRIPT_DIR="$(cygpath -w "$SCRIPT_DIR")"
+  REPO_ROOT="$(cygpath -w "$REPO_ROOT")"
+fi
+# 传给 Python 的路径统一用正斜杠（Windows 上 Python 也能识别），避免 \U 被当 unicode 转义
+SCRIPT_DIR_PY="${SCRIPT_DIR//\\//}"
+REPO_ROOT_PY="${REPO_ROOT//\\//}"
 
 echo "==> 部署服务器后端（仅服务器端，不含前端）"
-echo "==> 仓库根: ${REPO_ROOT}"
+echo "==> 仓库根: ${REPO_ROOT_PY}"
 
 # 1. 校验必备环境变量
 if [[ -z "${KB_DEPLOY_SSH_PASSWORD:-}" ]]; then
@@ -45,25 +53,44 @@ if [[ -z "${KB_DEPLOY_SSH_PASSWORD:-}" ]]; then
   exit 1
 fi
 
-# 2. 确定 python 解释器（优先 managed runtime，退回系统 python3）
-if command -v python3 &>/dev/null; then
-  PY="python3"
-elif command -v python &>/dev/null; then
-  PY="python"
-else
-  echo "错误：未找到 python，请先安装。" >&2
-  exit 1
-fi
+# 2. 确定 python 解释器：优先用带 paramiko 的 python
+#    （Windows Git Bash 的 python3 常指向 Windows Store 占位符，无 paramiko，故需检测）
+detect_python() {
+  # 用户可显式指定：export PYTHON_BIN=/path/to/python
+  if [[ -n "${PYTHON_BIN:-}" ]]; then
+    "$PYTHON_BIN" -c "import paramiko" &>/dev/null && { echo "$PYTHON_BIN"; return 0; }
+    echo "错误：PYTHON_BIN 指定的解释器无 paramiko 模块" >&2
+    return 1
+  fi
+  # 候选解释器（managed runtime 优先，兼容大多数环境）
+  local candidates=(
+    "C:/Users/13370/.workbuddy/binaries/python/versions/3.13.12/python.exe"
+    "python3"
+    "python"
+  )
+  for cand in "${candidates[@]}"; do
+    if command -v "$cand" &>/dev/null || [[ -x "$cand" ]]; then
+      if "$cand" -c "import paramiko" &>/dev/null; then
+        echo "$cand"
+        return 0
+      fi
+    fi
+  done
+  echo "错误：未找到带 paramiko 的 python，请先 pip install paramiko 或设置 PYTHON_BIN。" >&2
+  return 1
+}
+PY="$(detect_python)" || exit 1
+echo "==> 使用 python: ${PY}"
 
 # 3. 部署 yibiao-combined 服务（复用 deploy_kb_server.py）
 echo "==> [1/3] 部署 yibiao-combined 服务（端口 15004）"
-"${PY}" "${SCRIPT_DIR}/scripts/deploy_kb_server.py"
+"${PY}" "${SCRIPT_DIR_PY}/scripts/deploy_kb_server.py"
 
 # 4. 部署同步合并脚本 merge.py
 echo "==> [2/3] 部署同步合并脚本 merge.py"
 "${PY}" - <<PYEOF
 import os, sys, paramiko
-sys.path.insert(0, "${SCRIPT_DIR}/scripts")
+sys.path.insert(0, "${SCRIPT_DIR_PY}/scripts")
 import deploy_kb_server as d
 ssh = paramiko.SSHClient()
 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -73,7 +100,7 @@ ssh.connect(d.HOST, port=d.PORT, username=d.USER, password=d.PASSWORD, timeout=1
                                  'ciphers': ['aes256-gcm@openssh.com','chacha20-poly1305@openssh.com','aes256-ctr','aes192-ctr','aes128-ctr']})
 sftp = ssh.open_sftp()
 ssh.exec_command('mkdir -p /toubiao/yibiao-sync')
-local_merge = os.path.join("${REPO_ROOT}", "sync-server", "merge.py")
+local_merge = os.path.join("${REPO_ROOT_PY}", "sync-server", "merge.py")
 sftp.put(local_merge, "/toubiao/yibiao-sync/merge.py")
 sftp.chmod("/toubiao/yibiao-sync/merge.py", 0o755)
 sftp.close()
@@ -85,9 +112,9 @@ PYEOF
 # 5. 健康检查
 echo "==> [3/3] 健康检查"
 sleep 3
-"${PY}" - <<'PYEOF'
+"${PY}" - <<PYEOF
 import os, sys, paramiko
-sys.path.insert(0, os.environ.get('DEPLOY_SCRIPTS', '.'))
+sys.path.insert(0, "${SCRIPT_DIR_PY}/scripts")
 import deploy_kb_server as d
 ssh = paramiko.SSHClient()
 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
