@@ -105,8 +105,7 @@ const statusLabels: Record<KnowledgeDocument['status'], string> = {
 // 回收站 24h 倒计时显示
 function formatTrashRemaining(deletedAt?: string): string {
   if (!deletedAt) return '';
-  // 后端 deleted_at 是本地 ISO 时间（无时区后缀），按本地时间解析，不要当成 UTC
-  const deletedMs = Date.parse(deletedAt.replace(' ', 'T'));
+  const deletedMs = Date.parse(deletedAt.replace(' ', 'T') + (deletedAt.includes('Z') ? '' : 'Z'));
   if (Number.isNaN(deletedMs)) return '';
   const elapsedMs = Date.now() - deletedMs;
   const remainMs = 24 * 3600 * 1000 - elapsedMs;
@@ -824,34 +823,12 @@ function KnowledgeBasePage() {
       const created = result.data?.created?.length || 0;
       const failed = result.data?.failed?.length || 0;
       const autoName = result.data?.auto_folder ? result.data?.folder_name : null;
-      const targetFolderId = String(result.data?.folder_id || syncTargetFolderId || '');
       const tail = failed ? `，${failed} 个失败` : '';
       showToast(`已同步 ${created} 个文档到团队${autoName ? `（自动创建文件夹「${autoName}」）` : ''}${tail}`, 'success');
       setSelectedDocumentIds(new Set());
       setSelectedFolderIds(new Set());
       setShowSyncToTeam(false);
       if (kbTab === 'team') await loadTeamTree();
-      // 同步完成后为每个新团队文档启动本地分析（与上传后行为一致）
-      for (const item of result.data?.created || []) {
-        if (!item.remote_id) continue;
-        try {
-          const fileName = String(item.file_name || 'document');
-          const downloadResult = await window.yibiao?.kbTeam.downloadDocument(
-            String(item.remote_id),
-            fileName,
-          );
-          if (downloadResult?.success && downloadResult.data?.localPath) {
-            await window.yibiao?.knowledgeBase.analyzeExternalFile(
-              String(item.remote_id),
-              downloadResult.data.localPath,
-              fileName,
-              targetFolderId,
-            );
-          }
-        } catch (analyzeError) {
-          console.warn(`团队库同步文档 ${item.remote_id} 启动分析失败`, analyzeError);
-        }
-      }
     } catch (error) {
       showToast(error instanceof Error ? error.message : '同步到团队失败', 'error');
     } finally {
@@ -872,32 +849,40 @@ function KnowledgeBasePage() {
       const folderIds = Array.from(selectedFolderIds);
       const result = await window.yibiao?.kbPersonal.importFromTeam(ids, folderIds);
       if (!result?.success) throw new Error(result?.error || '同步到个人失败');
-      const synced = result.data?.synced?.filter((item) => item.ok).length || 0;
-      showToast(`已同步 ${synced} 个文档到个人知识库`, 'success');
+      const syncedItems = (result.data?.synced || []).filter((item) => item.ok);
+      const synced = syncedItems.length;
+      const targetFolderId = syncedItems[0]?.folder_id || `team-import-${authStatus?.employee?.id ?? ''}`;
+      showToast(`已同步 ${synced} 个文档到个人知识库${synced ? '（团队库导入文件夹）' : ''}`, 'success');
       setSelectedDocumentIds(new Set());
       setSelectedFolderIds(new Set());
-      if (kbTab === 'personal') await loadPersonalTree();
-      // 同步完成后为每个新个人文档启动本地分析（与上传后行为一致）
-      for (const item of result.data?.synced || []) {
-        if (!item.ok || !item.personal_id) continue;
-        try {
-          const fileName = String(item.file_name || 'document');
-          const personalFolderId = String(item.folder_id || '');
-          const downloadResult = await window.yibiao?.kbPersonal.downloadDocument(
-            String(item.personal_id),
-            fileName,
-          );
-          if (downloadResult?.success && downloadResult.data?.localPath) {
-            await window.yibiao?.knowledgeBase.analyzeExternalFile(
+      if (syncedItems.length && targetFolderId) {
+        // 切到个人库并定位到目标文件夹，避免用户以为没同步
+        setKbTab('personal');
+        setActiveFolderId(targetFolderId);
+        await loadPersonalTree();
+        // 同步后启动本地分析，补齐未分析文档的知识条目
+        for (const item of syncedItems) {
+          if (!item.personal_id || !item.file_name) continue;
+          try {
+            const downloadResult = await window.yibiao?.kbPersonal.downloadDocument(
               String(item.personal_id),
-              downloadResult.data.localPath,
-              fileName,
-              personalFolderId,
+              item.file_name,
             );
+            if (downloadResult?.success && downloadResult.data?.localPath) {
+              await window.yibiao?.knowledgeBase.analyzeExternalFile(
+                String(item.personal_id),
+                downloadResult.data.localPath,
+                item.file_name,
+                targetFolderId,
+              );
+            }
+          } catch (analyzeError) {
+            console.warn(`同步文档 ${item.personal_id} 启动本地分析失败`, analyzeError);
           }
-        } catch (analyzeError) {
-          console.warn(`个人库同步文档 ${item.personal_id} 启动分析失败`, analyzeError);
         }
+        await loadPersonalTree();
+      } else if (kbTab === 'personal') {
+        await loadPersonalTree();
       }
     } catch (error) {
       showToast(error instanceof Error ? error.message : '同步到个人失败', 'error');
@@ -1551,57 +1536,58 @@ function KnowledgeBasePage() {
     <>
       <div className="page-stack knowledge-page">
         <section className="knowledge-workspace-bar">
-          <div className="knowledge-workspace-top">
-            <div className="knowledge-breadcrumb">
-              <span className="knowledge-breadcrumb-title">知识库</span>
-              <div className="knowledge-breadcrumb-body">
-                <strong>{activeFolder?.name || '未选择文件夹'}</strong>
-                <small>{index.folders.length} 个文件夹 / {index.documents.length} 个文档</small>
-              </div>
-            </div>
-            {authStatus && <KbUserBar status={authStatus} onLogout={() => void handleLogout()} />}
-          </div>
-          <div className="knowledge-workspace-bottom">
-            <div className="knowledge-toolbar-tabs">
-              <button type="button" className={`kb-tab ${kbTab === 'team' ? 'is-active' : ''}`} onClick={() => setKbTab('team')}>团队知识库</button>
-              <button type="button" className={`kb-tab ${kbTab === 'personal' ? 'is-active' : ''}`} onClick={() => setKbTab('personal')}>个人知识库</button>
-            </div>
-            <div className="knowledge-toolbar-actions">
-              <button type="button" className="knowledge-trash-entry" onClick={() => void openTrash()}>回收站</button>
-              {(selectedDocumentIds.size + selectedFolderIds.size) > 0 && (
-                <div className="knowledge-batch-group">
-                  <span className="knowledge-batch-count">已选 {selectedDocumentIds.size + selectedFolderIds.size} 项</span>
-                  <button type="button" className="secondary-action" onClick={() => setShowBatchMove(true)} disabled={batchProcessing || syncing}>批量移动</button>
-                  <button type="button" className="danger-action" onClick={() => void handleBatchDelete()} disabled={batchProcessing || syncing}>
-                    {batchProcessing ? '处理中...' : '批量删除'}
-                  </button>
-                  {selectedDocumentIds.size > 0 && (
-                    <button type="button" className="secondary-action" onClick={() => void handleExport()} disabled={exporting || syncing}>
-                      {exporting ? '导出中...' : '导出'}
-                    </button>
-                  )}
-                  <button type="button" className="secondary-action is-ghost" onClick={() => { setSelectedDocumentIds(new Set()); setSelectedFolderIds(new Set()); }}>取消选择</button>
-                </div>
-              )}
-              <div className="knowledge-main-actions">
-                {kbTab === 'team' && (
-                  <button type="button" className="sync-action" onClick={() => void syncFromTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0)}>
-                    同步到个人{(selectedDocumentIds.size + selectedFolderIds.size) ? `（${selectedDocumentIds.size + selectedFolderIds.size}）` : ''}
-                  </button>
-                )}
-                {kbTab === 'personal' && (
-                  <button type="button" className="sync-action" onClick={() => void openSyncToTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0)}>
-                    同步到团队{(selectedDocumentIds.size + selectedFolderIds.size) ? `（${selectedDocumentIds.size + selectedFolderIds.size}）` : ''}
-                  </button>
-                )}
-                <button type="button" className="secondary-action" onClick={() => { setNewFolderParentId(null); setCreateAsSubfolder(false); setShowCreateFolder((value) => !value); }} disabled={listLoading}>新建文件夹</button>
-                <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading || !activeFolder}>
-                  {loading ? '处理中...' : '上传文档'}
+        <div className="knowledge-breadcrumb">
+          <span>知识库</span>
+          <strong>{activeFolder?.name || '未选择文件夹'}</strong>
+          <small>{index.folders.length} 个文件夹 / {index.documents.length} 个文档</small>
+        </div>
+        <div className="knowledge-toolbar-tabs">
+          <button type="button" className={`kb-tab ${kbTab === 'team' ? 'is-active' : ''}`} onClick={() => setKbTab('team')}>团队知识库</button>
+          <button type="button" className={`kb-tab ${kbTab === 'personal' ? 'is-active' : ''}`} onClick={() => setKbTab('personal')}>个人知识库</button>
+        </div>
+        <div className="knowledge-toolbar-actions">
+          {authStatus && <KbUserBar status={authStatus} onLogout={() => void handleLogout()} />}
+          {kbTab === 'team' && (
+            <>
+              <button type="button" className="secondary-action" onClick={() => { setNewFolderParentId(null); setCreateAsSubfolder(false); setShowCreateFolder((value) => !value); }} disabled={listLoading}>新建文件夹</button>
+              <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading || !activeFolder}>
+                {loading ? '处理中...' : '上传文档'}
+              </button>
+              <button type="button" className="sync-action" onClick={() => void syncFromTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0)}>
+                同步到个人{(selectedDocumentIds.size + selectedFolderIds.size) ? `（${selectedDocumentIds.size + selectedFolderIds.size}）` : ''}
+              </button>
+            </>
+          )}
+          {kbTab === 'personal' && (
+            <>
+              <button type="button" className="secondary-action" onClick={() => { setNewFolderParentId(null); setCreateAsSubfolder(false); setShowCreateFolder((value) => !value); }} disabled={listLoading}>新建文件夹</button>
+              <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading || !activeFolder}>
+                {loading ? '处理中...' : '上传文档'}
+              </button>
+              <button type="button" className="sync-action" onClick={() => void openSyncToTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0)}>
+                同步到团队{(selectedDocumentIds.size + selectedFolderIds.size) ? `（${selectedDocumentIds.size + selectedFolderIds.size}）` : ''}
+              </button>
+            </>
+          )}
+          {(selectedDocumentIds.size + selectedFolderIds.size) > 0 && (
+            <>
+              <button type="button" className="secondary-action" onClick={() => setShowBatchMove(true)} disabled={batchProcessing || syncing}>
+                批量移动（{selectedDocumentIds.size + selectedFolderIds.size}）
+              </button>
+              <button type="button" className="danger-action" onClick={() => void handleBatchDelete()} disabled={batchProcessing || syncing}>
+                {batchProcessing ? '处理中...' : `批量删除（${selectedDocumentIds.size + selectedFolderIds.size}）`}
+              </button>
+              {selectedDocumentIds.size > 0 && (
+                <button type="button" className="secondary-action" onClick={() => void handleExport()} disabled={exporting || syncing}>
+                  {exporting ? '导出中...' : `导出（${selectedDocumentIds.size}）`}
                 </button>
-              </div>
-            </div>
-          </div>
-        </section>
+              )}
+              <button type="button" className="secondary-action" onClick={() => { setSelectedDocumentIds(new Set()); setSelectedFolderIds(new Set()); }}>取消选择</button>
+            </>
+          )}
+          <button type="button" className="secondary-action" onClick={() => void openTrash()}>回收站</button>
+        </div>
+      </section>
 
       <div className="knowledge-search-bar">
         <input

@@ -1571,11 +1571,16 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     (folder_id, '团队库导入', 9999, now, now, owner_id, owner_name))
                 cols = {c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()}
                 doc_dir_rel = 'folders/%s/documents/%s' % (folder_id, new_doc_id)
+                team_status = team_doc.get('status') or 'pending'
+                team_progress = team_doc.get('progress') if team_doc.get('progress') is not None else (100 if team_status == 'success' else 0)
+                team_message = team_doc.get('message') or ('来自团队库' if team_status == 'success' else '等待处理')
                 fields = {
                     'document_id': new_doc_id, 'folder_id': folder_id, 'file_name': fname,
+                    'title': team_doc.get('title') or fname,
                     'document_dir': doc_dir_rel, 'source_path': '%s/%s' % (doc_dir_rel, fname),
-                    'markdown_path': '', 'status': 'success', 'progress': 100,
-                    'message': '来自团队库', 'created_at': now, 'updated_at': now,
+                    'markdown_path': team_doc.get('markdown_path') or '',
+                    'status': team_status, 'progress': team_progress,
+                    'message': team_message, 'created_at': now, 'updated_at': now,
                     'owner_id': owner_id, 'owner_name': owner_name,
                 }
                 if 'uploaded_by' in cols:
