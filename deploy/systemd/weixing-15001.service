@@ -1,0 +1,15 @@
+[Unit]
+Description=Satellite System Static HTTP Server
+After=network.target
+
+[Service]
+Type=simple
+User=bhkj
+Group=bhkj
+WorkingDirectory=/project/02-weixingxitong
+ExecStart=/usr/bin/python3 -m http.server 15001
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

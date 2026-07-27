@@ -1,0 +1,32 @@
+[Unit]
+Description=Yibiao Combined Service (single port 15004: sync=/sync/* + kb-auth)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/toubiao/yibiao-combined
+# ---- 单端口：15004；同步逻辑挂 /sync/* ，知识库走 / 与 /api/* ----
+# ⚠️ 敏感值已去敏（占位符 CHANGE_ME_*）。生产部署前请：
+#   方案A（推荐）：删除下方 Environment=KB_ADMIN_PASSWORD / YIBIAO_SYNC_TOKEN 两行，
+#                  改为 EnvironmentFile=/etc/yibiao/deploy.env（文件权限 600，不入库）
+#   方案B：直接把 CHANGE_ME_* 改成真实强密码
+Environment=KB_PORT=15004
+Environment=YIBIAO_SYNC_TOKEN=CHANGE_ME_SYNC_TOKEN
+Environment=YIBIAO_INCOMING=/toubiao/yibiao-incoming
+Environment=YIBIAO_MASTER_ZIP=/toubiao/yibiao-master/master.zip
+Environment=YIBIAO_MASTER_DB=/toubiao/yibiao-master/master.sqlite
+Environment=YIBIAO_MASTER_KB=/toubiao/yibiao-master/knowledge-base
+# ---- 知识库认证配置 ----
+Environment=KB_DB=/toubiao/yibiao-kb-server/kb.sqlite
+Environment=KB_DATA_DIR=/toubiao/yibiao-kb-server/knowledge-base
+Environment=KB_ADMIN_PASSWORD=CHANGE_ME_KB_ADMIN_PASSWORD
+Environment=COMBINED_LOG=/toubiao/yibiao-combined/server.log
+ExecStart=/usr/bin/python3 /toubiao/yibiao-combined/server.py
+Restart=always
+RestartSec=3
+StandardOutput=append:/toubiao/yibiao-combined/server.log
+StandardError=append:/toubiao/yibiao-combined/server.log
+
+[Install]
+WantedBy=multi-user.target

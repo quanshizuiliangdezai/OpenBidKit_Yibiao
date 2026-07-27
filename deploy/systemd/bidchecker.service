@@ -1,0 +1,15 @@
+[Unit]
+Description=BidChecker Pro
+After=network.target
+
+[Service]
+Type=simple
+User=bhkj
+WorkingDirectory=/home/bhkj/03-BidChecker-Pro/server
+ExecStart=/usr/bin/python3 /home/bhkj/03-BidChecker-Pro/server/server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
