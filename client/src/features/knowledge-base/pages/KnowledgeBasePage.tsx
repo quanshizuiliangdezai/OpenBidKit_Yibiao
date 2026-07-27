@@ -852,15 +852,9 @@ function KnowledgeBasePage() {
       const syncedItems = (result.data?.synced || []).filter((item) => item.ok);
       const synced = syncedItems.length;
       const targetFolderId = syncedItems[0]?.folder_id || `team-import-${authStatus?.employee?.id ?? ''}`;
-      showToast(`已同步 ${synced} 个文档到个人知识库${synced ? '（团队库导入文件夹）' : ''}`, 'success');
-      setSelectedDocumentIds(new Set());
-      setSelectedFolderIds(new Set());
+      showToast(`已同步 ${synced} 个文档到个人知识库（保留当前选择）`, 'success');
+      // 同步后保持当前团队库视图，不跳转，后台为已同步文档启动本地分析
       if (syncedItems.length && targetFolderId) {
-        // 切到个人库并定位到目标文件夹，避免用户以为没同步
-        setKbTab('personal');
-        setActiveFolderId(targetFolderId);
-        await loadPersonalTree();
-        // 同步后启动本地分析，补齐未分析文档的知识条目
         for (const item of syncedItems) {
           if (!item.personal_id || !item.file_name) continue;
           try {
@@ -880,10 +874,8 @@ function KnowledgeBasePage() {
             console.warn(`同步文档 ${item.personal_id} 启动本地分析失败`, analyzeError);
           }
         }
-        await loadPersonalTree();
-      } else if (kbTab === 'personal') {
-        await loadPersonalTree();
       }
+      if (kbTab === 'team') await loadTeamTree();
     } catch (error) {
       showToast(error instanceof Error ? error.message : '同步到个人失败', 'error');
     } finally {
