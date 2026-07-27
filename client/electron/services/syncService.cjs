@@ -31,14 +31,17 @@ const Database = require('better-sqlite3');
 const paths = require('../utils/paths.cjs');
 
 // HTTP 同步配置（默认指向 15004 单端口合并服务的 /sync/*）
-// authToken 不再硬编码：优先读环境变量，其次读 client/electron/sync-config.local.json
-// （该文件已被 .gitignore，CI 构建时从 secrets.YIBIAO_SYNC_CONFIG 写入）。
+// authToken 加载优先级：
+//   1) 环境变量 YIBIAO_SYNC_AUTH_TOKEN
+//   2) client/electron/sync-config.local.json（已被 .gitignore，CI 构建时从 secrets.YIBIAO_SYNC_CONFIG 写入）
+//   3) 用户数据目录下的 yibiao-sync-config.json
+//   4) 兜底默认值（内置团队同步令牌，未配置时也能直接同步）
 const DEFAULT_HTTP_CONFIG = {
   baseUrl: 'http://59.49.48.147:15004',
   uploadPath: '/sync/upload',
   downloadPath: '/sync/download',
   manifestPath: '/sync/yibiao/manifest',
-  authToken: '__YIBIAO_SYNC_TOKEN__',
+  authToken: 'yibiao-sync-2026',
 };
 
 function loadLocalSyncConfig() {
@@ -70,8 +73,10 @@ function loadHttpConfig() {
   };
 }
 const HTTP = loadHttpConfig();
-if (!HTTP.authToken || HTTP.authToken === '__YIBIAO_SYNC_TOKEN__') {
-  console.warn('[sync] 未配置团队库同步令牌：请设置 YIBIAO_SYNC_AUTH_TOKEN 环境变量，或创建 client/electron/sync-config.local.json');
+if (!HTTP.authToken) {
+  console.warn('[sync] 团队库同步令牌为空，无法同步：请设置 YIBIAO_SYNC_AUTH_TOKEN 环境变量，或创建 client/electron/sync-config.local.json');
+} else if (HTTP.authToken === DEFAULT_HTTP_CONFIG.authToken) {
+  console.warn('[sync] 未显式配置团队库同步令牌，正在使用内置默认令牌（yibiao-sync-2026）。如需更换请在环境变量或 sync-config.local.json 中配置。');
 }
 
 // knowledge_* 表中按 document_id 关联的子表
