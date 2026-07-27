@@ -46,8 +46,9 @@ jobs:
           git config user.name "yibiao-ci"
           git config user.email "ci@yibiao.local"
 
-      - name: Write Samba sync config from secret
+      - name: Write sync config from secret
         shell: bash
+        # secrets.YIBIAO_SYNC_CONFIG 示例：{"baseUrl":"http://59.49.48.147:15004","authToken":"yibiao-sync-2026","uploadPath":"/sync/upload","downloadPath":"/sync/download","manifestPath":"/sync/yibiao/manifest"}
         run: echo '${{ secrets.YIBIAO_SYNC_CONFIG }}' > client/electron/sync-config.local.json
 
       - name: Setup Node 22

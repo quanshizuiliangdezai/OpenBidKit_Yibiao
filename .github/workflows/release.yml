@@ -119,6 +119,10 @@ jobs:
       - name: Smoke test Electron native dependencies
         run: npm run smoke:electron-native
 
+      - name: Write sync config from secret
+        # secrets.YIBIAO_SYNC_CONFIG 示例：{"baseUrl":"http://59.49.48.147:15004","authToken":"yibiao-sync-2026","uploadPath":"/sync/upload","downloadPath":"/sync/download","manifestPath":"/sync/yibiao/manifest"}
+        run: echo '${{ secrets.YIBIAO_SYNC_CONFIG }}' > client/electron/sync-config.local.json
+
       - name: Sync package version from tag
         env:
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
@@ -245,6 +249,10 @@ jobs:
 
       - name: Smoke test Electron native dependencies
         run: npm run smoke:electron-native
+
+      - name: Write sync config from secret
+        # secrets.YIBIAO_SYNC_CONFIG 示例：{"baseUrl":"http://59.49.48.147:15004","authToken":"yibiao-sync-2026","uploadPath":"/sync/upload","downloadPath":"/sync/download","manifestPath":"/sync/yibiao/manifest"}
+        run: echo '${{ secrets.YIBIAO_SYNC_CONFIG }}' > client/electron/sync-config.local.json
 
       - name: Sync package version from tag
         env:

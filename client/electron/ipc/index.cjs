@@ -34,9 +34,11 @@ const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs
 const { createTemplateStore } = require('../services/templateStore.cjs');
 const { createKbAuthService } = require('../services/kbAuthService.cjs');
 const { createKbTeamService } = require('../services/kbTeamService.cjs');
+const { createSyncService } = require('../services/syncService.cjs');
 const { registerKbAuthIpc } = require('./kbAuthIpc.cjs');
 const { registerKbTeamIpc } = require('./kbTeamIpc.cjs');
 const { registerKbPersonalIpc } = require('./kbPersonalIpc.cjs');
+const { registerSyncIpc } = require('./syncIpc.cjs');
 const { checkRequiredOnlineServices, getRequiredOnlineServiceStatus } = require('../services/requiredOnlineServices.cjs');
 const { initLocalImageRenderService } = require('../services/localImageRenderService.cjs');
 
@@ -122,6 +124,8 @@ const workspaceDatabaseChannels = [
   'templates:create',
   'templates:update',
   'templates:delete',
+  'sync:push',
+  'sync:pull',
 ];
 
 function clearWorkspaceDatabaseIpc() {
@@ -190,6 +194,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const templateStore = createTemplateStore({ db: sqliteDatabase.db });
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
   const taskService = createTaskService({ aiService, agentService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
+  const syncService = createSyncService({ app, db: sqliteDatabase.db, configStore });
 
   clearWorkspaceDatabaseIpc();
   registerKnowledgeBaseIpc({ knowledgeBaseService });
@@ -198,6 +203,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   registerRejectionCheckIpc({ rejectionCheckStore });
   registerTemplateIpc({ templateStore });
   registerTaskIpc({ taskService });
+  registerSyncIpc({ syncService });
   updateStatus({ phase: 'ready', ready: true, message: '本地数据库已就绪' });
   
   // 更新 pluginService 的服务引用
@@ -213,7 +219,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
     console.error('[plugin-service] 启用插件失败:', error);
   });
   
-  return { sqliteDatabase };
+  return { sqliteDatabase, syncService };
 }
 
 function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow }) {
