@@ -212,8 +212,8 @@ export default function PermissionListPage() {
                       {group.description ? <p>{group.description}</p> : null}
                     </div>
                     <div className="permission-group-actions">
-                      <button type="button" className="kb-admin-reset" onClick={() => openEdit(group)}>编辑</button>
-                      <button type="button" className="kb-admin-delete" onClick={() => void removeGroup(group)}>删除</button>
+                      <button type="button" className="secondary-action" onClick={() => openEdit(group)}>编辑</button>
+                      <button type="button" className="danger-action" onClick={() => void removeGroup(group)}>删除</button>
                     </div>
                   </div>
                   <div className="permission-group-meta">
