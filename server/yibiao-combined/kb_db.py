@@ -13,7 +13,7 @@ import threading
 DB_PATH = os.environ.get('KB_DB', '/toubiao/yibiao-kb-server/kb.sqlite')
 # 文档物理存储目录（只在服务器，客户端不留存）
 KB_DATA_DIR = os.environ.get('KB_DATA_DIR', '/toubiao/yibiao-kb-server/knowledge-base')
-_lock = threading.Lock()
+_lock = threading.RLock()  # 可重入锁：purge_expired_trash 会嵌套调用 _hard_delete_*，避免同线程死锁
 
 # ---------- 权限目录（前端勾选框的数据源，亦作为 admin 全权限的集合）----------
 PERMISSION_CATALOG = [
