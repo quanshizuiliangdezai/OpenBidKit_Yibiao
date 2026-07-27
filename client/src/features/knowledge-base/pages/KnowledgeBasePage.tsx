@@ -824,12 +824,34 @@ function KnowledgeBasePage() {
       const created = result.data?.created?.length || 0;
       const failed = result.data?.failed?.length || 0;
       const autoName = result.data?.auto_folder ? result.data?.folder_name : null;
+      const targetFolderId = String(result.data?.folder_id || syncTargetFolderId || '');
       const tail = failed ? `，${failed} 个失败` : '';
       showToast(`已同步 ${created} 个文档到团队${autoName ? `（自动创建文件夹「${autoName}」）` : ''}${tail}`, 'success');
       setSelectedDocumentIds(new Set());
       setSelectedFolderIds(new Set());
       setShowSyncToTeam(false);
       if (kbTab === 'team') await loadTeamTree();
+      // 同步完成后为每个新团队文档启动本地分析（与上传后行为一致）
+      for (const item of result.data?.created || []) {
+        if (!item.remote_id) continue;
+        try {
+          const fileName = String(item.file_name || 'document');
+          const downloadResult = await window.yibiao?.kbTeam.downloadDocument(
+            String(item.remote_id),
+            fileName,
+          );
+          if (downloadResult?.success && downloadResult.data?.localPath) {
+            await window.yibiao?.knowledgeBase.analyzeExternalFile(
+              String(item.remote_id),
+              downloadResult.data.localPath,
+              fileName,
+              targetFolderId,
+            );
+          }
+        } catch (analyzeError) {
+          console.warn(`团队库同步文档 ${item.remote_id} 启动分析失败`, analyzeError);
+        }
+      }
     } catch (error) {
       showToast(error instanceof Error ? error.message : '同步到团队失败', 'error');
     } finally {
@@ -855,6 +877,28 @@ function KnowledgeBasePage() {
       setSelectedDocumentIds(new Set());
       setSelectedFolderIds(new Set());
       if (kbTab === 'personal') await loadPersonalTree();
+      // 同步完成后为每个新个人文档启动本地分析（与上传后行为一致）
+      for (const item of result.data?.synced || []) {
+        if (!item.ok || !item.personal_id) continue;
+        try {
+          const fileName = String(item.file_name || 'document');
+          const personalFolderId = String(item.folder_id || '');
+          const downloadResult = await window.yibiao?.kbPersonal.downloadDocument(
+            String(item.personal_id),
+            fileName,
+          );
+          if (downloadResult?.success && downloadResult.data?.localPath) {
+            await window.yibiao?.knowledgeBase.analyzeExternalFile(
+              String(item.personal_id),
+              downloadResult.data.localPath,
+              fileName,
+              personalFolderId,
+            );
+          }
+        } catch (analyzeError) {
+          console.warn(`个人库同步文档 ${item.personal_id} 启动分析失败`, analyzeError);
+        }
+      }
     } catch (error) {
       showToast(error instanceof Error ? error.message : '同步到个人失败', 'error');
     } finally {
