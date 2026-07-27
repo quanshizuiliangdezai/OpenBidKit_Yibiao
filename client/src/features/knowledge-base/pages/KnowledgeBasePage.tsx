@@ -638,6 +638,7 @@ function KnowledgeBasePage() {
   // 切换文件夹或标签时清空已勾选的同步项，避免串库
   useEffect(() => {
     setSelectedDocumentIds(new Set());
+    setSelectedFolderIds(new Set());
   }, [activeFolderId, kbTab]);
 
   // E3：记忆当前 tab + 选中文件夹到 localStorage
@@ -937,7 +938,11 @@ function KnowledgeBasePage() {
       const syncedItems = (result.data?.synced || []).filter((item) => item.ok);
       const synced = syncedItems.length;
       const targetFolderId = syncedItems[0]?.folder_id || `team-import-${authStatus?.employee?.id ?? ''}`;
-      showToast(`已同步 ${synced} 个文档到个人知识库（保留当前选择）`, 'success');
+      if (synced === 0) {
+        showToast('选中的文件夹内没有文档，未同步任何内容（保留当前选择）', 'info');
+      } else {
+        showToast(`已同步 ${synced} 个文档到个人知识库（保留当前选择）`, 'success');
+      }
       // 同步后保持当前团队库视图，不跳转，后台为已同步文档启动本地分析
       if (syncedItems.length && targetFolderId) {
         for (const item of syncedItems) {
@@ -960,6 +965,7 @@ function KnowledgeBasePage() {
           }
         }
       }
+      await loadPersonalTree();
       if (kbTab === 'team') await loadTeamTree();
     } catch (error) {
       showToast(error instanceof Error ? error.message : '同步到个人失败', 'error');
