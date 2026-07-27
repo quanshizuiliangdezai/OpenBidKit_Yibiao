@@ -126,18 +126,90 @@ def build_manifest():
         conn.close()
 
 
+def _copy_filtered_rows(dst, table, cols, rows, exclude_id):
+    """把行写入 dst 的 table；exclude_id=True 时跳过自增 id 列，避免跨库主键冲突。"""
+    if not rows:
+        return
+    if exclude_id and 'id' in cols:
+        idx = cols.index('id')
+        cols2 = [c for i, c in enumerate(cols) if i != idx]
+        rows2 = [tuple(v for i, v in enumerate(r) if i != idx) for r in rows]
+    else:
+        cols2, rows2 = cols, rows
+    col_names = ','.join(cols2)
+    qmarks = ','.join('?' * len(cols2))
+    dst.executemany(
+        'INSERT OR IGNORE INTO {t} ({c}) VALUES ({q})'.format(t=table, c=col_names, q=qmarks),
+        rows2)
+
+
+def build_filtered_master_db(src_db, ids):
+    """生成一个临时 sqlite：只含目标 document_id 在各 knowledge_* 表的行（★4 真正增量）。
+
+    - 带 document_id 的表按 ids 过滤；
+    - knowledge_folders 整表复制（folder 链数据量小且合并时必须存在）；
+    - knowledge_migration_meta 不复制（迁移状态是每客户端本地的，不应跨端传播）。
+    """
+    import sqlite3 as _sql
+    tmp = tempfile.mktemp(suffix='.sqlite')
+    src = _sql.connect(src_db)
+    dst = _sql.connect(tmp)
+    try:
+        dst.execute('PRAGMA foreign_keys=OFF')
+        # 复制全部 knowledge_* 表结构
+        for (sql,) in src.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name LIKE 'knowledge_%' AND sql IS NOT NULL").fetchall():
+            dst.execute(sql)
+        # 复制索引
+        for (sql,) in src.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL AND tbl_name LIKE 'knowledge_%'").fetchall():
+            try:
+                dst.execute(sql)
+            except Exception:
+                pass
+        if not ids:
+            dst.commit()
+            return tmp
+        placeholders = ','.join('?' * len(ids))
+        skip_tables = {'knowledge_migration_meta'}
+        full_tables = {'knowledge_folders'}
+        for (name,) in src.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'knowledge_%' AND sql IS NOT NULL ORDER BY name").fetchall():
+            cols = [c[1] for c in src.execute('PRAGMA table_info({})'.format(name)).fetchall()]
+            if name in skip_tables:
+                continue
+            if name in full_tables:
+                rows = src.execute('SELECT * FROM {}'.format(name)).fetchall()
+                _copy_filtered_rows(dst, name, cols, rows, exclude_id=False)
+                continue
+            if 'document_id' in cols:
+                rows = src.execute(
+                    'SELECT * FROM {} WHERE document_id IN ({})'.format(name, placeholders), ids).fetchall()
+                _copy_filtered_rows(dst, name, cols, rows, exclude_id=True)
+            # 既无 document_id 也不在 full/skip 的表：保持空表（结构已建）
+        dst.commit()
+        return tmp
+    finally:
+        src.close()
+
+
 def build_incremental_zip(ids):
-    import sqlite3
-    conn = _master_db_conn()
-    if conn is None:
+    """★4 增量：只打包目标 ids 对应的文档数据与文件，knowledge.sqlite 也是过滤后的。"""
+    if not os.path.exists(MASTER_DB):
+        return None
+    filtered_db = build_filtered_master_db(MASTER_DB, ids)
+    if filtered_db is None or not os.path.exists(filtered_db):
         return None
     out_path = tempfile.mktemp(suffix='.zip')
     try:
-        placeholders = ','.join('?' * len(ids))
-        rows = conn.execute(
-            'SELECT document_id, folder_id FROM knowledge_documents WHERE document_id IN ({})'.format(placeholders), ids).fetchall()
+        import sqlite3 as _sql
+        fconn = _sql.connect(filtered_db)
+        try:
+            rows = fconn.execute('SELECT document_id, folder_id FROM knowledge_documents').fetchall()
+        finally:
+            fconn.close()
         with zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED) as z:
-            z.write(MASTER_DB, 'knowledge.sqlite')
+            z.write(filtered_db, 'knowledge.sqlite')
             for doc_id, folder_id in rows:
                 src = os.path.join(MASTER_KB, 'folders', folder_id, 'documents', doc_id)
                 if not os.path.isdir(src):
@@ -149,7 +221,10 @@ def build_incremental_zip(ids):
                         z.write(fp, arc)
         return out_path
     finally:
-        conn.close()
+        try:
+            os.remove(filtered_db)
+        except Exception:
+            pass
 
 
 # ============================================================
