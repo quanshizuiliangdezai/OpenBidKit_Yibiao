@@ -133,43 +133,128 @@
 
 .knowledge-workspace-bar {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px 14px;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px;
   background: rgba(255, 255, 255, 0.88);
   border: 1px solid var(--yb-border-soft);
   border-radius: 18px;
   box-shadow: 0 10px 28px rgba(33, 116, 253, 0.08);
 }
 
+.knowledge-workspace-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.knowledge-workspace-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
 .knowledge-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.knowledge-breadcrumb-title {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--yb-primary-deep);
+  background: rgba(33, 116, 253, 0.1);
+  border: 1px solid rgba(33, 116, 253, 0.18);
+  white-space: nowrap;
+}
+
+.knowledge-breadcrumb-body {
   display: flex;
   align-items: baseline;
   gap: 10px;
   min-width: 0;
 }
 
-.knowledge-breadcrumb span {
-  color: var(--yb-text-muted);
-  font-size: 13px;
-}
-
-.knowledge-breadcrumb strong {
+.knowledge-breadcrumb-body strong {
   color: var(--yb-text);
   font-size: 18px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.knowledge-breadcrumb small {
+.knowledge-breadcrumb-body small {
   color: var(--yb-text-muted);
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .knowledge-toolbar-actions {
   display: flex;
+  align-items: center;
+  gap: 10px;
   flex-wrap: wrap;
-  gap: 8px;
   justify-content: flex-end;
+}
+
+.knowledge-main-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.knowledge-batch-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: rgba(33, 116, 253, 0.06);
+  border: 1px solid rgba(33, 116, 253, 0.14);
+  border-radius: 14px;
+  flex-wrap: wrap;
+}
+
+.knowledge-batch-count {
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--yb-primary-deep);
+  white-space: nowrap;
+}
+
+.knowledge-trash-entry {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--yb-text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+  white-space: nowrap;
+}
+
+.knowledge-trash-entry:hover {
+  color: var(--yb-text);
+  background: rgba(33, 116, 253, 0.06);
+  border-color: var(--yb-border-soft);
 }
 
 /* 团队/个人知识库切换：主题化分段控件 */
@@ -245,6 +330,18 @@
   background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
   border-color: transparent;
   box-shadow: 0 10px 24px rgba(33, 116, 253, 0.16);
+}
+
+.knowledge-toolbar-actions .secondary-action.is-ghost {
+  color: var(--yb-text-secondary);
+  background: transparent;
+  border-color: transparent;
+}
+
+.knowledge-toolbar-actions .secondary-action.is-ghost:hover:not(:disabled) {
+  color: var(--yb-text);
+  background: rgba(33, 116, 253, 0.06);
+  border-color: var(--yb-border-soft);
 }
 
 .knowledge-create-folder-bar {
