@@ -14,6 +14,18 @@ const path = require('node:path');
 
 const DEFAULT_SERVER_URL = 'http://59.49.48.147:15004';
 const AUTH_FILE_NAME = 'kb_auth.json';
+const DEFAULT_FETCH_TIMEOUT_MS = 10000;
+
+async function fetchWithTimeout(url, init = {}, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 function createKbAuthService({ app }) {
   const authPath = path.join(app.getPath('userData'), AUTH_FILE_NAME);
@@ -90,7 +102,7 @@ function createKbAuthService({ app }) {
     }
     let res;
     try {
-      res = await fetch(url, init);
+      res = await fetchWithTimeout(url, init);
     } catch (networkError) {
       // Node.js fetch 失败时默认消息是 "fetch failed"，没有 URL/method，这里补全便于排查
       const message = networkError?.message || String(networkError);
@@ -111,7 +123,7 @@ function createKbAuthService({ app }) {
 
   async function login({ username, password, serverUrl }) {
     const base = (serverUrl || getServerUrl() || DEFAULT_SERVER_URL).replace(/\/+$/, '');
-    const res = await fetch(`${base}/api/login`, {
+    const res = await fetchWithTimeout(`${base}/api/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
@@ -149,7 +161,7 @@ function createKbAuthService({ app }) {
   // 自助注册：创建 pending 账号，不写入登录令牌（注册后需管理员审核）。
   async function register({ username, password, display_name, department, serverUrl }) {
     const base = (serverUrl || getServerUrl() || DEFAULT_SERVER_URL).replace(/\/+$/, '');
-    const res = await fetch(`${base}/api/register`, {
+    const res = await fetchWithTimeout(`${base}/api/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password, display_name, department }),
