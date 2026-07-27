@@ -1507,58 +1507,57 @@ function KnowledgeBasePage() {
     <>
       <div className="page-stack knowledge-page">
         <section className="knowledge-workspace-bar">
-        <div className="knowledge-breadcrumb">
-          <span>知识库</span>
-          <strong>{activeFolder?.name || '未选择文件夹'}</strong>
-          <small>{index.folders.length} 个文件夹 / {index.documents.length} 个文档</small>
-        </div>
-        <div className="knowledge-toolbar-tabs">
-          <button type="button" className={`kb-tab ${kbTab === 'team' ? 'is-active' : ''}`} onClick={() => setKbTab('team')}>团队知识库</button>
-          <button type="button" className={`kb-tab ${kbTab === 'personal' ? 'is-active' : ''}`} onClick={() => setKbTab('personal')}>个人知识库</button>
-        </div>
-        <div className="knowledge-toolbar-actions">
-          {authStatus && <KbUserBar status={authStatus} onLogout={() => void handleLogout()} />}
-          {kbTab === 'team' && (
-            <>
-              <button type="button" className="secondary-action" onClick={() => { setNewFolderParentId(null); setCreateAsSubfolder(false); setShowCreateFolder((value) => !value); }} disabled={listLoading}>新建文件夹</button>
-              <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading || !activeFolder}>
-                {loading ? '处理中...' : '上传文档'}
-              </button>
-              <button type="button" className="sync-action" onClick={() => void syncFromTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0)}>
-                同步到个人{(selectedDocumentIds.size + selectedFolderIds.size) ? `（${selectedDocumentIds.size + selectedFolderIds.size}）` : ''}
-              </button>
-            </>
-          )}
-          {kbTab === 'personal' && (
-            <>
-              <button type="button" className="secondary-action" onClick={() => { setNewFolderParentId(null); setCreateAsSubfolder(false); setShowCreateFolder((value) => !value); }} disabled={listLoading}>新建文件夹</button>
-              <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading || !activeFolder}>
-                {loading ? '处理中...' : '上传文档'}
-              </button>
-              <button type="button" className="sync-action" onClick={() => void openSyncToTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0)}>
-                同步到团队{(selectedDocumentIds.size + selectedFolderIds.size) ? `（${selectedDocumentIds.size + selectedFolderIds.size}）` : ''}
-              </button>
-            </>
-          )}
-          {(selectedDocumentIds.size + selectedFolderIds.size) > 0 && (
-            <>
-              <button type="button" className="secondary-action" onClick={() => setShowBatchMove(true)} disabled={batchProcessing || syncing}>
-                批量移动（{selectedDocumentIds.size + selectedFolderIds.size}）
-              </button>
-              <button type="button" className="danger-action" onClick={() => void handleBatchDelete()} disabled={batchProcessing || syncing}>
-                {batchProcessing ? '处理中...' : `批量删除（${selectedDocumentIds.size + selectedFolderIds.size}）`}
-              </button>
-              {selectedDocumentIds.size > 0 && (
-                <button type="button" className="secondary-action" onClick={() => void handleExport()} disabled={exporting || syncing}>
-                  {exporting ? '导出中...' : `导出（${selectedDocumentIds.size}）`}
-                </button>
+          <div className="knowledge-workspace-top">
+            <div className="knowledge-breadcrumb">
+              <span className="knowledge-breadcrumb-title">知识库</span>
+              <div className="knowledge-breadcrumb-body">
+                <strong>{activeFolder?.name || '未选择文件夹'}</strong>
+                <small>{index.folders.length} 个文件夹 / {index.documents.length} 个文档</small>
+              </div>
+            </div>
+            {authStatus && <KbUserBar status={authStatus} onLogout={() => void handleLogout()} />}
+          </div>
+          <div className="knowledge-workspace-bottom">
+            <div className="knowledge-toolbar-tabs">
+              <button type="button" className={`kb-tab ${kbTab === 'team' ? 'is-active' : ''}`} onClick={() => setKbTab('team')}>团队知识库</button>
+              <button type="button" className={`kb-tab ${kbTab === 'personal' ? 'is-active' : ''}`} onClick={() => setKbTab('personal')}>个人知识库</button>
+            </div>
+            <div className="knowledge-toolbar-actions">
+              <button type="button" className="knowledge-trash-entry" onClick={() => void openTrash()}>回收站</button>
+              {(selectedDocumentIds.size + selectedFolderIds.size) > 0 && (
+                <div className="knowledge-batch-group">
+                  <span className="knowledge-batch-count">已选 {selectedDocumentIds.size + selectedFolderIds.size} 项</span>
+                  <button type="button" className="secondary-action" onClick={() => setShowBatchMove(true)} disabled={batchProcessing || syncing}>批量移动</button>
+                  <button type="button" className="danger-action" onClick={() => void handleBatchDelete()} disabled={batchProcessing || syncing}>
+                    {batchProcessing ? '处理中...' : '批量删除'}
+                  </button>
+                  {selectedDocumentIds.size > 0 && (
+                    <button type="button" className="secondary-action" onClick={() => void handleExport()} disabled={exporting || syncing}>
+                      {exporting ? '导出中...' : '导出'}
+                    </button>
+                  )}
+                  <button type="button" className="secondary-action is-ghost" onClick={() => { setSelectedDocumentIds(new Set()); setSelectedFolderIds(new Set()); }}>取消选择</button>
+                </div>
               )}
-              <button type="button" className="secondary-action" onClick={() => { setSelectedDocumentIds(new Set()); setSelectedFolderIds(new Set()); }}>取消选择</button>
-            </>
-          )}
-          <button type="button" className="secondary-action" onClick={() => void openTrash()}>回收站</button>
-        </div>
-      </section>
+              <div className="knowledge-main-actions">
+                {kbTab === 'team' && (
+                  <button type="button" className="sync-action" onClick={() => void syncFromTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0)}>
+                    同步到个人{(selectedDocumentIds.size + selectedFolderIds.size) ? `（${selectedDocumentIds.size + selectedFolderIds.size}）` : ''}
+                  </button>
+                )}
+                {kbTab === 'personal' && (
+                  <button type="button" className="sync-action" onClick={() => void openSyncToTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0)}>
+                    同步到团队{(selectedDocumentIds.size + selectedFolderIds.size) ? `（${selectedDocumentIds.size + selectedFolderIds.size}）` : ''}
+                  </button>
+                )}
+                <button type="button" className="secondary-action" onClick={() => { setNewFolderParentId(null); setCreateAsSubfolder(false); setShowCreateFolder((value) => !value); }} disabled={listLoading}>新建文件夹</button>
+                <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading || !activeFolder}>
+                  {loading ? '处理中...' : '上传文档'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
 
       <div className="knowledge-search-bar">
         <input
