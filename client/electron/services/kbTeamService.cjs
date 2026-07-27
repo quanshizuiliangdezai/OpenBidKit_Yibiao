@@ -197,6 +197,19 @@ function createKbTeamService({ kbAuthService, app }) {
     return Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
   }
 
+  /**
+   * 知识库问答召回：返回含 content_text 片段的匹配文档。
+   * 服务端契约：GET /api/kb-qa/team?q=<kw>&limit=3
+   */
+  async function qaRetrieve(query, limit = 3) {
+    const params = new URLSearchParams();
+    params.set('q', query);
+    params.set('limit', String(limit));
+    const { ok, status, data } = await api(`/api/kb-qa/team?${params.toString()}`);
+    if (!ok) throw new Error(`召回知识失败（${status}）`);
+    return Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+  }
+
   // ---- C1 重命名 / E2 移动 ----
 
   /** 重命名文件夹：PUT /api/folders/{id} body {name} */
@@ -307,6 +320,7 @@ function createKbTeamService({ kbAuthService, app }) {
     deleteDocument,
     getTree,
     searchDocuments,
+    qaRetrieve,
     getDocumentById,
     getDocumentVersions,
     renameFolder,

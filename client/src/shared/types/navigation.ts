@@ -6,6 +6,7 @@ export type SectionId =
   | 'knowledge-base'
   | 'document-knowledge-base'
   | 'image-knowledge-base'
+  | 'kb-qa'
   | 'resources'
   | 'bid-check'
   | 'duplicate-check'
@@ -40,7 +41,7 @@ export interface AppSubMenuItem {
   id: SectionId;
   label: string;
   description: string;
-  icon?: 'document' | 'expand' | 'briefcase' | 'compare' | 'shield' | 'code' | 'prompt' | 'file' | 'export' | 'tool';
+  icon?: 'document' | 'expand' | 'briefcase' | 'compare' | 'shield' | 'code' | 'prompt' | 'file' | 'export' | 'tool' | 'chat';
   requiredPermission?: string;
   notice?: AppMenuNotice;
 }

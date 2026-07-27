@@ -11,6 +11,7 @@ import ExportFormatPage from '../features/export-format/pages/ExportFormatPage';
 import MyTemplatesPage from '../features/export-format/pages/MyTemplatesPage';
 import DuplicateCheckPage from '../features/duplicate-check/pages/DuplicateCheckPage';
 import KnowledgeBasePage from '../features/knowledge-base/pages/KnowledgeBasePage';
+import KbQaPage from '../features/knowledge-base/pages/KbQaPage';
 import RejectionCheckPage from '../features/rejection-check/pages/RejectionCheckPage';
 import ResourcesPage from '../features/resources/pages/ResourcesPage';
 import PluginsPage from '../features/plugins/pages/PluginsPage';
@@ -56,6 +57,8 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <BusinessBidPage />;
     case 'document-knowledge-base':
       return <KnowledgeBasePage />;
+    case 'kb-qa':
+      return <KbQaPage />;
     case 'resources':
       return <ResourcesPage />;
     case 'plugin-manager':

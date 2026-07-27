@@ -65,6 +65,16 @@ function registerKbPersonalIpc({ kbAuthService, app }) {
     }
   });
 
+  // 知识库问答召回（带 content_text 片段）
+  ipcMain.handle('kb-personal:qa-retrieve', async (_event, keyword, limit) => {
+    try {
+      const docs = await personalService.qaRetrieve(keyword, limit);
+      return { success: true, data: docs };
+    } catch (err) {
+      return { error: err.message || '召回失败' };
+    }
+  });
+
   // 新建文件夹（parentId 可选 = 子文件夹）
   ipcMain.handle('kb-personal:create-folder', async (_event, name, parentId) => {
     try {

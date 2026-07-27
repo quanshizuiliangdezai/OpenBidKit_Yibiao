@@ -153,6 +153,17 @@ function registerKbTeamIpc({ kbTeamService, kbAuthService }) {
     }
   });
 
+  // 知识库问答召回（带 content_text 片段）
+  ipcMain.handle('kb-team:qa-retrieve', async (_event, query, limit) => {
+    try {
+      if (!kbAuthService.isLoggedIn()) return { success: false, error: '未登录团队库', needLogin: true };
+      const docs = await kbTeamService.qaRetrieve(query, limit);
+      return { success: true, data: docs };
+    } catch (error) {
+      return { success: false, error: error?.message || '召回失败' };
+    }
+  });
+
   // C3 回收站列表
   ipcMain.handle('kb-team:list-trash', async () => {
     try {

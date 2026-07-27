@@ -166,6 +166,14 @@ function SubMenuIcon({ item }: { item: AppSubMenuItem }) {
           <path d="M5.5 15v4h13v-4" />
         </svg>
       );
+    case 'chat':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+          <path d="M4 5.5h16v12H8l-4 3z" />
+          <path d="M8 10.5h8" />
+          <path d="M8 13.5h5" />
+        </svg>
+      );
     default:
       return (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">

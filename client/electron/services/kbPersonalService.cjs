@@ -136,6 +136,26 @@ function createKbPersonalService({ app, kbAuthService }) {
     }
   }
 
+  /**
+   * 知识库问答召回：返回含 content_text 片段的匹配文档。
+   * 服务端契约：GET /api/kb-qa/personal?q=<kw>&limit=3
+   */
+  async function qaRetrieve(keyword, limit = 3) {
+    try {
+      const params = new URLSearchParams();
+      params.set('q', keyword);
+      params.set('limit', String(limit));
+      const res = await fetch(`${baseUrl()}/api/kb-qa/personal?${params.toString()}`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+    } catch {
+      return [];
+    }
+  }
+
   /** 个人库新建文件夹（parentId 可选，支持子文件夹） */
   async function createFolder(name, parentId) {
     const res = await fetch(`${baseUrl()}/api/personal/folders`, {
@@ -299,6 +319,7 @@ function createKbPersonalService({ app, kbAuthService }) {
     getTree,
     downloadDocument,
     searchDocuments,
+    qaRetrieve,
     createFolder,
     uploadDocument,
     deleteFolder,

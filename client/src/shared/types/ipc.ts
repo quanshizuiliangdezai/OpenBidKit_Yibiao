@@ -436,6 +436,16 @@ export interface KbTeamTree {
   documents: KbTeamDocument[];
 }
 
+export interface KbQaDocument {
+  id: string | number;
+  title: string;
+  file_name?: string;
+  mime_type?: string;
+  folder_id?: string | number | null;
+  created_at?: string;
+  content_text: string;
+}
+
 export interface KbTrashFolder {
   id: string | number;
   name: string;
@@ -684,6 +694,7 @@ export interface YibiaoBridge {
     moveFolder: (folderId: string | number, parentId?: string | number | null) => Promise<KbTeamResult>;
     moveDocument: (documentId: string | number, folderId: string | number) => Promise<KbTeamResult>;
     search: (query: string, mode?: 'name' | 'content') => Promise<{ success: boolean; data?: KbTeamDocument[]; error?: string; needLogin?: boolean }>;
+    qaRetrieve: (query: string, limit?: number) => Promise<{ success: boolean; data?: KbQaDocument[]; error?: string; needLogin?: boolean }>;
     listTrash: () => Promise<{ success: boolean; data?: KbTrash; error?: string; needLogin?: boolean }>;
     restoreFromTrash: (type: 'folder' | 'document', id: string | number) => Promise<KbTeamResult>;
     exportZip: (ids: Array<string | number>) => Promise<{ success: boolean; data?: { localPath: string }; error?: string; canceled?: boolean; needLogin?: boolean }>;
@@ -706,6 +717,7 @@ export interface YibiaoBridge {
     listDocuments: (folderId: string) => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
     downloadDocument: (documentId: string, destPath?: string) => Promise<{ success: boolean; data?: { localPath: string }; error?: string }>;
     searchDocuments: (keyword: string, mode?: 'name' | 'content') => Promise<{ success: boolean; data?: any[]; error?: string; needLogin?: boolean }>;
+    qaRetrieve: (keyword: string, limit?: number) => Promise<{ success: boolean; data?: KbQaDocument[]; error?: string; needLogin?: boolean }>;
     createFolder: (name: string, parentId?: string | null) => Promise<{ success: boolean; data?: KbTeamFolder; error?: string }>;
     uploadDocument: (folderId: string) => Promise<{ success: boolean; data?: { uploaded: Array<{ file: string; doc: KbTeamDocument }>; failed: Array<{ file: string; error: string }>; canceled: boolean }; error?: string }>;
     deleteFolder: (folderId: string) => Promise<{ success: boolean; data?: unknown; error?: string }>;

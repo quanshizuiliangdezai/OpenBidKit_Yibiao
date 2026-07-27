@@ -1336,6 +1336,82 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         finally:
             conn.close()
 
+    def _qa_team_retrieve(self, kw, limit=3, snippet_chars=6000):
+        """团队库 QA 召回：按正文/标题匹配，返回含 content_text 片段的文档列表。"""
+        import sqlite3 as _sql
+        pattern = '%' + kw.replace('%', '').replace('_', '') + '%'
+        conn = _sql.connect(kb_db.DB_PATH)
+        try:
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.row_factory = _sql.Row
+            cols = [c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()]
+            if 'content_text' not in cols:
+                return []
+            rows = conn.execute(
+                "SELECT id, folder_id, title, file_name, mime_type, content_text, created_at "
+                "FROM knowledge_documents "
+                "WHERE (deleted_at IS NULL OR deleted_at='') AND "
+                "      (title LIKE ? OR file_name LIKE ? OR COALESCE(content_text,'') LIKE ?) "
+                "ORDER BY created_at DESC LIMIT ?",
+                (pattern, pattern, pattern, limit)
+            ).fetchall()
+            out = []
+            for r in rows:
+                text = (r['content_text'] or '')
+                if len(text) > snippet_chars:
+                    text = text[:snippet_chars] + '\n...（内容已截断）'
+                out.append({
+                    'id': r['id'],
+                    'folder_id': r['folder_id'],
+                    'title': r['title'] or r['file_name'],
+                    'file_name': r['file_name'],
+                    'mime_type': r['mime_type'],
+                    'created_at': r['created_at'],
+                    'content_text': text,
+                })
+            return out
+        finally:
+            conn.close()
+
+    def _qa_personal_retrieve(self, kw, employee, limit=3, snippet_chars=6000):
+        """个人库 QA 召回：按正文/标题匹配，返回含 content_text 片段的文档列表。"""
+        conn = _master_db_conn()
+        if conn is None:
+            return []
+        try:
+            self._ensure_owner_cols(conn)
+            pattern = '%' + kw.replace('%', '').replace('_', '') + '%'
+            owner_filter = ''
+            args = []
+            if employee and employee.get('role') != 'admin':
+                owner_filter = " AND (owner_id=? OR owner_id IS NULL)"
+                args = [employee['id']]
+            cols = [c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()]
+            if 'content_text' not in cols:
+                return []
+            q = ("SELECT document_id,folder_id,file_name,COALESCE(content_text,'') AS content_text,created_at "
+                 "FROM knowledge_documents "
+                 "WHERE (deleted_at IS NULL OR deleted_at='') AND "
+                 "      (file_name LIKE ? OR COALESCE(content_text,'') LIKE ?)" + owner_filter +
+                 " ORDER BY created_at DESC LIMIT ?")
+            rows = conn.execute(q, (pattern, pattern) + tuple(args) + (limit,)).fetchall()
+            out = []
+            for r in rows:
+                text = (r['content_text'] or '')
+                if len(text) > snippet_chars:
+                    text = text[:snippet_chars] + '\n...（内容已截断）'
+                out.append({
+                    'id': r['document_id'],
+                    'folder_id': r['folder_id'],
+                    'title': r['file_name'],
+                    'file_name': r['file_name'],
+                    'created_at': r['created_at'],
+                    'content_text': text,
+                })
+            return out
+        finally:
+            conn.close()
+
     def _export_team_zip(self, ids, employee):
         import io
         buf = io.BytesIO()
@@ -1831,6 +1907,33 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 mode = self._query_param('mode') or 'name'
                 return self._send(200, {'data': self._personal_search(kw, mode, employee)})
             return self._send(200, {'data': self._personal_documents(folder, employee)})
+        # ==================== /api/kb-qa/* 知识库问答召回 ====================
+        if path == '/api/kb-qa/team':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            kw = (self._query_param('q') or '').strip()
+            if not kw:
+                return self._send(400, {'error': '缺少 q 参数'})
+            try:
+                limit = min(int(self._query_param('limit') or '3'), 10)
+            except ValueError:
+                limit = 3
+            docs = self._qa_team_retrieve(kw, limit=limit)
+            return self._send(200, {'success': True, 'data': docs})
+        if path == '/api/kb-qa/personal':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            kw = (self._query_param('q') or '').strip()
+            if not kw:
+                return self._send(400, {'error': '缺少 q 参数'})
+            try:
+                limit = min(int(self._query_param('limit') or '3'), 10)
+            except ValueError:
+                limit = 3
+            docs = self._qa_personal_retrieve(kw, employee, limit=limit)
+            return self._send(200, {'success': True, 'data': docs})
         if path.startswith('/api/personal/documents/') and path.endswith('/file'):
             employee = self._auth()
             if not employee:

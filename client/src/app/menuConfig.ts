@@ -75,6 +75,13 @@ export const appMenuItems: AppMenuItem[] = [
         requiredPermission: 'knowledge_base',
         notice: githubStarNotice,
       },
+      {
+        id: 'kb-qa',
+        label: '知识库问答',
+        description: '基于团队库或个人库的内容进行智能问答',
+        icon: 'chat',
+        requiredPermission: 'knowledge_base',
+      },
     ],
   },
   {

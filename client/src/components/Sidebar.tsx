@@ -20,6 +20,7 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'knowledge-base': ArchiveIcon,
   'document-knowledge-base': ArchiveIcon,
   'image-knowledge-base': ArchiveIcon,
+  'kb-qa': ChatIcon,
   resources: ResourcesIcon,
   'bid-check': BidCheckIcon,
   'duplicate-check': CompareIcon,
@@ -466,6 +467,16 @@ function ListIcon(props: SVGProps<SVGSVGElement>) {
       <circle cx="4.5" cy="6" r="1.1" />
       <circle cx="4.5" cy="12" r="1.1" />
       <circle cx="4.5" cy="18" r="1.1" />
+    </svg>
+  );
+}
+
+function ChatIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M4 5.5h16v12H8l-4 3z" />
+      <path d="M8 10.5h8" />
+      <path d="M8 13.5h5" />
     </svg>
   );
 }

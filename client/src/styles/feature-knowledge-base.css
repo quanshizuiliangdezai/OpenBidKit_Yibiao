@@ -1874,3 +1874,159 @@
   font-size: 12px;
 }
 
+/* ==================== 知识库问答 (KbQaPage.tsx) ==================== */
+.kb-qa-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.kb-qa-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 24px;
+  gap: 16px;
+}
+
+.kb-qa-header h1 {
+  margin: 0;
+  font-size: 22px;
+  color: var(--yb-text);
+}
+
+.kb-qa-header p {
+  margin: 4px 0 0;
+  color: var(--yb-text-soft);
+  font-size: 14px;
+}
+
+.kb-qa-source {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  color: var(--yb-text);
+}
+
+.kb-qa-source-options {
+  display: flex;
+  gap: 8px;
+}
+
+.kb-qa-source-options button {
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--yb-text);
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.kb-qa-source-options button:hover {
+  background: var(--yb-surface-hover);
+}
+
+.kb-qa-source-options button.active {
+  color: #fff;
+  background: var(--yb-primary);
+  border-color: var(--yb-primary);
+}
+
+.kb-qa-source-options button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.kb-qa-messages {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 14px;
+  padding: 16px;
+  overflow-y: auto;
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border);
+  border-radius: 14px;
+}
+
+.kb-qa-message {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 90%;
+}
+
+.kb-qa-message.user {
+  align-self: flex-end;
+}
+
+.kb-qa-message.assistant {
+  align-self: flex-start;
+}
+
+.kb-qa-message-role {
+  font-size: 12px;
+  color: var(--yb-text-soft);
+}
+
+.kb-qa-message-body {
+  padding: 12px 14px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--yb-text);
+  background: #fff;
+  border: 1px solid var(--yb-border);
+  border-radius: 12px;
+}
+
+.kb-qa-message.user .kb-qa-message-body {
+  background: var(--yb-primary-light, rgba(33, 116, 253, 0.08));
+  border-color: var(--yb-primary-light, rgba(33, 116, 253, 0.2));
+}
+
+.kb-qa-thinking {
+  color: var(--yb-text-soft);
+  font-style: italic;
+}
+
+.kb-qa-sources {
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--yb-text);
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border);
+  border-radius: 12px;
+}
+
+.kb-qa-sources strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.kb-qa-sources ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--yb-text-soft);
+}
+
+.kb-qa-sources li {
+  margin-bottom: 2px;
+}
+
+.kb-qa-input {
+  flex: 0 0 auto;
+}
+
+.kb-qa-input-field {
+  min-height: 44px;
+  padding: 10px 14px;
+  font-size: 14px;
+}
+
