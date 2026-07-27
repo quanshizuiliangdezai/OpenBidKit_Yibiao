@@ -1899,16 +1899,31 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 return False, None, None, fname, '个人库尚未初始化（先在桌面端同步一次）'
             try:
                 self._ensure_owner_cols(conn)
+                # 确保 knowledge_folders 有 deleted_at/deleted_by 列（向后兼容）
+                fcols = {c[1] for c in conn.execute("PRAGMA table_info(knowledge_folders)").fetchall()}
+                for col in ('deleted_at', 'deleted_by', 'parent_id'):
+                    if col not in fcols:
+                        conn.execute("ALTER TABLE knowledge_folders ADD COLUMN %s TEXT" % col)
+                        fcols.add(col)
                 now = datetime.datetime.now().isoformat()
                 new_doc_id = 'team-%s-%s' % (team_doc['id'], owner_id)
                 folder_id = 'team-import-%s' % owner_id
                 if conn.execute("SELECT 1 FROM knowledge_documents WHERE document_id=?",
                                 (new_doc_id,)).fetchone():
                     return True, new_doc_id, folder_id, fname, '已存在，跳过'
-                conn.execute(
-                    "INSERT OR IGNORE INTO knowledge_folders "
-                    "(folder_id, name, sort_order, created_at, updated_at, owner_id, owner_name) VALUES (?,?,?,?,?,?,?)",
-                    (folder_id, '团队库导入', 9999, now, now, owner_id, owner_name))
+                # 创建/恢复「团队库导入」文件夹；若之前被软删则复活，避免文档无家可归。
+                existing_folder = conn.execute(
+                    "SELECT deleted_at FROM knowledge_folders WHERE folder_id=?", (folder_id,)).fetchone()
+                if existing_folder is None:
+                    conn.execute(
+                        "INSERT INTO knowledge_folders "
+                        "(folder_id, name, sort_order, created_at, updated_at, owner_id, owner_name, parent_id, deleted_at) "
+                        "VALUES (?,?,?,?,?,?,?,?,?)",
+                        (folder_id, '团队库导入', 9999, now, now, owner_id, owner_name, None, None))
+                elif existing_folder['deleted_at']:
+                    conn.execute(
+                        "UPDATE knowledge_folders SET deleted_at=NULL, deleted_by=NULL, updated_at=? WHERE folder_id=?",
+                        (now, folder_id))
                 cols = {c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()}
                 doc_dir_rel = 'folders/%s/documents/%s' % (folder_id, new_doc_id)
                 team_status = team_doc.get('status') or 'pending'
