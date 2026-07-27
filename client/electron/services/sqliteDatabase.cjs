@@ -1297,6 +1297,14 @@ const migrations = [
     description: '技术方案新增目录字数控制设置和生效快照',
     up: addTechnicalPlanOutlineWordControl,
   },
+  {
+    version: 18,
+    table: 'technical_plan_meta',
+    columns: {
+      outline_word_control_options_json: 'TEXT',
+      outline_word_control_snapshot_json: 'TEXT',
+    },
+  },
 ];
 
 function timestampForFileName() {
