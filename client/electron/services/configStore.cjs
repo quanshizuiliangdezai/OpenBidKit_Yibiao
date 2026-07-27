@@ -226,6 +226,15 @@ const defaultExportFormat = {
   },
 };
 
+// 知识库语义检索（RAG）用的 embedding 模型配置。
+// base_url/api_key 为空时运行期回退到当前文本模型 provider 的 base_url/api_key。
+const defaultEmbeddingModel = {
+  enabled: false,
+  base_url: '',
+  api_key: '',
+  model_name: '',
+};
+
 const defaultConfig = {
   text_model_provider: 'jinlong',
   text_model_profiles: defaultTextModelProfiles,
@@ -239,6 +248,7 @@ const defaultConfig = {
     ...defaultImageModelProfiles.jinlong,
   },
   image_model_profiles: defaultImageModelProfiles,
+  embedding_model: { ...defaultEmbeddingModel },
   components: {
     file_parser: {
       provider: 'local',
@@ -475,6 +485,17 @@ function normalizeAgentModeScenarios(source) {
   };
 }
 
+// 归一化 embedding 模型配置（知识库语义检索）。
+function normalizeEmbeddingModel(source) {
+  const src = source && typeof source === 'object' ? source : {};
+  return {
+    enabled: src.enabled === undefined ? defaultEmbeddingModel.enabled : Boolean(src.enabled),
+    base_url: typeof src.base_url === 'string' ? src.base_url.trim() : defaultEmbeddingModel.base_url,
+    api_key: typeof src.api_key === 'string' ? src.api_key : defaultEmbeddingModel.api_key,
+    model_name: typeof src.model_name === 'string' ? src.model_name.trim() : defaultEmbeddingModel.model_name,
+  };
+}
+
 // 归一化账户信息（团队成员注册身份）。用户名缺失或非字符串视为未注册。
 function normalizeAccount(source) {
   if (!source || typeof source !== 'object') return null;
@@ -684,6 +705,7 @@ function normalizeConfig(config) {
     request_mode: activeTextProfile.request_mode,
     image_model: activeImageProfile,
     image_model_profiles: imageModelProfiles,
+    embedding_model: normalizeEmbeddingModel(source.embedding_model),
     components: normalizeComponentsConfig(source.components),
     update_channel: normalizeUpdateChannel(source.update_channel),
     gpu_hardware_acceleration_enabled: gpuHardwareAccelerationEnabled,

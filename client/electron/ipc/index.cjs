@@ -39,6 +39,8 @@ const { registerKbAuthIpc } = require('./kbAuthIpc.cjs');
 const { registerKbTeamIpc } = require('./kbTeamIpc.cjs');
 const { registerKbPersonalIpc } = require('./kbPersonalIpc.cjs');
 const { registerSyncIpc } = require('./syncIpc.cjs');
+const { registerKbQaIpc } = require('./kbQaIpc.cjs');
+const { createKbQaRetrievalService } = require('../services/kbQaRetrieval.cjs');
 const { checkRequiredOnlineServices, getRequiredOnlineServiceStatus } = require('../services/requiredOnlineServices.cjs');
 const { initLocalImageRenderService } = require('../services/localImageRenderService.cjs');
 
@@ -126,6 +128,8 @@ const workspaceDatabaseChannels = [
   'templates:delete',
   'sync:push',
   'sync:pull',
+  'kb-qa:retrieve-context',
+  'kb-qa:clear-index',
 ];
 
 function clearWorkspaceDatabaseIpc() {
@@ -184,7 +188,7 @@ function registerWorkspaceDatabaseStatusIpc({ mainWindow }) {
   };
 }
 
-function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, updateStatus, mainWindow }) {
+function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, kbAuthService, updateStatus, mainWindow }) {
   const sqliteDatabase = createSqliteDatabase(app, { onStatus: updateStatus });
   const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
@@ -195,6 +199,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
   const taskService = createTaskService({ aiService, agentService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
   const syncService = createSyncService({ app, db: sqliteDatabase.db, configStore });
+  const kbQaRetrievalService = createKbQaRetrievalService({ db: sqliteDatabase.db, aiService, kbAuthService });
 
   clearWorkspaceDatabaseIpc();
   registerKnowledgeBaseIpc({ knowledgeBaseService });
@@ -204,6 +209,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   registerTemplateIpc({ templateStore });
   registerTaskIpc({ taskService });
   registerSyncIpc({ syncService });
+  registerKbQaIpc({ kbQaRetrievalService });
   updateStatus({ phase: 'ready', ready: true, message: '本地数据库已就绪' });
   
   // 更新 pluginService 的服务引用
@@ -348,7 +354,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     databaseStatus.updateStatus({ phase: 'checking', ready: false, message: '正在检查本地数据库' });
     setTimeout(() => {
       try {
-        registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, updateStatus: databaseStatus.updateStatus, mainWindow });
+        registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, kbAuthService, updateStatus: databaseStatus.updateStatus, mainWindow });
       } catch (error) {
         databaseStatus.updateStatus({
           phase: 'error',

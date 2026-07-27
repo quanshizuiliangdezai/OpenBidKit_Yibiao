@@ -98,6 +98,28 @@
   border-top: 1px solid var(--yb-border-soft);
 }
 
+.settings-section-hint {
+  margin: 0 36px 4px;
+  padding: 14px 16px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--yb-text-soft);
+  background: var(--yb-surface-2, #f5f6f8);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 10px;
+}
+
+.settings-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-row-hint {
+  font-size: 13px;
+  color: var(--yb-text-soft);
+}
+
 .settings-row-copy {
   display: grid;
   gap: 8px;

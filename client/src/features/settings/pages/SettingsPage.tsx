@@ -3,10 +3,10 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { DetailHelpLink, FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { AgentModeScenariosConfig, AgentRuntimeDescriptor, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
+import type { AgentModeScenariosConfig, AgentRuntimeDescriptor, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, EmbeddingModelConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
-type SettingsTab = 'general' | 'text-model' | 'image-model' | 'components' | 'agent' | 'about';
+type SettingsTab = 'general' | 'text-model' | 'image-model' | 'rag' | 'components' | 'agent' | 'about';
 type UpdateStatus = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'error' | 'disabled';
 type AgentSelfCheckUiStatus = 'untested' | 'checking' | 'normal' | 'busy' | 'error';
 
@@ -14,6 +14,7 @@ const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
   { id: 'general', label: '通用' },
   { id: 'text-model', label: '文本模型' },
   { id: 'image-model', label: '生图模型' },
+  { id: 'rag', label: '语义检索' },
   { id: 'components', label: '组件设置' },
   { id: 'agent', label: '智能体配置' },
   { id: 'about', label: '关于' },
@@ -516,6 +517,12 @@ const initialState: SettingsPageState = {
     ...imageProviderDefaults.jinlong,
   },
   imageModelProfiles: createDefaultImageModelProfiles(),
+  embeddingModel: {
+    enabled: false,
+    base_url: '',
+    api_key: '',
+    model_name: '',
+  },
   components: {
     file_parser: {
       provider: 'local',
@@ -548,6 +555,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [loadingModels, setLoadingModels] = useState<'text' | 'image' | null>(null);
   const [testingTextModel, setTestingTextModel] = useState(false);
   const [testingImageModel, setTestingImageModel] = useState(false);
+  const [testingEmbeddingModel, setTestingEmbeddingModel] = useState(false);
   const [imageTestPreview, setImageTestPreview] = useState<{ src: string; title: string } | null>(null);
   const [appVersion, setAppVersion] = useState('');
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
@@ -617,6 +625,12 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         textModelProfiles,
         imageModel: activeImageProfile,
         imageModelProfiles,
+        embeddingModel: {
+          enabled: Boolean(config.embedding_model?.enabled),
+          base_url: config.embedding_model?.base_url || '',
+          api_key: config.embedding_model?.api_key || '',
+          model_name: config.embedding_model?.model_name || '',
+        },
         components: normalizeComponentsState(config.components),
         agentRuntime: config.agent_runtime,
         agentModeScenarios: normalizeAgentModeScenarios(config.agent_mode_scenarios),
@@ -671,6 +685,12 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       request_mode: activeTextProfile.request_mode,
       image_model: activeImageProfile,
       image_model_profiles: imageModelProfiles,
+      embedding_model: {
+        enabled: state.embeddingModel.enabled,
+        base_url: state.embeddingModel.base_url.trim(),
+        api_key: state.embeddingModel.api_key,
+        model_name: state.embeddingModel.model_name.trim(),
+      },
       components: componentsFromState(state.components),
       agent_runtime: options.includeAgentState ? state.agentRuntime : persistedAgentRuntime,
       agent_mode_scenarios: options.includeAgentState ? state.agentModeScenarios : persistedAgentModeScenarios,
@@ -771,6 +791,30 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       },
       imageModel: normalizeImageModelProfile(provider, prev.imageModelProfiles[provider]),
     }));
+  };
+
+  const updateEmbeddingModel = (partial: Partial<EmbeddingModelConfig>) => {
+    setState((prev) => ({
+      ...prev,
+      embeddingModel: { ...prev.embeddingModel, ...partial },
+    }));
+  };
+
+  const testEmbeddingConfig = async () => {
+    setTestingEmbeddingModel(true);
+    try {
+      const config = createClientConfig();
+      const result = await window.yibiao?.ai.testEmbeddingModel(config);
+      if (!result?.success) {
+        throw new Error(result?.message || 'Embedding 模型测试失败');
+      }
+      showToast(result.message || 'Embedding 模型测试成功', 'success');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Embedding 模型测试失败';
+      showToast(message, 'error');
+    } finally {
+      setTestingEmbeddingModel(false);
+    }
   };
 
   const saveClientConfig = async (config: ClientConfig) => {
@@ -1253,6 +1297,16 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       });
     }
 
+    if (activeTab === 'rag') {
+      const normalize = (emb?: Partial<EmbeddingModelConfig>): EmbeddingModelConfig => ({
+        enabled: Boolean(emb?.enabled),
+        base_url: (emb?.base_url || '').trim(),
+        api_key: emb?.api_key || '',
+        model_name: (emb?.model_name || '').trim(),
+      });
+      return JSON.stringify(state.embeddingModel) !== JSON.stringify(normalize(savedConfig.embedding_model));
+    }
+
     if (activeTab === 'components') {
       return JSON.stringify(componentsFromState(state.components)) !== JSON.stringify(normalizeComponentsState(savedConfig.components));
     }
@@ -1338,6 +1392,10 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       await saveImageConfig();
       return;
     }
+    if (activeTab === 'rag') {
+      await saveTextConfig();
+      return;
+    }
     if (activeTab === 'components') {
       await saveComponentsConfig();
       return;
@@ -1347,7 +1405,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     }
   };
 
-  const canSaveActiveTab = activeTab === 'general' || activeTab === 'text-model' || activeTab === 'image-model' || activeTab === 'components' || activeTab === 'agent';
+  const canSaveActiveTab = activeTab === 'general' || activeTab === 'text-model' || activeTab === 'image-model' || activeTab === 'rag' || activeTab === 'components' || activeTab === 'agent';
   const activeTabDirty = isActiveTabDirty();
   const currentTextProviderDefault = textProviderDefaults[state.textModel.provider];
   const imageModelStatus: ImageModelStatus = state.imageModel.status || 'untested';
@@ -1824,6 +1882,74 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
               <img src={imageTestPreview.src} alt="生图模型测试结果" />
             </div>
           )}
+        </section>
+      )}
+
+      {activeTab === 'rag' && (
+        <section className="settings-page-section">
+          <div className="settings-section-title">
+            <span />
+            <strong>知识库语义检索（RAG）</strong>
+          </div>
+          <p className="settings-section-hint">
+            开启后，知识库问答会先把问题与你库内的文档切块做向量相似度匹配，再交给 AI 回答，能真正“理解”自然语言问题，而不只是关键词匹配。向量化在本地完成，索引仅缓存在本机。
+          </p>
+          <div className="settings-list">
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>启用语义检索</strong>
+                <span>关闭时，知识库问答退回关键词检索，保证始终可用</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={state.embeddingModel.enabled}
+                onChange={(event) => updateEmbeddingModel({ enabled: event.target.checked })}
+              />
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>Base URL</strong>
+                <span>OpenAI 兼容的 /embeddings 接口地址；留空则复用“文本模型”里的 Base URL</span>
+              </div>
+              <input
+                type="text"
+                value={state.embeddingModel.base_url}
+                placeholder="例如 https://api.openai.com/v1"
+                onChange={(event) => updateEmbeddingModel({ base_url: event.target.value })}
+              />
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>API Key</strong>
+                <span>仅保存在本机配置文件中；留空则复用“文本模型”里的 API Key</span>
+              </div>
+              <input
+                type="password"
+                value={state.embeddingModel.api_key}
+                placeholder="可选，留空复用文本模型 Key"
+                onChange={(event) => updateEmbeddingModel({ api_key: event.target.value })}
+              />
+            </label>
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>Embedding 模型名称</strong>
+                <span>例如 text-embedding-3-small、bge-m3 等，需服务商支持</span>
+              </div>
+              <input
+                type="text"
+                value={state.embeddingModel.model_name}
+                placeholder="例如 text-embedding-3-small"
+                onChange={(event) => updateEmbeddingModel({ model_name: event.target.value })}
+              />
+            </label>
+            <div className="settings-row settings-row-actions">
+              <button type="button" className="inline-action" onClick={testEmbeddingConfig} disabled={testingEmbeddingModel}>
+                {testingEmbeddingModel && <span className="inline-spinner" aria-hidden="true" />}
+                {testingEmbeddingModel ? '测试中' : '测试'}
+              </button>
+              <span className="settings-row-hint">点击测试将用上方配置做一次连通性校验</span>
+            </div>
+          </div>
         </section>
       )}
 

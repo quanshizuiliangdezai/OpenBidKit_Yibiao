@@ -444,6 +444,17 @@ export interface KbQaDocument {
   folder_id?: string | number | null;
   created_at?: string;
   content_text: string;
+  /** RAG 语义检索附加字段：相似度得分 */
+  score?: number;
+  /** RAG 语义检索附加字段：来源库（team/personal） */
+  qa_source?: 'team' | 'personal';
+}
+
+/** RAG 语义检索选项 */
+export interface KbQaRetrieveOptions {
+  sources?: Array<'team' | 'personal'>;
+  topK?: number;
+  maxDocs?: number;
 }
 
 export interface KbTrashFolder {
@@ -531,6 +542,7 @@ export interface YibiaoBridge {
     requestJson: <TResult = unknown>(request: JsonCompletionRequest) => Promise<TResult>;
     testTextModel: (config: ClientConfig) => Promise<TextModelTestResult>;
     testImageModel: (config: ClientConfig) => Promise<ImageModelTestResult>;
+    testEmbeddingModel: (config: ClientConfig) => Promise<TextModelTestResult>;
     onHttpError: (callback: (event: AiHttpErrorPayload) => void) => () => void;
   };
   agent: {
@@ -699,6 +711,10 @@ export interface YibiaoBridge {
     restoreFromTrash: (type: 'folder' | 'document', id: string | number) => Promise<KbTeamResult>;
     exportZip: (ids: Array<string | number>) => Promise<{ success: boolean; data?: { localPath: string }; error?: string; canceled?: boolean; needLogin?: boolean }>;
   },
+  kbQa: {
+    retrieveContext: (question: string, options?: KbQaRetrieveOptions) => Promise<{ success: boolean; data?: KbQaDocument[]; warnings?: string[]; error?: string }>;
+    clearIndex: (source?: 'team' | 'personal') => Promise<{ success: boolean; error?: string }>;
+  };
   plugins: {
     getAvailablePlugins: () => Promise<AvailablePlugin[]>;
     install: (pluginId: string) => Promise<void>;

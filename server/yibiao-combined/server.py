@@ -1041,6 +1041,8 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             conn.execute("ALTER TABLE knowledge_documents ADD COLUMN owner_id INTEGER")
         if 'owner_name' not in doc_cols:
             conn.execute("ALTER TABLE knowledge_documents ADD COLUMN owner_name TEXT")
+        if 'content_text' not in doc_cols:
+            conn.execute("ALTER TABLE knowledge_documents ADD COLUMN content_text TEXT")
         conn.commit()
 
     def _personal_folders(self, employee):
@@ -1589,6 +1591,78 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         finally:
             conn.close()
 
+    def _qa_team_corpus(self, max_chars=30000):
+        """团队库 QA 语料：返回所有未删除文档的 {id,title,file_name,content_text,created_at}。
+        仅供客户端 RAG 向量化使用（只读）。content_text 截断到 max_chars。"""
+        import sqlite3 as _sql
+        conn = _sql.connect(kb_db.DB_PATH)
+        try:
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.row_factory = _sql.Row
+            cols = [c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()]
+            if 'content_text' not in cols:
+                return []
+            rows = conn.execute(
+                "SELECT id, folder_id, title, file_name, mime_type, COALESCE(content_text,'') AS content_text, created_at "
+                "FROM knowledge_documents "
+                "WHERE (deleted_at IS NULL OR deleted_at='') "
+                "ORDER BY created_at DESC"
+            ).fetchall()
+            out = []
+            for r in rows:
+                text = (r['content_text'] or '')
+                if len(text) > max_chars:
+                    text = text[:max_chars]
+                out.append({
+                    'id': r['id'],
+                    'folder_id': r['folder_id'],
+                    'title': r['title'] or r['file_name'],
+                    'file_name': r['file_name'],
+                    'mime_type': r['mime_type'],
+                    'created_at': r['created_at'],
+                    'content_text': text,
+                })
+            return out
+        finally:
+            conn.close()
+
+    def _qa_personal_corpus(self, employee, max_chars=30000):
+        """个人库 QA 语料：返回当前用户可见的所有未删除文档（非 admin 加 owner 过滤）。"""
+        conn = _master_db_conn()
+        if conn is None:
+            return []
+        try:
+            self._ensure_owner_cols(conn)
+            owner_filter = ''
+            args = []
+            if employee and employee.get('role') != 'admin':
+                owner_filter = " AND (owner_id=? OR owner_id IS NULL)"
+                args = [employee['id']]
+            cols = [c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()]
+            if 'content_text' not in cols:
+                return []
+            q = ("SELECT document_id,folder_id,file_name,COALESCE(content_text,'') AS content_text,created_at "
+                 "FROM knowledge_documents "
+                 "WHERE (deleted_at IS NULL OR deleted_at='')" + owner_filter +
+                 " ORDER BY created_at DESC")
+            rows = conn.execute(q, tuple(args)).fetchall()
+            out = []
+            for r in rows:
+                text = (r['content_text'] or '')
+                if len(text) > max_chars:
+                    text = text[:max_chars]
+                out.append({
+                    'id': r['document_id'],
+                    'folder_id': r['folder_id'],
+                    'title': r['file_name'],
+                    'file_name': r['file_name'],
+                    'created_at': r['created_at'],
+                    'content_text': text,
+                })
+            return out
+        finally:
+            conn.close()
+
     def _export_team_zip(self, ids, employee):
         import io
         buf = io.BytesIO()
@@ -1849,6 +1923,20 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     'message': team_message, 'created_at': now, 'updated_at': now,
                     'owner_id': owner_id, 'owner_name': owner_name,
                 }
+                # 个人库全文检索/RAG 需要 content_text；优先复制团队库已抽取的正文，没有则现场抽取。
+                if 'content_text' in cols:
+                    content_text = team_doc.get('content_text') or ''
+                    if not content_text:
+                        src = os.path.join(kb_db.KB_DATA_DIR, team_doc['file_path'])
+                        if os.path.isfile(src):
+                            try:
+                                with open(src, 'rb') as fh:
+                                    content_text = kb_db._extract_text_for_search(
+                                        fh.read(), team_doc.get('file_name') or fname,
+                                        team_doc.get('mime_type') or 'application/octet-stream')
+                            except Exception:
+                                content_text = ''
+                    fields['content_text'] = content_text
                 if 'uploaded_by' in cols:
                     fields['uploaded_by'] = owner_name
                 if 'uploaded_at' in cols:
@@ -2110,6 +2198,18 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             except ValueError:
                 limit = 3
             docs = self._qa_personal_retrieve(kw, employee, limit=limit)
+            return self._send(200, {'success': True, 'data': docs})
+        if path == '/api/kb-qa/corpus':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            docs = self._qa_team_corpus()
+            return self._send(200, {'success': True, 'data': docs})
+        if path == '/api/personal/kb-qa/corpus':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            docs = self._qa_personal_corpus(employee)
             return self._send(200, {'success': True, 'data': docs})
         if path.startswith('/api/personal/documents/') and path.endswith('/file'):
             employee = self._auth()

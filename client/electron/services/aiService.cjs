@@ -1732,6 +1732,77 @@ async function generateImageWithConfig(app, config, request) {
   throw new Error('当前生图服务商暂不支持正文配图');
 }
 
+/**
+ * 解析知识库语义检索用的 embedding 配置。
+ * base_url / api_key 为空时回退到当前文本模型 provider 的配置；model_name 必须显式填写。
+ */
+function resolveEmbeddingConfig(config) {
+  const emb = config?.embedding_model && typeof config.embedding_model === 'object' ? config.embedding_model : {};
+  const baseUrl = trimBaseUrl(emb.base_url) || trimBaseUrl(config?.base_url);
+  const apiKey = String(emb.api_key || '').trim() || String(config?.api_key || '').trim();
+  const modelName = String(emb.model_name || '').trim();
+  return {
+    enabled: Boolean(emb.enabled),
+    base_url: baseUrl,
+    api_key: apiKey,
+    model_name: modelName,
+  };
+}
+
+/**
+ * 调 OpenAI 兼容 /embeddings 接口，把 texts 批量向量化。
+ * 返回与 texts 等长的向量数组（number[][]）。
+ */
+async function embedTextsWithConfig(config, texts) {
+  const resolved = resolveEmbeddingConfig(config);
+  if (!resolved.model_name) {
+    throw new Error('请先在设置中配置知识库语义检索的 Embedding 模型名称');
+  }
+  if (!resolved.base_url) {
+    throw new Error('请先在设置中配置 Embedding 模型的 Base URL（或先配置文本模型）');
+  }
+  if (!resolved.api_key) {
+    throw new Error('请先在设置中配置 Embedding 模型的 API Key（或先配置文本模型）');
+  }
+  const input = Array.isArray(texts) ? texts.map((t) => String(t ?? '')) : [String(texts ?? '')];
+  if (!input.length) {
+    return [];
+  }
+
+  const data = await runWithAiRetry(async () => {
+    let response = null;
+    try {
+      response = await fetch(`${resolved.base_url}/embeddings`, {
+        method: 'POST',
+        headers: createHeaders(resolved.api_key),
+        body: JSON.stringify({ model: resolved.model_name, input }),
+      });
+    } catch (error) {
+      throw markAiRequestError(error, { retryable: true });
+    }
+    await ensureOk(response, 'Embedding 请求失败');
+    try {
+      return await response.json();
+    } catch (error) {
+      throw markAiRequestError(error, { retryable: true });
+    }
+  });
+
+  const items = Array.isArray(data?.data) ? data.data : [];
+  if (items.length !== input.length) {
+    throw new Error(`Embedding 返回数量不匹配：期望 ${input.length}，实际 ${items.length}`);
+  }
+  // 按 index 排序，保证与输入一一对应。
+  items.sort((a, b) => (a?.index ?? 0) - (b?.index ?? 0));
+  return items.map((item) => {
+    const vec = item?.embedding;
+    if (!Array.isArray(vec) || !vec.length) {
+      throw new Error('Embedding 返回向量为空');
+    }
+    return vec;
+  });
+}
+
 function createAiService({ app, configStore }) {
   const textRequestQueue = createAiRequestQueue({
     defaultLimit: 10,
@@ -1876,6 +1947,34 @@ function createAiService({ app, configStore }) {
         return { success: true, message: `测试成功：${reply.slice(0, 160)}` };
       } catch (error) {
         return { success: false, message: error.message || '文本模型测试失败' };
+      }
+    },
+
+    /** 知识库语义检索：批量向量化文本（走文本请求队列限流）。 */
+    async embed(texts) {
+      return enqueueTextRequest({}, () => {
+        const config = configStore.load();
+        return embedTextsWithConfig(config, texts);
+      });
+    },
+
+    /** 当前配置是否可用 embedding（enabled 且 model_name 已填）。 */
+    isEmbeddingAvailable() {
+      const resolved = resolveEmbeddingConfig(configStore.load());
+      return Boolean(resolved.enabled && resolved.model_name && resolved.base_url && resolved.api_key);
+    },
+
+    /** 测试 embedding 模型配置（config 为渲染层传入的完整客户端配置）。 */
+    async testEmbeddingModel(config) {
+      try {
+        const vectors = await embedTextsWithConfig(config, ['你好，这是一次连通性测试。']);
+        const dim = vectors[0]?.length || 0;
+        if (!dim) {
+          return { success: false, message: 'Embedding 测试失败：返回向量为空' };
+        }
+        return { success: true, message: `测试成功：向量维度 ${dim}` };
+      } catch (error) {
+        return { success: false, message: error.message || 'Embedding 模型测试失败' };
       }
     },
 

@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 18;
+const schemaVersion = 19;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -913,6 +913,26 @@ function createKnowledgeSyncMetaSchema(db) {
   `);
 }
 
+// 知识库问答（RAG）向量分块索引：缓存 团队库/个人库 文档切块后的 embedding。
+// source: 'team' | 'personal'；document_id 为服务器侧文档 id；content_hash 用于增量重建。
+function createKbQaChunkIndexSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS kb_qa_chunk_index (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source TEXT NOT NULL,
+      document_id TEXT NOT NULL,
+      title TEXT,
+      chunk_index INTEGER NOT NULL DEFAULT 0,
+      content TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      embedding_json TEXT,
+      embedding_model TEXT,
+      updated_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_kb_qa_chunk_source_doc ON kb_qa_chunk_index (source, document_id);
+  `);
+}
+
 const schemaHealthTableGroups = [
   {
     version: 1,
@@ -992,6 +1012,11 @@ const schemaHealthTableGroups = [
     version: 15,
     tables: ['export_templates'],
     repair: createExportTemplatesSchema,
+  },
+  {
+    version: 19,
+    tables: ['kb_qa_chunk_index'],
+    repair: createKbQaChunkIndexSchema,
   },
 ];
 
@@ -1304,6 +1329,11 @@ const migrations = [
     version: 18,
     description: '技术方案新增目录字数控制设置和生效快照',
     up: addTechnicalPlanOutlineWordControl,
+  },
+  {
+    version: 19,
+    description: '新增知识库问答向量分块索引表',
+    up: createKbQaChunkIndexSchema,
   },
 ];
 

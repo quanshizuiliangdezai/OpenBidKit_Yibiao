@@ -49,27 +49,50 @@ function KbQaPage() {
     setInput('');
 
     try {
-      const limit = 3;
-      const [teamRes, personalRes] = await Promise.all([
-        source === 'team' || source === 'both'
-          ? window.yibiao?.kbTeam.qaRetrieve(question, limit)
-          : Promise.resolve({ success: true, data: [] }),
-        source === 'personal' || source === 'both'
-          ? window.yibiao?.kbPersonal.qaRetrieve(question, limit)
-          : Promise.resolve({ success: true, data: [] }),
-      ]);
+      // 1) RAG 语义检索优先：向量召回相关资料
+      const sources: Array<'team' | 'personal'> =
+        source === 'both' ? ['team', 'personal'] : [source];
+      let docs: KbQaDocument[] = [];
+      let ragWarning: string | undefined;
 
-      const teamDocs: KbQaDocument[] = Array.isArray(teamRes?.data) ? teamRes.data : [];
-      const personalDocs: KbQaDocument[] = Array.isArray(personalRes?.data) ? personalRes.data : [];
+      try {
+        const ragRes = await window.yibiao?.kbQa.retrieveContext(question, {
+          sources,
+          topK: 6,
+          maxDocs: 4,
+        });
+        if (ragRes && ragRes.success && Array.isArray(ragRes.data) && ragRes.data.length > 0) {
+          docs = ragRes.data;
+          ragWarning =
+            Array.isArray(ragRes.warnings) && ragRes.warnings.length ? ragRes.warnings[0] : undefined;
+        }
+      } catch {
+        // 语义检索失败（如未配置 embedding 模型），下方回退关键词检索
+      }
 
-      // 去重：相同 file_name 且 content_text 前 200 字符相同视为同一文档
-      const seen = new Set<string>();
-      const docs: KbQaDocument[] = [];
-      for (const d of [...teamDocs, ...personalDocs]) {
-        const key = `${d.file_name || d.title}|${(d.content_text || '').slice(0, 200)}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        docs.push(d);
+      // 2) 回退：语义检索无结果或不可用时，使用关键词检索
+      if (docs.length === 0) {
+        const limit = 3;
+        const [teamRes, personalRes] = await Promise.all([
+          source === 'team' || source === 'both'
+            ? window.yibiao?.kbTeam.qaRetrieve(question, limit)
+            : Promise.resolve({ success: true, data: [] }),
+          source === 'personal' || source === 'both'
+            ? window.yibiao?.kbPersonal.qaRetrieve(question, limit)
+            : Promise.resolve({ success: true, data: [] }),
+        ]);
+
+        const teamDocs: KbQaDocument[] = Array.isArray(teamRes?.data) ? teamRes.data : [];
+        const personalDocs: KbQaDocument[] = Array.isArray(personalRes?.data) ? personalRes.data : [];
+
+        // 去重：相同 file_name 且 content_text 前 200 字符相同视为同一文档
+        const seen = new Set<string>();
+        for (const d of [...teamDocs, ...personalDocs]) {
+          const key = `${d.file_name || d.title}|${(d.content_text || '').slice(0, 200)}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          docs.push(d);
+        }
       }
 
       if (docs.length === 0) {
@@ -86,6 +109,9 @@ function KbQaPage() {
       }
 
       setLastSources(docs);
+      if (ragWarning) {
+        showToast(ragWarning, 'info');
+      }
       const prompt = buildPrompt(question, docs);
       const answer = await aiClient.chat({
         messages: [{ role: 'user', content: prompt }],
@@ -169,6 +195,14 @@ function KbQaPage() {
               {lastSources.map((d, i) => (
                 <li key={`${d.id}-${i}`}>
                   [{i + 1}] {d.title}
+                  {d.qa_source ? (
+                    <span className="kb-qa-source-tag">
+                      {d.qa_source === 'team' ? '团队库' : '个人库'}
+                    </span>
+                  ) : null}
+                  {typeof d.score === 'number' ? (
+                    <span className="kb-qa-score-tag">相关度 {Math.round(d.score * 100)}%</span>
+                  ) : null}
                 </li>
               ))}
             </ul>

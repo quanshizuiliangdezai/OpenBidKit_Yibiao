@@ -2020,6 +2020,27 @@
   margin-bottom: 2px;
 }
 
+.kb-qa-source-tag,
+.kb-qa-score-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+.kb-qa-source-tag {
+  color: var(--yb-accent, #4f7cff);
+  background: color-mix(in srgb, var(--yb-accent, #4f7cff) 14%, transparent);
+}
+
+.kb-qa-score-tag {
+  color: var(--yb-text-soft);
+  background: var(--yb-surface-2, #f0f1f4);
+}
+
 .kb-qa-input {
   flex: 0 0 auto;
 }

@@ -57,6 +57,7 @@ const bridge = {
     requestJson: (request) => ipcRenderer.invoke('ai:request-json', request),
     testTextModel: (config) => ipcRenderer.invoke('ai:test-text-model', config),
     testImageModel: (config) => ipcRenderer.invoke('ai:test-image-model', config),
+    testEmbeddingModel: (config) => ipcRenderer.invoke('ai:test-embedding-model', config),
     onHttpError: (callback) => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('ai:http-error', listener);
@@ -254,6 +255,10 @@ const bridge = {
     exportZip: (ids) => ipcRenderer.invoke('kb-personal:export-zip', ids),
     importToTeam: (documentIds, targetTeamFolderId, folderIds) => ipcRenderer.invoke('kb-personal:import-to-team', documentIds, targetTeamFolderId, folderIds),
     importFromTeam: (documentIds, folderIds) => ipcRenderer.invoke('kb-personal:import-from-team', documentIds, folderIds),
+  },
+  kbQa: {
+    retrieveContext: (question, options) => ipcRenderer.invoke('kb-qa:retrieve-context', question, options),
+    clearIndex: (source) => ipcRenderer.invoke('kb-qa:clear-index', source),
   },
   plugins: {
     getAvailablePlugins: () => ipcRenderer.invoke('plugins:getAvailablePlugins'),

@@ -65,6 +65,14 @@ export interface ImageModelConfig {
 
 export type ImageModelProfiles = Record<ImageModelProvider, ImageModelConfig>;
 
+/** 知识库语义检索（RAG）embedding 模型配置。base_url/api_key 为空时回退到当前文本模型配置。 */
+export interface EmbeddingModelConfig {
+  enabled: boolean;
+  base_url: string;
+  api_key: string;
+  model_name: string;
+}
+
 export type FileParserProvider = 'local' | 'mineru-accurate-api' | 'mineru-agent-api';
 
 export interface FileParserConfig {
@@ -91,6 +99,7 @@ export interface AccountInfo {
 export interface ClientConfig extends AiConfig {
   image_model: ImageModelConfig;
   image_model_profiles: ImageModelProfiles;
+  embedding_model?: EmbeddingModelConfig;
   components: ComponentsConfig;
   agent_runtime: AgentRuntimeId;
   agent_mode_scenarios: AgentModeScenariosConfig;

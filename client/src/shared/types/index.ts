@@ -35,6 +35,7 @@ export type {
   ConfiguredTextModelProvider,
   ConfigSaveResult,
   ComponentsConfig,
+  EmbeddingModelConfig,
   FileParserConfig,
   FileParserProvider,
   ImageModelTestResult,

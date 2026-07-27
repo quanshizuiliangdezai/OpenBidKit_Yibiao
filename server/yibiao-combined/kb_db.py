@@ -9,6 +9,9 @@ import hashlib
 import secrets
 import datetime
 import threading
+import subprocess
+import tempfile
+import shutil
 
 DB_PATH = os.environ.get('KB_DB', '/toubiao/yibiao-kb-server/kb.sqlite')
 # 文档物理存储目录（只在服务器，客户端不留存）
@@ -1093,35 +1096,114 @@ def move_document(doc_id, new_folder_id):
 
 # ---------- 文档（上传/列表/下载/硬删）----------
 
+def _libreoffice_to_text(data, ext):
+    """使用 LibreOffice 将 office/pdf 文件转换为纯文本。ext 应包含点，如 .docx。"""
+    if not shutil.which('libreoffice') and not shutil.which('soffice'):
+        return ''
+    tmpdir = tempfile.mkdtemp(prefix='yibiao_extract_')
+    try:
+        src = os.path.join(tmpdir, f'src{ext}')
+        with open(src, 'wb') as f:
+            f.write(data)
+        cmd = ['libreoffice', '--headless', '--convert-to', 'txt:Text', '--outdir', tmpdir, src]
+        try:
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=False)
+        except Exception:
+            return ''
+        txt_path = os.path.join(tmpdir, f'src.txt')
+        if not os.path.exists(txt_path):
+            return ''
+        with open(txt_path, 'rb') as f:
+            return f.read()[:200000].decode('utf-8', 'replace')
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def _extract_text_for_search(data, file_name, mime_type):
-    """从上传内容中抽取纯文本，供全文检索。仅对文本类文件尽力而为，其它类型返回空。"""
+    """从上传内容中抽取纯文本，供全文检索/RAG使用。失败时返回空，不阻断上传。"""
     try:
         ext = (file_name or '').lower().rsplit('.', 1)[-1] if '.' in (file_name or '') else ''
+        ext_with_dot = f'.{ext}' if ext else ''
         textish = {'txt', 'md', 'markdown', 'csv', 'json', 'log', 'xml', 'html', 'htm', 'text', 'yaml', 'yml', 'ini', 'conf'}
         if ext in textish or (mime_type or '').startswith('text/'):
             try:
                 return data[:200000].decode('utf-8', 'replace')
             except Exception:
                 return ''
-        # PDF / DOCX 全文：若服务器装了对应库则抽取，否则跳过（不阻断上传）
+        # PDF：优先 PyPDF2，失败用 LibreOffice
         if ext == 'pdf':
+            text = ''
             try:
                 from PyPDF2 import PdfReader
                 import io as _io
                 reader = PdfReader(_io.BytesIO(data))
-                return '\n'.join((p.extract_text() or '') for p in reader.pages)[:200000]
+                text = '\n'.join((p.extract_text() or '') for p in reader.pages)[:200000]
             except Exception:
-                return ''
-        if ext in ('docx', 'doc'):
+                pass
+            if not text:
+                text = _libreoffice_to_text(data, ext_with_dot)
+            return text
+        # DOCX：优先 python-docx，失败用 LibreOffice
+        if ext == 'docx':
+            text = ''
             try:
                 import docx
+                import io as _io
                 d = docx.Document(_io.BytesIO(data))
-                return '\n'.join(par.text for par in d.paragraphs)[:200000]
+                text = '\n'.join(par.text for par in d.paragraphs)[:200000]
             except Exception:
-                return ''
+                pass
+            if not text:
+                text = _libreoffice_to_text(data, ext_with_dot)
+            return text
+        # DOC/WPS/XLS/XLSX/PPT/PPTX 等：直接走 LibreOffice
+        if ext in ('doc', 'wps', 'et', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp'):
+            return _libreoffice_to_text(data, ext_with_dot)
     except Exception:
         return ''
     return ''
+
+
+def reextract_document_text(doc_id):
+    """根据磁盘上的原始文件重新抽取 content_text，用于修复历史数据。"""
+    with _lock:
+        conn = _conn()
+        try:
+            row = conn.execute("SELECT id, file_name, mime_type, file_path FROM knowledge_documents WHERE id=?", (int(doc_id),)).fetchone()
+            if not row:
+                return False, '文档不存在'
+            full = os.path.join(KB_DATA_DIR, row['file_path']) if row['file_path'] else ''
+            if not full or not os.path.exists(full):
+                return False, '物理文件不存在'
+            with open(full, 'rb') as f:
+                data = f.read()
+            content_text = _extract_text_for_search(data, row['file_name'], row['mime_type'])
+            conn.execute("UPDATE knowledge_documents SET content_text=? WHERE id=?", (content_text, int(doc_id)))
+            conn.commit()
+            return True, None
+        finally:
+            conn.close()
+
+
+def reextract_all_documents_text():
+    """批量重抽所有非删除文档的 content_text，返回 (成功数, 失败列表)。"""
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT id FROM knowledge_documents WHERE (deleted_at IS NULL OR deleted_at='')"
+            ).fetchall()
+        finally:
+            conn.close()
+    ok = 0
+    fails = []
+    for row in rows:
+        success, err = reextract_document_text(row['id'])
+        if success:
+            ok += 1
+        else:
+            fails.append((row['id'], err))
+    return ok, fails
 
 
 def upload_document(folder_id, owner_id, title, file_name, mime_type, data):
