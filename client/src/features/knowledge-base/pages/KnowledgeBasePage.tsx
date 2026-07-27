@@ -105,7 +105,8 @@ const statusLabels: Record<KnowledgeDocument['status'], string> = {
 // 回收站 24h 倒计时显示
 function formatTrashRemaining(deletedAt?: string): string {
   if (!deletedAt) return '';
-  const deletedMs = Date.parse(deletedAt.replace(' ', 'T') + (deletedAt.includes('Z') ? '' : 'Z'));
+  // 后端 deleted_at 是本地 ISO 时间（无时区后缀），按本地时间解析，不要当成 UTC
+  const deletedMs = Date.parse(deletedAt.replace(' ', 'T'));
   if (Number.isNaN(deletedMs)) return '';
   const elapsedMs = Date.now() - deletedMs;
   const remainMs = 24 * 3600 * 1000 - elapsedMs;
