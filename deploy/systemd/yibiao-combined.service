@@ -17,6 +17,7 @@ Environment=YIBIAO_INCOMING=/toubiao/yibiao-incoming
 Environment=YIBIAO_MASTER_ZIP=/toubiao/yibiao-master/master.zip
 Environment=YIBIAO_MASTER_DB=/toubiao/yibiao-master/master.sqlite
 Environment=YIBIAO_MASTER_KB=/toubiao/yibiao-master/knowledge-base
+Environment=YIBIAO_MERGE_SCRIPT=/toubiao/yibiao-sync/merge.py
 # ---- 知识库认证配置 ----
 Environment=KB_DB=/toubiao/yibiao-kb-server/kb.sqlite
 Environment=KB_DATA_DIR=/toubiao/yibiao-kb-server/knowledge-base
