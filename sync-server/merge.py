@@ -36,6 +36,7 @@ import json
 import tempfile
 import datetime
 import traceback
+import fcntl
 
 # 四个路径分别可用环境变量覆盖（部署时由 systemd 单元注入），确保与 server.py 实际布局一致。
 # 默认仍按 /toubiao 挂载点的独立布局，向后兼容旧部署。
@@ -45,6 +46,9 @@ INCOMING = os.environ.get('YIBIAO_INCOMING', '/toubiao/yibiao-share/incoming')
 MASTER_ZIP = os.environ.get('YIBIAO_MASTER_ZIP', '/toubiao/yibiao-share/master.zip')
 PROCESSED = os.path.join(INCOMING, 'processed')
 MASTER_DIR = os.path.dirname(MASTER_DB)  # 供 user_config.json 等引用
+# 合并串行锁：保证同时只有一个 merge.py 在跑（覆盖「上传实时触发」与「cron 兜底」两种调用），
+# 避免多个合并进程同时猛读 master.sqlite、猛写新库并重建 master.zip 导致磁盘/CPU 被打满，拖慢 KB 服务。
+MERGE_LOCK_PATH = os.path.join(MASTER_DIR, 'merge.lock')
 
 # knowledge_* 中按 document_id 关联的子表
 DOC_CHILD_TABLES = [
@@ -362,29 +366,51 @@ def process_package(zip_path, master):
 
 
 def main():
-    ensure_master()
-    master = sqlite3.connect(MASTER_DB)
-    master.execute('PRAGMA journal_mode=WAL')
+    # 合并串行锁：多个并发触发（上传实时触发 + cron 兜底）只会有一个真正执行合并，
+    # 其余阻塞等待，避免同时多个进程猛读写 master.sqlite 与重建 master.zip 抢占 KB 服务的磁盘/CPU。
+    lock_fd = open(MERGE_LOCK_PATH, 'w')
     try:
-        zips = sorted(glob.glob(os.path.join(INCOMING, '*.zip')))
-        changed = False
-        if not zips:
-            print("[INFO] incoming/ 无增量包")
-        for zp in zips:
-            if process_package(zp, master):
-                dest = os.path.join(PROCESSED, os.path.basename(zp))
-                shutil.move(zp, dest)
-                changed = True
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    except Exception as e:
+        print("[WARN] 获取合并锁失败，跳过本次合并: %s" % e)
+        try:
+            lock_fd.close()
+        except Exception:
+            pass
+        return
+    try:
+        ensure_master()
+        master = sqlite3.connect(MASTER_DB)
+        master.execute('PRAGMA journal_mode=WAL')
+        try:
+            zips = sorted(glob.glob(os.path.join(INCOMING, '*.zip')))
+            changed = False
+            if not zips:
+                print("[INFO] incoming/ 无增量包")
+            for zp in zips:
+                if process_package(zp, master):
+                    dest = os.path.join(PROCESSED, os.path.basename(zp))
+                    shutil.move(zp, dest)
+                    changed = True
+        finally:
+            master.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+            master.close()
+        # 性能优化：只有在真正合并了增量包（changed=True）时才重建 master.zip。
+        # 否则每 5 分钟 timer 都会把整个库重新打包一次，知识库变大后纯属浪费 I/O。
+        if changed:
+            rebuild_master_zip()
+            print("[INFO] master.zip 已重建")
+        else:
+            print("[INFO] 无变化，跳过 master.zip 重建")
     finally:
-        master.execute('PRAGMA wal_checkpoint(TRUNCATE)')
-        master.close()
-    # 性能优化：只有在真正合并了增量包（changed=True）时才重建 master.zip。
-    # 否则每 5 分钟 timer 都会把整个库重新打包一次，知识库变大后纯属浪费 I/O。
-    if changed:
-        rebuild_master_zip()
-        print("[INFO] master.zip 已重建")
-    else:
-        print("[INFO] 无变化，跳过 master.zip 重建")
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            lock_fd.close()
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':

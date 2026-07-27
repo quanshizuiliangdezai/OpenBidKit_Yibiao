@@ -102,6 +102,11 @@ def _master_db_conn():
     # 同时让新增的个人库回收站/导出等方法可以安全地使用 row['col'] 访问。
     conn.row_factory = _sqlite3.Row
     conn.execute('PRAGMA busy_timeout = 5000')
+    # 主库开启 WAL：读写互不阻塞，合并写库不会卡住个人库查询（merge.py 也会设置，此处保证首次使用即生效）
+    try:
+        conn.execute('PRAGMA journal_mode=WAL')
+    except Exception:
+        pass
     return conn
 
 
@@ -338,7 +343,9 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     account_name=sync_user, account_type='sync_client',
                     action='sync_push', detail='同步推送: %s (%d bytes)' % (zip_name, len(zip_content)),
                     ip=_client_ip(self))
-                # 实时触发合并（异步子进程，失败不影响响应；无脚本时等 cron 兜底）
+                # 实时触发合并：异步子进程（Popen 立即返回，不阻塞本请求）；
+                # 用 ionice+nice 降低合并的 I/O 与 CPU 优先级，避免同步合并抢占 KB 服务的
+                # 磁盘/CPU，导致其他人使用变慢。合并的并发串行由 merge.py 内部的 flock 保证。
                 try:
                     if os.path.isfile(MERGE_SCRIPT):
                         env = dict(os.environ)
@@ -348,7 +355,13 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                             'YIBIAO_INCOMING': UPLOAD_DIR,
                             'YIBIAO_MASTER_ZIP': MASTER_ZIP,
                         })
-                        subprocess.Popen([sys.executable, MERGE_SCRIPT], env=env,
+                        cmd = [sys.executable, MERGE_SCRIPT]
+                        # 优先降 I/O 优先级（ionice），再降 CPU 优先级（nice）；工具缺失时自动跳过
+                        if shutil.which('ionice'):
+                            cmd = ['ionice', '-c', '2', '-n', '7'] + cmd
+                        if shutil.which('nice'):
+                            cmd = ['nice', '-n', '10'] + cmd
+                        subprocess.Popen(cmd, env=env,
                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except Exception as e:
                     log('merge trigger failed: %s' % e)
