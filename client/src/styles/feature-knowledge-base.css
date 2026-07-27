@@ -329,22 +329,32 @@
 .knowledge-folder-collapse {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
   padding: 0;
-  color: var(--yb-text-secondary);
-  font-size: 16px;
+  color: var(--yb-primary);
+  font-size: 18px;
+  font-weight: 800;
   line-height: 1;
-  background: transparent;
-  border: 0;
-  border-radius: 8px;
+  background: rgba(33, 116, 253, 0.12);
+  border: 1px solid rgba(33, 116, 253, 0.24);
+  border-radius: 10px;
   cursor: pointer;
-  transition: background var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease;
+  box-shadow: 0 1px 2px rgba(33, 116, 253, 0.08);
+  transition: background var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease;
 }
 
 .knowledge-folder-collapse:hover {
-  color: var(--yb-primary);
-  background: rgba(33, 116, 253, 0.1);
+  color: #ffffff;
+  background: var(--yb-primary);
+  border-color: var(--yb-primary);
+  box-shadow: 0 4px 10px rgba(33, 116, 253, 0.24);
+  transform: scale(1.06);
+}
+
+.knowledge-folder-collapse:active {
+  transform: scale(0.98);
 }
 
 .knowledge-toolbar-actions .secondary-action.is-active {
