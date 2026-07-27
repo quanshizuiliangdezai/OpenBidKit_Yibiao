@@ -196,6 +196,115 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             return self.rfile.read(n) if n > 0 else b''
         return self.rfile.read()
 
+    # ★3 流式读取：把请求体分块写入 fobj（64KB/块），全程不整包进内存。
+    # 返回写入的总字节数。支持 Content-Length 与 Transfer-Encoding: chunked 两种模式。
+    def _stream_body_to(self, fobj, chunk_size=65536):
+        te = (self.headers.get('Transfer-Encoding', '') or '').lower()
+        total = 0
+        if te == 'chunked':
+            while True:
+                line = self.rfile.readline().strip()
+                if not line:
+                    line = self.rfile.readline().strip()
+                if not line:
+                    break
+                try:
+                    size = int(line.split(b';')[0], 16)
+                except ValueError:
+                    break
+                if size == 0:
+                    while True:
+                        tail = self.rfile.readline()
+                        if tail in (b'\r\n', b'\n', b''):
+                            break
+                    break
+                remaining = size
+                while remaining > 0:
+                    data = self.rfile.read(min(chunk_size, remaining))
+                    if not data:
+                        break
+                    fobj.write(data)
+                    total += len(data)
+                    remaining -= len(data)
+                self.rfile.read(2)  # 吃掉 chunk 尾部 \r\n
+            return total
+        cl = self.headers.get('Content-Length')
+        try:
+            n = int(cl) if cl else 0
+        except ValueError:
+            n = 0
+        remaining = n
+        while remaining > 0:
+            data = self.rfile.read(min(chunk_size, remaining))
+            if not data:
+                break
+            fobj.write(data)
+            total += len(data)
+            remaining -= len(data)
+        return total
+
+    # ★3 从已落盘的 multipart 临时文件中定位 zip part 的字节范围（用 mmap 查找，
+    # 由操作系统按页调度，不会把整个文件读进进程内存）。
+    # 返回 (zip_name, start, end)；未找到返回 (None, 0, 0)。
+    @staticmethod
+    def _locate_zip_part(src_path, bmark):
+        import mmap
+        with open(src_path, 'rb') as f:
+            try:
+                mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            except ValueError:
+                return (None, 0, 0)  # 空文件
+            try:
+                pos = mm.find(bmark)
+                while pos != -1:
+                    part_start = pos + len(bmark)
+                    # 结束边界 "--boundary--"
+                    if mm[part_start:part_start + 2] == b'--':
+                        break
+                    header_end = mm.find(b'\r\n\r\n', part_start)
+                    if header_end == -1:
+                        break
+                    headers = mm[part_start:header_end]
+                    fn_idx = headers.find(b'filename=')
+                    if fn_idx != -1:
+                        i = fn_idx + 9
+                        if headers[i:i + 1] == b'"':
+                            i += 1
+                        j = headers.find(b'"', i)
+                        if j != -1:
+                            fname = headers[i:j].decode('utf-8', 'replace')
+                            if fname.endswith('.zip'):
+                                content_start = header_end + 4
+                                content_end = mm.find(b'\r\n' + bmark, content_start)
+                                if content_end == -1:
+                                    content_end = len(mm)
+                                return (fname, content_start, content_end)
+                    pos = mm.find(bmark, header_end)
+                return (None, 0, 0)
+            finally:
+                mm.close()
+
+    # ★3 分块发送本地文件（不整文件读内存）；remove_after=True 时发送完删除。
+    def _send_zip_file(self, fpath, remove_after=False, chunk_size=65536):
+        try:
+            size = os.path.getsize(fpath)
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/zip')
+            self.send_header('Content-Length', str(size))
+            self.end_headers()
+            with open(fpath, 'rb') as f:
+                while True:
+                    data = f.read(chunk_size)
+                    if not data:
+                        break
+                    self.wfile.write(data)
+        finally:
+            if remove_after:
+                try:
+                    os.remove(fpath)
+                except OSError:
+                    pass
+
     def _read_chunked(self):
         buf = b''
         while True:
@@ -255,27 +364,14 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 if id_list:
                     tmp_zip = build_incremental_zip(id_list)
                     if tmp_zip and os.path.exists(tmp_zip):
-                        try:
-                            with open(tmp_zip, 'rb') as f:
-                                content = f.read()
-                        finally:
-                            os.remove(tmp_zip)
-                        self.send_response(200)
-                        self.send_header('Content-Type', 'application/zip')
-                        self.send_header('Content-Length', str(len(content)))
-                        self.end_headers()
-                        self.wfile.write(content)
+                        # ★3 分块发送，发送完删除临时 zip
+                        self._send_zip_file(tmp_zip, remove_after=True)
                         return
             if not os.path.exists(MASTER_ZIP):
                 self._send_json(404, {'error': 'master.zip 不存在'})
                 return
-            with open(MASTER_ZIP, 'rb') as f:
-                content = f.read()
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/zip')
-            self.send_header('Content-Length', str(len(content)))
-            self.end_headers()
-            self.wfile.write(content)
+            # ★3 分块发送 master.zip（不整文件读内存）
+            self._send_zip_file(MASTER_ZIP)
         except Exception as e:
             log('SYNC GET error: %s' % e)
             try:
@@ -292,46 +388,52 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(400, {'error': '缺少 boundary'})
                 return
             boundary = ctype.split('boundary=')[1].split(';')[0].strip().strip('"')
-            post_data = self._read_body()
-            parts = post_data.split(b'--' + boundary.encode())
+            bmark = b'--' + boundary.encode()
+            # ★3 流式落盘：请求体先分块写入临时文件（同目录，保证后续 rename 原子），
+            # 再用 mmap 定位 zip part 字节范围，分块拷贝出 zip —— 全程不整包进内存。
+            os.makedirs(UPLOAD_DIR, exist_ok=True)
+            raw_fd, raw_path = tempfile.mkstemp(suffix='.raw', dir=UPLOAD_DIR)
             zip_name = None
-            zip_content = None
-            for part in parts[1:-1]:
-                if b'filename=' in part:
-                    i = part.find(b'filename=') + 9
-                    if part[i:i + 1] == b'"':
-                        i += 1
-                    j = part.find(b'"', i)
-                    if j == -1:
-                        continue
-                    fname = part[i:j].decode('utf-8', 'replace')
-                    if fname.endswith('.zip'):
-                        s = part.find(b'\r\n\r\n') + 4
-                        content = part[s:]
-                        if content.endswith(b'\r\n'):
-                            content = content[:-2]
-                        zip_name = fname
-                        zip_content = content
-                        break
-            if zip_name and zip_content:
-                # 路径穿越防护：只取文件名部分，剔除目录分隔符；强制 .zip 后缀
-                zip_name = os.path.basename(zip_name.replace('\\', '/'))
-                if not zip_name or not zip_name.endswith('.zip') or zip_name.startswith('.'):
-                    self._send_json(400, {'error': '非法文件名'})
-                    return
-                os.makedirs(UPLOAD_DIR, exist_ok=True)
-                dest = os.path.join(UPLOAD_DIR, zip_name)
-                # 双保险：确认落盘路径仍在 UPLOAD_DIR 内
-                if os.path.realpath(os.path.dirname(dest)) != os.path.realpath(UPLOAD_DIR):
-                    self._send_json(400, {'error': '非法文件路径'})
-                    return
-                with open(dest, 'wb') as f:
-                    f.write(zip_content)
-                log('upload received: %s (%d bytes)' % (zip_name, len(zip_content)))
-                # 尝试从 zip manifest 提取用户名用于审计
+            zip_size = 0
+            try:
+                with os.fdopen(raw_fd, 'wb') as rawf:
+                    total = self._stream_body_to(rawf)
+                log('upload body streamed to disk: %d bytes' % total)
+                zip_name, z_start, z_end = self._locate_zip_part(raw_path, bmark)
+                if zip_name and z_end > z_start:
+                    # 路径穿越防护：只取文件名部分，剔除目录分隔符；强制 .zip 后缀
+                    zip_name = os.path.basename(zip_name.replace('\\', '/'))
+                    if not zip_name or not zip_name.endswith('.zip') or zip_name.startswith('.'):
+                        self._send_json(400, {'error': '非法文件名'})
+                        return
+                    dest = os.path.join(UPLOAD_DIR, zip_name)
+                    # 双保险：确认落盘路径仍在 UPLOAD_DIR 内
+                    if os.path.realpath(os.path.dirname(dest)) != os.path.realpath(UPLOAD_DIR):
+                        self._send_json(400, {'error': '非法文件路径'})
+                        return
+                    # 分块拷贝 zip 段到最终文件（64KB/块）
+                    with open(raw_path, 'rb') as src, open(dest + '.part', 'wb') as out:
+                        src.seek(z_start)
+                        remaining = z_end - z_start
+                        while remaining > 0:
+                            data = src.read(min(65536, remaining))
+                            if not data:
+                                break
+                            out.write(data)
+                            remaining -= len(data)
+                    os.replace(dest + '.part', dest)
+                    zip_size = os.path.getsize(dest)
+            finally:
+                try:
+                    os.remove(raw_path)
+                except OSError:
+                    pass
+            if zip_name and zip_size > 0:
+                log('upload received: %s (%d bytes)' % (zip_name, zip_size))
+                # 尝试从 zip manifest 提取用户名用于审计（直接读盘上 zip，不再经内存 BytesIO）
                 sync_user = 'unknown'
                 try:
-                    with zipfile.ZipFile(io.BytesIO(zip_content)) as zf:
+                    with zipfile.ZipFile(dest) as zf:
                         for n in zf.namelist():
                             if 'manifest' in n.lower():
                                 m = json.loads(zf.read(n))
@@ -341,7 +443,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     pass
                 audit_event(
                     account_name=sync_user, account_type='sync_client',
-                    action='sync_push', detail='同步推送: %s (%d bytes)' % (zip_name, len(zip_content)),
+                    action='sync_push', detail='同步推送: %s (%d bytes)' % (zip_name, zip_size),
                     ip=_client_ip(self))
                 # 实时触发合并：异步子进程（Popen 立即返回，不阻塞本请求）；
                 # 用 ionice+nice 降低合并的 I/O 与 CPU 优先级，避免同步合并抢占 KB 服务的
@@ -365,7 +467,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except Exception as e:
                     log('merge trigger failed: %s' % e)
-                self._send_json(200, {'ok': True, 'received': zip_name, 'size': len(zip_content)})
+                self._send_json(200, {'ok': True, 'received': zip_name, 'size': zip_size})
             else:
                 self._send_json(400, {'error': '未找到 zip 文件'})
         except Exception as e:
