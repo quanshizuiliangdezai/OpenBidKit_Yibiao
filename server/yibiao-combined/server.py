@@ -742,7 +742,8 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 detail='个人库→团队库: 成功 %d, 失败 %d' % (len(created), len(failed)),
                 ip=_client_ip(self))
             return self._send(200, {'success': True, 'created': created, 'failed': failed,
-                                    'auto_folder': auto_folder, 'folder_name': folder_name})
+                                    'auto_folder': auto_folder, 'folder_name': folder_name,
+                                    'folder_id': folder_id})
 
         if path == '/api/import/team':
             # 团队库 → 个人库（需登录会话）
@@ -760,16 +761,18 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 collected = []
                 self._collect_team_folder_docs(tfid, collected)
                 for did in collected:
-                    ok, msg = self._sync_team_to_master(did, employee)
-                    synced.append({'id': did, 'ok': bool(ok), 'msg': msg})
+                ok, personal_id, personal_folder_id, msg = self._sync_team_to_master(did, employee)
+                synced.append({'id': did, 'ok': bool(ok), 'personal_id': personal_id,
+                               'folder_id': personal_folder_id, 'msg': msg})
             for item in data['documents']:
                 doc_id = item.get('id') or item.get('document_id')
                 try:
                     did = int(doc_id)
                 except (ValueError, TypeError):
                     continue
-                ok, msg = self._sync_team_to_master(did, employee)
-                synced.append({'id': did, 'ok': bool(ok), 'msg': msg})
+                ok, personal_id, personal_folder_id, msg = self._sync_team_to_master(did, employee)
+                synced.append({'id': did, 'ok': bool(ok), 'personal_id': personal_id,
+                               'folder_id': personal_folder_id, 'msg': msg})
             audit_event(
                 account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
                 role=employee.get('role'), action='import', target_type='document',
@@ -1546,20 +1549,20 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         """团队库文档 → 当前用户的个人库（写入 master.sqlite '团队库导入' 文件夹）。"""
         team_doc = kb_db.get_document(doc_id)
         if not team_doc:
-            return False, '文档不存在'
+            return False, None, None, '文档不存在'
         owner_id = employee['id'] if employee else None
         owner_name = (employee.get('display_name') or employee.get('username')) if employee else 'system'
         with _MASTER_LOCK:
             conn = _master_db_conn()
             if conn is None:
-                return False, '个人库尚未初始化（先在桌面端同步一次）'
+                return False, None, None, '个人库尚未初始化（先在桌面端同步一次）'
             try:
                 self._ensure_owner_cols(conn)
                 now = datetime.datetime.now().isoformat()
                 new_doc_id = 'team-%s-%s' % (team_doc['id'], owner_id)
                 if conn.execute("SELECT 1 FROM knowledge_documents WHERE document_id=?",
                                 (new_doc_id,)).fetchone():
-                    return True, '已存在，跳过'
+                    return True, new_doc_id, folder_id, '已存在，跳过'
                 folder_id = 'team-import-%s' % owner_id
                 conn.execute(
                     "INSERT OR IGNORE INTO knowledge_folders "
@@ -1592,9 +1595,9 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 os.makedirs(dst_dir, exist_ok=True)
                 if os.path.isfile(src):
                     shutil.copy2(src, os.path.join(dst_dir, fname))
-                return True, '同步成功'
+                    return True, new_doc_id, folder_id, '同步成功'
             except Exception as e:
-                return False, str(e)
+                return False, None, None, str(e)
             finally:
                 conn.close()
 
