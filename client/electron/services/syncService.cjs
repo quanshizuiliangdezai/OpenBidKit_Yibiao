@@ -44,11 +44,12 @@ const DEFAULT_HTTP_CONFIG = {
   authToken: 'yibiao-sync-2026',
 };
 
-function loadLocalSyncConfig() {
-  // 1) 开发/CI 构建时：源码树内的 sync-config.local.json
+function loadLocalSyncConfig(app) {
+  // 1) 开发/CI 构建时：源码树内的 sync-config.local.json（无需 app）
   const devPath = path.join(__dirname, '..', 'sync-config.local.json');
   // 2) 运行时安装包：用户数据目录下的 yibiao-sync-config.json（便于发版后不改安装包也能换 token）
-  const configDir = paths.getConfigFilePath ? path.dirname(paths.getConfigFilePath()) : null;
+  //    仅在拿到 app 实例时才解析用户目录（paths.getConfigFilePath 需要 app.getPath('userData')）
+  const configDir = app && paths.getConfigFilePath ? path.dirname(paths.getConfigFilePath(app)) : null;
   const runtimePath = configDir ? path.join(configDir, 'yibiao-sync-config.json') : null;
   for (const p of [devPath, runtimePath]) {
     if (p && fs.existsSync(p)) {
@@ -62,8 +63,8 @@ function loadLocalSyncConfig() {
   return null;
 }
 
-function loadHttpConfig() {
-  const local = loadLocalSyncConfig() || {};
+function loadHttpConfig(app) {
+  const local = loadLocalSyncConfig(app) || {};
   return {
     baseUrl: process.env.YIBIAO_SYNC_BASE_URL || local.baseUrl || DEFAULT_HTTP_CONFIG.baseUrl,
     uploadPath: process.env.YIBIAO_SYNC_UPLOAD_PATH || local.uploadPath || DEFAULT_HTTP_CONFIG.uploadPath,
@@ -72,12 +73,10 @@ function loadHttpConfig() {
     authToken: process.env.YIBIAO_SYNC_AUTH_TOKEN || local.authToken || DEFAULT_HTTP_CONFIG.authToken,
   };
 }
-const HTTP = loadHttpConfig();
-if (!HTTP.authToken) {
-  console.warn('[sync] 团队库同步令牌为空，无法同步：请设置 YIBIAO_SYNC_AUTH_TOKEN 环境变量，或创建 client/electron/sync-config.local.json');
-} else if (HTTP.authToken === DEFAULT_HTTP_CONFIG.authToken) {
-  console.warn('[sync] 未显式配置团队库同步令牌，正在使用内置默认令牌（yibiao-sync-2026）。如需更换请在环境变量或 sync-config.local.json 中配置。');
-}
+// HTTP 配置不在模块顶层初始化：paths.getConfigFilePath 需要 app 实例，
+// 必须在 createSyncService({ app }) 拿到 app 后才调用 loadHttpConfig(app)。
+// 这里给一个安全的默认值，避免极端情况下被提前访问而崩溃。
+let HTTP = DEFAULT_HTTP_CONFIG;
 
 // knowledge_* 表中按 document_id 关联的子表
 const DOC_CHILD_TABLES = [
@@ -297,6 +296,14 @@ function getConfigFilePath(app) {
 function createSyncService({ app, db, configStore }) {
   if (!db) {
     throw new Error('syncService 需要已打开的 workspace 数据库实例');
+  }
+
+  // 拿到 app 后再初始化 HTTP 配置（用户目录令牌路径依赖 app.getPath('userData')）
+  HTTP = loadHttpConfig(app);
+  if (!HTTP.authToken) {
+    console.warn('[sync] 团队库同步令牌为空，无法同步：请设置 YIBIAO_SYNC_AUTH_TOKEN 环境变量，或创建 client/electron/sync-config.local.json');
+  } else if (HTTP.authToken === DEFAULT_HTTP_CONFIG.authToken) {
+    console.warn('[sync] 未显式配置团队库同步令牌，正在使用内置默认令牌（yibiao-sync-2026）。如需更换请在环境变量或 sync-config.local.json 中配置。');
   }
 
   // 上传到团队库（★4 增量）：只打包服务器没有的本机 success 文档 → 流式 HTTP 上传
