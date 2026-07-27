@@ -3,8 +3,18 @@
 本目录存档 **59.49.48.147** 上各后端服务的部署配置，便于灾难恢复与新人接手。
 所有敏感凭证均已去敏（占位符 `CHANGE_ME_*` / `__填写...__`），**绝不入库**。
 
-> ⚠️ 本分支 `deploy` 仅存放部署配置与文档，**不触发客户端 CI 构建**（CI 只监听 `main` 分支），
-> 也不会被上游同步（`sync-upstream.yml`）影响。服务源码仍在仓库 `server/` 与相应子模块中。
+## 一键部署（仅服务器端）
+
+`deploy-server.sh` 只部署**服务器后端**（yibiao-combined 服务 + 同步合并脚本 merge.py），不碰任何前端/桌面端代码。
+
+```bash
+cd deploy
+export KB_DEPLOY_SSH_PASSWORD='服务器 root 密码'
+bash deploy-server.sh
+```
+
+脚本会：① 备份并上传 `server/yibiao-combined/{kb_db.py,server.py,kb_audit.html}` → `/toubiao/yibiao-combined`；
+② 部署 `sync-server/merge.py` → `/toubiao/yibiao-sync/merge.py`（跨设备同步用）；③ 重启 `yibiao-combined` 并做健康检查。
 
 ## 服务器与端口
 
@@ -30,11 +40,11 @@
 ## 部署方式
 
 ### 1. 知识库服务（yibiao-combined）
-源码 = 仓库 `server/yibiao-combined/`。部署脚本：
+**推荐使用一键部署脚本** `deploy-server.sh`（见上方「一键部署」）。
+若需单独部署该服务，源码 = 仓库 `server/yibiao-combined/`，脚本：
 ```bash
 cd deploy
-cp env.example .env          # 填真实 SSH 密码与服务端环境变量
-# 加载 .env 后运行：
+export KB_DEPLOY_SSH_PASSWORD='服务器 root 密码'
 python3 scripts/deploy_kb_server.py
 ```
 脚本会：备份 → 上传 `kb_db.py`/`server.py`/`kb_audit.html` → 清缓存 → 语法校验 → 重启 `yibiao-combined` → 健康检查。
@@ -51,5 +61,5 @@ python3 scripts/deploy_kb_server.py
 ## 去敏说明
 
 - `systemd/yibiao-combined.service` 中 `KB_ADMIN_PASSWORD`、`YIBIAO_SYNC_TOKEN` 为占位符。
-- 部署脚本 `scripts/deploy_kb_server.py` 不含任何密码，全部走环境变量。
+- 部署脚本 `scripts/deploy_kb_server.py`、`deploy-server.sh` 不含任何密码，全部走环境变量。
 - 切勿把 `.env`、含真实值的 `systemd` 文件提交到本仓库。
