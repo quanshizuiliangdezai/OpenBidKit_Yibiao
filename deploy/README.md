@@ -5,7 +5,30 @@
 
 ## 一键部署（仅服务器端）
 
-`deploy-server.sh` 只部署**服务器后端**（yibiao-combined 服务 + 同步合并脚本 merge.py），不碰任何前端/桌面端代码。
+### 方案 A：直接在服务器上执行（无需本地开发机 / 无需 SSH 密码）
+
+适合服务器上紧急修复后快速上线，或没有本地 paramiko 环境时使用。
+
+```bash
+# 方式 1：curl 下载脚本后执行
+cd /opt
+curl -fsSL -o one-click-server.sh \
+  https://raw.githubusercontent.com/quanshizuiliangdezai/OpenBidKit_Yibiao/deploy/deploy/one-click-server.sh
+bash one-click-server.sh
+
+# 方式 2：先克隆 deploy 分支再执行
+sudo -i
+git clone -b deploy --depth 1 https://github.com/quanshizuiliangdezai/OpenBidKit_Yibiao.git /opt/yibiao-deploy
+bash /opt/yibiao-deploy/deploy/one-click-server.sh
+```
+
+脚本会：① 拉取/更新 `deploy` 分支到 `/opt/yibiao-deploy`；② 备份当前运行文件；
+③ 部署 `server.py`/`kb_db.py`/`kb_audit.html` → `/toubiao/yibiao-combined`；
+④ 部署 `sync-server/merge.py` → `/toubiao/yibiao-sync/merge.py`（权限 755）；⑤ 语法检查并重启 `yibiao-combined`；⑥ 健康检查。
+
+### 方案 B：从本地开发机推送到服务器
+
+`deploy-server.sh` 从 Windows/Linux/macOS 本地通过 SSH 上传并部署，不碰任何前端/桌面端代码。
 
 ```bash
 cd deploy
@@ -39,15 +62,17 @@ bash deploy-server.sh
 
 ## 部署方式
 
-### 1. 知识库服务（yibiao-combined）
-**推荐使用一键部署脚本** `deploy-server.sh`（见上方「一键部署」）。
-若需单独部署该服务，源码 = 仓库 `server/yibiao-combined/`，脚本：
+### 1. 知识库服务（yibiao-combined）+ 同步合并脚本
+**推荐使用一键部署脚本**（见上方「一键部署」）。
+若需单独部署该服务，源码 = 仓库 `server/yibiao-combined/` + `sync-server/merge.py`，脚本：
 ```bash
 cd deploy
 export KB_DEPLOY_SSH_PASSWORD='服务器 root 密码'
 python3 scripts/deploy_kb_server.py
 ```
-脚本会：备份 → 上传 `kb_db.py`/`server.py`/`kb_audit.html` → 清缓存 → 语法校验 → 重启 `yibiao-combined` → 健康检查。
+脚本会：备份 → 上传 `kb_db.py`/`server.py`/`kb_audit.html` → `/toubiao/yibiao-combined`；
+同步部署 `sync-server/merge.py` → `/toubiao/yibiao-sync/merge.py`（权限 755）；
+清缓存 → 语法校验 → 重启 `yibiao-combined` → 健康检查。
 
 ### 2. 其他服务
 - `weixing-15001`、`bidchecker`、`sub2api` 的源码不在本仓库（分别在 `/project/02-weixingxitong`、`/home/bhkj/03-BidChecker-Pro`、`/opt/sub2api`），

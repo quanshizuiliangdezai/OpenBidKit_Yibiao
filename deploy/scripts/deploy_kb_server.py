@@ -29,6 +29,14 @@ LOCAL_BASE = os.environ.get(
 REMOTE_DIR = os.environ.get('KB_DEPLOY_REMOTE_DIR', '/toubiao/yibiao-combined')
 FILES = ['kb_db.py', 'server.py', 'kb_audit.html']
 
+# 跨设备同步合并脚本（merge.py）
+MERGE_LOCAL = os.environ.get(
+    'KB_DEPLOY_MERGE_LOCAL',
+    r'C:\Users\13370\Desktop\Workspace\OpenBidKit_Yibiao\sync-server\merge.py',
+)
+MERGE_REMOTE_DIR = os.environ.get('KB_DEPLOY_MERGE_REMOTE_DIR', '/toubiao/yibiao-sync')
+MERGE_REMOTE_PATH = os.environ.get('KB_DEPLOY_MERGE_REMOTE_PATH', f'{MERGE_REMOTE_DIR}/merge.py')
+
 
 def run(ssh, cmd, timeout=60):
     stdin, stdout, stderr = ssh.exec_command(cmd, timeout=timeout)
@@ -132,6 +140,23 @@ for f in ("server.py", "kb_db.py"):
 
         rc, out, _ = run(ssh, 'curl -s -m 5 http://127.0.0.1:15004/api/health', timeout=10)
         print(f'[health] {out.strip()}')
+
+        # 部署跨设备同步合并脚本 merge.py
+        merge_local = pathlib.Path(MERGE_LOCAL)
+        if merge_local.exists():
+            run(ssh, f'mkdir -p {MERGE_REMOTE_DIR}')
+            remote_merge = MERGE_REMOTE_PATH
+            rc, out, _ = run(ssh, f'test -f {remote_merge} && echo OK || echo MISSING')
+            if 'OK' in out:
+                run(ssh, f'cp {remote_merge} {backup_dir}/merge.py.bak')
+                print(f'[backup] {remote_merge} -> {backup_dir}/merge.py.bak')
+            print(f'[upload] {merge_local} -> {remote_merge} ({merge_local.stat().st_size} bytes)')
+            sftp.put(str(merge_local), remote_merge)
+            sftp.chmod(remote_merge, 0o755)
+            print(f'[merge] {remote_merge} deployed')
+        else:
+            print(f'[merge] skip: {merge_local} not found')
+
         print(f'[{datetime.datetime.now():%H:%M:%S}] deploy done.')
     finally:
         ssh.close()

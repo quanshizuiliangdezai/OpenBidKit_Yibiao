@@ -25,7 +25,7 @@
 #
 # 本脚本会依次部署：
 #   ① yibiao-combined 服务（server.py + kb_db.py + kb_audit.html）→ /toubiao/yibiao-combined
-#   ② 同步合并脚本 merge.py → /toubiao/yibiao-sync/merge.py（跨设备同步用）
+#   ② 同步合并脚本 merge.py → /toubiao/yibiao-sync/merge.py（跨设备同步用，已并入 deploy_kb_server.py）
 #   ③ 重启 yibiao-combined 并做健康检查
 #
 # 注意：所有密码从环境变量读取，绝不写死在脚本里。
@@ -82,35 +82,12 @@ detect_python() {
 PY="$(detect_python)" || exit 1
 echo "==> 使用 python: ${PY}"
 
-# 3. 部署 yibiao-combined 服务（复用 deploy_kb_server.py）
-echo "==> [1/3] 部署 yibiao-combined 服务（端口 15004）"
+# 3. 部署 yibiao-combined 服务 + merge.py（复用 deploy_kb_server.py）
+echo "==> [1/2] 部署 yibiao-combined 服务与 merge.py（端口 15004）"
 "${PY}" "${SCRIPT_DIR_PY}/scripts/deploy_kb_server.py"
 
-# 4. 部署同步合并脚本 merge.py
-echo "==> [2/3] 部署同步合并脚本 merge.py"
-"${PY}" - <<PYEOF
-import os, sys, paramiko
-sys.path.insert(0, "${SCRIPT_DIR_PY}/scripts")
-import deploy_kb_server as d
-ssh = paramiko.SSHClient()
-ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-ssh.connect(d.HOST, port=d.PORT, username=d.USER, password=d.PASSWORD, timeout=15,
-            allow_agent=False, look_for_keys=False,
-            disabled_algorithms={'kex': ['curve25519-sha256','curve25519-sha256@libssh.org','curve448-sha512','ecdh-sha2-nistp521','ecdh-sha2-nistp384','diffie-hellman-group-exchange-sha256','diffie-hellman-group-exchange-sha1'],
-                                 'ciphers': ['aes256-gcm@openssh.com','chacha20-poly1305@openssh.com','aes256-ctr','aes192-ctr','aes128-ctr']})
-sftp = ssh.open_sftp()
-ssh.exec_command('mkdir -p /toubiao/yibiao-sync')
-local_merge = os.path.join("${REPO_ROOT_PY}", "sync-server", "merge.py")
-sftp.put(local_merge, "/toubiao/yibiao-sync/merge.py")
-sftp.chmod("/toubiao/yibiao-sync/merge.py", 0o755)
-sftp.close()
-ssh.exec_command('systemctl restart yibiao-combined')
-print("merge.py 已部署到 /toubiao/yibiao-sync/merge.py 并重启服务")
-ssh.close()
-PYEOF
-
-# 5. 健康检查
-echo "==> [3/3] 健康检查"
+# 4. 健康检查
+echo "==> [2/2] 健康检查"
 sleep 3
 "${PY}" - <<PYEOF
 import os, sys, paramiko
