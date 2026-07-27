@@ -368,6 +368,25 @@ function createKnowledgeBaseStore({ app, db }) {
     return folderFromRow(db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(folder.id));
   }
 
+  // 用于服务器文档本地分析：确保目标 folder_id 在本地存在（不存在则自动创建）。
+  // 返回实际使用的 folder_id（空值会规范化为 'shared'）。
+  function ensureFolder(folderId, name) {
+    const effectiveFolderId = folderId || 'shared';
+    const exists = db.prepare('SELECT 1 FROM knowledge_folders WHERE folder_id = ?').get(effectiveFolderId);
+    if (!exists) {
+      const timestamp = now();
+      const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS value FROM knowledge_folders').get()?.value ?? -1;
+      insertOrUpdateFolder({
+        id: effectiveFolderId,
+        name: safeName(name || '导入文档'),
+        sort_order: Number(maxOrder) + 1,
+        created_at: timestamp,
+        updated_at: timestamp,
+      });
+    }
+    return effectiveFolderId;
+  }
+
   function renameFolder(folderId, name) {
     const folder = db.prepare('SELECT * FROM knowledge_folders WHERE folder_id = ?').get(folderId);
     if (!folder) throw new Error('知识库文件夹不存在');
@@ -1393,6 +1412,7 @@ function createKnowledgeBaseStore({ app, db }) {
   return {
     list,
     createFolder,
+    ensureFolder,
     reorderFolders,
     renameFolder,
     deleteFolder,

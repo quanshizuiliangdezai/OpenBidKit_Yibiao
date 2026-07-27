@@ -2305,11 +2305,13 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       if (!supportedExtensions.has(ext)) {
         throw new Error(`不支持的文件类型：${ext}`);
       }
-      const documentDir = path.join('folders', folderId || 'shared', 'documents', documentId).replace(/\\/g, '/');
+      // 服务器文档的 folder_id 在本地分析库可能不存在，先确保 folder 记录存在，避免 FOREIGN KEY 约束失败。
+      const effectiveFolderId = knowledgeBaseStore.ensureFolder(folderId, '导入文档');
+      const documentDir = path.join('folders', effectiveFolderId, 'documents', documentId).replace(/\\/g, '/');
       const sourceName = `source${ext}`;
       const document = {
         id: documentId,
-        folder_id: folderId || 'shared',
+        folder_id: effectiveFolderId,
         file_name: fileName || path.basename(filePath),
         document_dir: documentDir,
         source_path: path.join(documentDir, sourceName).replace(/\\/g, '/'),
