@@ -4,7 +4,6 @@ import { trackPageView } from '../../../shared/analytics/analytics';
 import { isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeDocument, KnowledgeDocumentStatus, KnowledgeFolder, KnowledgeItem } from '../types';
 import type { KbAuthStatus, KbTeamDocument, KbTeamFolder, KbTrashFolder, KbTrashDocument } from '../../../shared/types/ipc';
-import KbUserBar from '../components/KbUserBar';
 import { useAuth } from '../../../shared/auth/AuthContext';
 
 declare global {
@@ -728,13 +727,6 @@ function KnowledgeBasePage() {
         showToast(error instanceof Error ? error.message : '读取分析结果失败', 'error');
       }
     }
-  };
-
-  const handleLogout = async () => {
-    await auth.logout();
-    setAuthStatus(null);
-    setIndex(emptyIndex);
-    setViewer(null);
   };
 
   const createFolder = async () => {
@@ -1538,7 +1530,6 @@ function KnowledgeBasePage() {
           <button type="button" className={`kb-tab ${kbTab === 'personal' ? 'is-active' : ''}`} onClick={() => setKbTab('personal')}>个人知识库</button>
         </div>
         <div className="knowledge-toolbar-actions">
-          {authStatus && <KbUserBar status={authStatus} onLogout={() => void handleLogout()} />}
           {kbTab === 'team' && (
             <>
               <button type="button" className="secondary-action" onClick={() => { setNewFolderParentId(null); setCreateAsSubfolder(false); setShowCreateFolder((value) => !value); }} disabled={listLoading}>新建文件夹</button>
