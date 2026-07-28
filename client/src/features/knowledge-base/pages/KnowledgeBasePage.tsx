@@ -1094,20 +1094,30 @@ function KnowledgeBasePage() {
       if (!result?.success) {
         throw new Error(result?.error || '删除文件夹失败');
       }
-      // 团队库需清除该文件夹下文档的本地分析数据
+      // 团队库需清除该文件夹下文档的本地分析数据（包括子文件夹中的文档）
       if (kbTab === 'team') {
-        const folderDocs = index.documents.filter((doc) => doc.folder_id === folderId);
-        for (const doc of folderDocs) {
-          await window.yibiao?.knowledgeBase.deleteLocalAnalysis(doc.id);
+        const collectSubtreeIds = (rootId: string): string[] => {
+          const ids = [rootId];
+          for (const f of index.folders) {
+            if (f.parent_id && ids.includes(f.parent_id)) {
+              ids.push(f.id);
+            }
+          }
+          return ids;
+        };
+        const subtreeIds = collectSubtreeIds(folderId);
+        for (const doc of index.documents) {
+          if (subtreeIds.includes(doc.folder_id)) {
+            await window.yibiao?.knowledgeBase.deleteLocalAnalysis(doc.id);
+          }
         }
       }
-      const folders = index.folders.filter((item) => item.id !== folderId);
-      const documents = index.documents.filter((document) => document.folder_id !== folderId);
-      setIndex({ folders, documents });
-      if (activeFolderId === folderId) {
-        setActiveFolderId(folders[0]?.id || '');
+      // 服务端会级联软删子文件夹，前端必须重新加载树，否则子文件夹会残留为“删不掉”的幽灵项
+      if (kbTab === 'team') {
+        await loadTeamTree();
+      } else {
+        await loadPersonalTree();
       }
-      setViewer((prev) => (prev?.document.folder_id === folderId ? null : prev));
       showToast('文件夹已删除', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '删除文件夹失败', 'error');
