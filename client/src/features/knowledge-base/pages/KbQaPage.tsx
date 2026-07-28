@@ -107,7 +107,6 @@ function KbQaPage() {
             },
             { role: 'user', content: question },
           ],
-          temperature: 0.7,
           logTitle: '知识库问答(闲聊回退)',
         });
         setMessages((prev) => [
@@ -128,7 +127,6 @@ function KbQaPage() {
       const prompt = buildPrompt(question, docs);
       const answer = await aiClient.chat({
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.2,
         logTitle: '知识库问答',
       });
 

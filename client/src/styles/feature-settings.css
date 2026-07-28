@@ -86,6 +86,15 @@
   border-top: 1px solid var(--yb-border-soft);
 }
 
+fieldset.settings-list {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+}
+
 .settings-row {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) minmax(320px, 420px);
@@ -149,6 +158,48 @@
 
 .settings-row select {
   padding-right: 42px;
+}
+
+.settings-temperature-control {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 52px;
+  align-items: center;
+  gap: 16px;
+}
+
+.settings-row .settings-temperature-slider {
+  min-height: 24px;
+  padding: 0;
+  accent-color: var(--yb-primary);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.settings-row .settings-temperature-slider:focus {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.settings-row .settings-temperature-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.settings-temperature-control output {
+  color: var(--yb-primary);
+  font-size: 16px;
+  font-weight: 700;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-temperature-control.is-disabled output {
+  color: var(--yb-text-soft);
+  opacity: 0.7;
 }
 
 .font-picker-input {
@@ -351,6 +402,10 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 10px;
+}
+
+.settings-control-with-action.is-single-action {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .settings-action-cell {
