@@ -907,12 +907,53 @@ function KnowledgeBasePage() {
       const created = result.data?.created?.length || 0;
       const failed = result.data?.failed?.length || 0;
       const autoName = result.data?.auto_folder ? result.data?.folder_name : null;
+      const targetFolderId = result.data?.folder_id ? String(result.data.folder_id) : '';
       const tail = failed ? `，${failed} 个失败` : '';
       showToast(`已同步 ${created} 个文档到团队${autoName ? `（自动创建文件夹「${autoName}」）` : ''}${tail}`, 'success');
       setSelectedDocumentIds(new Set());
       setSelectedFolderIds(new Set());
       setShowSyncToTeam(false);
-      if (kbTab === 'team') await loadTeamTree();
+      // 自动切到团队库并选中目标文件夹，让用户立即看到同步结果
+      setKbTab('team');
+      await loadTeamTree();
+      if (targetFolderId) setActiveFolderId(targetFolderId);
+      await loadTeamTree();
+      // 为已同步到团队的文档启动本地分析（与团队库上传、团队→个人同步保持一致）
+      const analyzeErrors: string[] = [];
+      if (targetFolderId) {
+        for (const item of result.data?.created || []) {
+          if (!item.remote_id || !item.file_name) {
+            analyzeErrors.push(`文档「${item.file_name || item.document_id}」缺少同步信息，跳过`);
+            continue;
+          }
+          try {
+            const downloadResult = await window.yibiao?.kbTeam.downloadDocument(
+              String(item.remote_id),
+              item.file_name,
+            );
+            if (downloadResult?.success && downloadResult.data?.localPath) {
+              await window.yibiao?.knowledgeBase.analyzeExternalFile(
+                String(item.remote_id),
+                downloadResult.data.localPath,
+                item.file_name,
+                targetFolderId,
+              );
+            } else {
+              analyzeErrors.push(`文档「${item.file_name}」下载失败，无法分析`);
+            }
+          } catch (analyzeError) {
+            analyzeErrors.push(
+              `文档「${item.file_name}」启动分析失败：${analyzeError instanceof Error ? analyzeError.message : String(analyzeError)}`,
+            );
+          }
+        }
+      }
+      // 分析是异步过程，稍后刷新两次以显示分析进度与结果
+      window.setTimeout(() => { void loadTeamTree(); }, 4000);
+      window.setTimeout(() => { void loadTeamTree(); }, 12000);
+      if (analyzeErrors.length) {
+        showToast(`已同步 ${created} 个文档，但 ${analyzeErrors.length} 个未能自动分析：${analyzeErrors[0]}`, 'error');
+      }
     } catch (error) {
       showToast(error instanceof Error ? error.message : '同步到团队失败', 'error');
     } finally {
