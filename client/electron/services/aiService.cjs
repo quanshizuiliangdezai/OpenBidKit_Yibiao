@@ -1981,7 +1981,18 @@ function createAiService({ app, configStore }) {
         }
         return { success: true, message: `测试成功：向量维度 ${dim}` };
       } catch (error) {
-        return { success: false, message: error.message || 'Embedding 模型测试失败' };
+        let message = error.message || 'Embedding 模型测试失败';
+        const lower = String(message).toLowerCase();
+        // 404 / NOT_FOUND / model_not_found 通常表示：① 填的是聊天模型而非 Embedding 模型；② sub2api 未配置对应的 Embedding 上游账户。
+        if (
+          lower.includes('not_found') ||
+          lower.includes('model_not_found') ||
+          lower.includes('is not supported') ||
+          lower.includes('404')
+        ) {
+          message = '当前模型不支持 Embedding，或 sub2api 未配置可用的 Embedding 模型。知识库问答将自动回退到关键词检索。';
+        }
+        return { success: false, message };
       }
     },
 
