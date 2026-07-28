@@ -431,8 +431,10 @@ def audit_log(action, target_type=None, target_id=None, detail=None,
 ALLOWED_STATUS = ('pending', 'approved', 'rejected', 'disabled')
 
 
-def reset_password(user_id, new_password):
-    """管理员重置某用户密码。成功后清掉该用户旧会话，强制重新登录。"""
+def reset_password(user_id, new_password, keep_token=None):
+    """管理员重置某用户密码。成功后清掉该用户旧会话，强制重新登录。
+    若传入 keep_token 且属于该用户，则保留该会话（用于管理员重置自己密码时不踢掉自己）。
+    """
     new_password = (new_password or '').strip()
     if len(new_password) < 6:
         return False, '密码至少 6 位'
@@ -449,7 +451,12 @@ def reset_password(user_id, new_password):
             conn.execute(
                 "UPDATE employees SET password_hash=?, password_salt=? WHERE id=?",
                 (h, salt, user_id))
-            conn.execute("DELETE FROM sessions WHERE employee_id=?", (user_id,))
+            if keep_token:
+                conn.execute(
+                    "DELETE FROM sessions WHERE employee_id=? AND token != ?",
+                    (user_id, keep_token))
+            else:
+                conn.execute("DELETE FROM sessions WHERE employee_id=?", (user_id,))
             conn.commit()
             return True, None
         finally:

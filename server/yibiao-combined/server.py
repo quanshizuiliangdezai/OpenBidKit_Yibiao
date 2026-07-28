@@ -740,7 +740,13 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             admin = self._is_admin()
             if not admin:
                 return self._send(403, {'error': '需要管理员权限'})
-            ok, err = kb_db.reset_password(data.get('user_id'), data.get('new_password'))
+            # 管理员重置自己密码时保留当前会话，避免后续操作被误判为未登录
+            keep_token = None
+            if str(data.get('user_id')) == str(admin['id']):
+                auth = self.headers.get('Authorization', '')
+                if auth.startswith('Bearer '):
+                    keep_token = auth[7:].strip()
+            ok, err = kb_db.reset_password(data.get('user_id'), data.get('new_password'), keep_token)
             if not ok:
                 return self._send(400, {'error': err})
             audit_event(
