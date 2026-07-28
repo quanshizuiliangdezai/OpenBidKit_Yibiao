@@ -26,7 +26,8 @@
 # 本脚本会依次部署：
 #   ① yibiao-combined 服务（server.py + kb_db.py + kb_audit.html）→ /toubiao/yibiao-combined
 #   ② 同步合并脚本 merge.py → /toubiao/yibiao-sync/merge.py（跨设备同步用，已并入 deploy_kb_server.py）
-#   ③ 重启 yibiao-combined 并做健康检查
+#   ③ sub2api-image-proxy（proxy.py）→ /opt/sub2api-image-proxy/proxy.py（Agnes 生图改名代理）
+#   ④ 重启相关服务并做健康检查
 #
 # 注意：所有密码从环境变量读取，绝不写死在脚本里。
 # =============================================================================
@@ -83,11 +84,15 @@ PY="$(detect_python)" || exit 1
 echo "==> 使用 python: ${PY}"
 
 # 3. 部署 yibiao-combined 服务 + merge.py（复用 deploy_kb_server.py）
-echo "==> [1/2] 部署 yibiao-combined 服务与 merge.py（端口 15004）"
+echo "==> [1/3] 部署 yibiao-combined 服务与 merge.py（端口 15004）"
 "${PY}" "${SCRIPT_DIR_PY}/scripts/deploy_kb_server.py"
 
-# 4. 健康检查
-echo "==> [2/2] 健康检查"
+# 4. 部署 sub2api-image-proxy
+echo "==> [2/3] 部署 sub2api-image-proxy（Agnes 生图改名代理）"
+"${PY}" "${SCRIPT_DIR_PY}/scripts/deploy_image_proxy.py"
+
+# 5. 健康检查
+echo "==> [3/3] 健康检查"
 sleep 3
 "${PY}" - <<PYEOF
 import os, sys, paramiko
@@ -101,6 +106,8 @@ ssh.connect(d.HOST, port=d.PORT, username=d.USER, password=d.PASSWORD, timeout=1
                                  'ciphers': ['aes256-gcm@openssh.com','chacha20-poly1305@openssh.com','aes256-ctr','aes192-ctr','aes128-ctr']})
 _, out, _ = ssh.exec_command('systemctl is-active yibiao-combined')
 print("yibiao-combined 状态:", out.read().decode().strip())
+_, out, _ = ssh.exec_command('systemctl is-active sub2api-image-proxy')
+print("sub2api-image-proxy 状态:", out.read().decode().strip())
 _, out, _ = ssh.exec_command('curl -s -m 5 http://127.0.0.1:15004/api/health')
 print("health:", out.read().decode().strip())
 ssh.close()
