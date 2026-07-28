@@ -69,9 +69,15 @@ function trimBaseUrl(baseUrl) {
  * 例如 "image-2" → "gpt-image-2"，"agnes-image-2.1-flash" → "gpt-image-2"。
  * 无 provider 特异性，因为正规 OpenAI-like 接口不会用裸 "image-2" 或 Agnes 原名作为模型名。
  */
-function normalizeImageModelName(modelName) {
+function normalizeImageModelName(modelName, baseUrl) {
   const raw = String(modelName || '').trim();
   const lower = raw.toLowerCase();
+
+  // 如果 base_url 指向 Agnes 官方，保持原名不映射（Agnes 不认识 gpt-image-2）
+  if (baseUrl && (baseUrl.includes('agnes-ai.cn') || baseUrl.includes('agnes-ai.com'))) {
+    return raw;
+  }
+
   if (/^image-\d+(\.\d+)?$/.test(raw) && !lower.startsWith('gpt-')) {
     return `gpt-${raw}`;
   }
@@ -1365,7 +1371,7 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
   const requestId = createRequestId();
   const logTitle = `AI生图测试-${meta.label}`;
   const requestBody = {
-    model: normalizeImageModelName(imageConfig.model_name),
+    model: normalizeImageModelName(imageConfig.model_name, imageConfig.base_url),
     prompt: '大字报，内容是“易标AI老好了”',
     size: normalizeOpenAICompatibleImageSize(imageConfig),
     response_format: 'url',
@@ -1564,7 +1570,7 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
   const logTitle = resolveAiLogTitle(request, request.title ? `AI生图-${request.title}` : 'AI生图');
   const requestMode = normalizeImageRequestMode(imageConfig);
   const requestBody = {
-    model: normalizeImageModelName(imageConfig.model_name),
+    model: normalizeImageModelName(imageConfig.model_name, imageConfig.base_url),
     prompt: normalizeImagePrompt(request),
     size: normalizeOpenAICompatibleImageSize(imageConfig, request.size),
     response_format: 'url',
