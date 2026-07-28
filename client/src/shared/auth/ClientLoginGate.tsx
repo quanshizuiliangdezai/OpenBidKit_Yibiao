@@ -15,6 +15,7 @@ export function ClientLoginGate() {
   const [department, setDepartment] = useState('');
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER);
   const [busy, setBusy] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
   const usernameRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const timer = setTimeout(() => usernameRef.current?.focus(), 0);
@@ -25,11 +26,14 @@ export function ClientLoginGate() {
     event.preventDefault();
     if (busy) return;
     setBusy(true);
+    setErrorMsg('');
     try {
       await auth.login(username.trim(), password, serverUrl.trim());
       showToast('登录成功', 'success');
     } catch (error) {
-      showToast((error as Error)?.message || '登录失败', 'error');
+      const msg = (error as Error)?.message || '登录失败';
+      setErrorMsg(msg);
+      showToast(msg, 'error');
     } finally {
       setBusy(false);
     }
@@ -39,6 +43,7 @@ export function ClientLoginGate() {
     event.preventDefault();
     if (busy) return;
     setBusy(true);
+    setErrorMsg('');
     try {
       const result = await window.yibiao.kbAuth.register({
         username: username.trim(),
@@ -51,7 +56,9 @@ export function ClientLoginGate() {
       showToast('注册申请已提交，请等待管理员审核后再登录', 'success');
       setMode('login');
     } catch (error) {
-      showToast((error as Error)?.message || '注册失败', 'error');
+      const msg = (error as Error)?.message || '注册失败';
+      setErrorMsg(msg);
+      showToast(msg, 'error');
     } finally {
       setBusy(false);
     }
@@ -73,18 +80,20 @@ export function ClientLoginGate() {
           <button
             type="button"
             className={mode === 'login' ? 'is-active' : ''}
-            onClick={() => setMode('login')}
+            onClick={() => { setMode('login'); setErrorMsg(''); }}
           >
             登录
           </button>
           <button
             type="button"
             className={mode === 'register' ? 'is-active' : ''}
-            onClick={() => setMode('register')}
+            onClick={() => { setMode('register'); setErrorMsg(''); }}
           >
             注册
           </button>
         </div>
+
+        {errorMsg ? <div className="client-login-error">{errorMsg}</div> : null}
 
         {mode === 'login' ? (
           <form className="client-login-form" onSubmit={handleLogin}>

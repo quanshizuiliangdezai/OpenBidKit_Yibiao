@@ -61,7 +61,8 @@
   border-radius: 999px;
 }
 
-.client-login-expired {
+.client-login-expired,
+.client-login-error {
   margin-bottom: 14px;
   padding: 10px 12px;
   border-radius: 10px;
@@ -71,6 +72,10 @@
   font-size: 13px;
   font-weight: 600;
   text-align: center;
+}
+
+.client-login-error {
+  margin-top: 12px;
 }
 
 .client-login-tabs button {
