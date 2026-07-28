@@ -1795,6 +1795,7 @@ async function embedTextsWithConfig(config, texts) {
         body: JSON.stringify({ model: resolved.model_name, input }),
       });
     } catch (error) {
+      // 仅网络错误可重试；4xx 走 ensureOk 后不可重试
       throw markAiRequestError(error, { retryable: true });
     }
     await ensureOk(response, 'Embedding 请求失败');
@@ -1803,7 +1804,7 @@ async function embedTextsWithConfig(config, texts) {
     } catch (error) {
       throw markAiRequestError(error, { retryable: true });
     }
-  });
+  }, { maxAttempts: 2, getDelayMs: () => 300 });
 
   const items = Array.isArray(data?.data) ? data.data : [];
   if (items.length !== input.length) {
