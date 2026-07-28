@@ -1,7 +1,7 @@
 const { ipcMain } = require('electron');
 
 // 方案 D 中央知识库服务器登录通道。
-function registerKbAuthIpc({ kbAuthService }) {
+function registerKbAuthIpc({ kbAuthService, mainWindow }) {
   ipcMain.handle('kb-auth:login', async (_event, payload) => {
     try {
       const result = await kbAuthService.login(payload || {});
@@ -13,6 +13,17 @@ function registerKbAuthIpc({ kbAuthService }) {
 
   ipcMain.handle('kb-auth:logout', () => {
     kbAuthService.logout();
+    // 退出登录后主动把焦点拉回主窗口，避免 Electron webview 失去焦点导致登录框无法输入
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        if (!mainWindow.isVisible()) mainWindow.show();
+        mainWindow.focus();
+        mainWindow.webContents.focus();
+      }
+    } catch (error) {
+      console.warn('[kb-auth:logout] focus main window failed', error);
+    }
     return { success: true };
   });
 

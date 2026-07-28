@@ -236,9 +236,13 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const aiService = createAiService({ app, configStore });
   const kbAuthService = createKbAuthService({ app });
   const kbTeamService = createKbTeamService({ kbAuthService, app });
-  // 令牌失效时通知渲染进程，重新弹出门禁
+  // 令牌失效时通知渲染进程，重新弹出门禁；同时把焦点拉回主窗口，避免登录框无法输入
   kbAuthService.onUnauthorized(() => {
     if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (!mainWindow.isVisible()) mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.focus();
       mainWindow.webContents.send('kb-auth:session-expired');
     }
   });
@@ -325,7 +329,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerFileIpc({ fileService });
   registerExportIpc({ exportService });
   registerSystemFontIpc({ systemFontService });
-  registerKbAuthIpc({ kbAuthService });
+  registerKbAuthIpc({ kbAuthService, mainWindow });
   registerKbTeamIpc({ kbTeamService, kbAuthService });
   registerKbPersonalIpc({ kbAuthService, app });
   registerPluginIpc(ipcMain, app, {

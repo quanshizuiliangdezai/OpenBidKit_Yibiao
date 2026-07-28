@@ -15,7 +15,8 @@
 .client-login-gate {
   position: fixed;
   inset: 0;
-  z-index: 200;
+  /* 必须高于应用内所有 dialog/overlay（1100 以下），避免退出登录后残留浮层盖住输入框 */
+  z-index: 2000;
   display: grid;
   place-items: center;
   padding: 24px;

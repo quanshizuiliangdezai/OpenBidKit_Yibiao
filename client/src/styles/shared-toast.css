@@ -3,8 +3,8 @@
   position: fixed;
   right: 28px;
   top: 28px;
-  /* 必须高于全屏登录门禁 .client-login-gate 的 z-index:200，否则登录失败提示被盖住看不见 */
-  z-index: 1000;
+  /* 必须高于全屏登录门禁 .client-login-gate 的 z-index:2000，否则登录失败提示被盖住看不见 */
+  z-index: 3000;
   display: grid;
   gap: 12px;
   width: min(560px, calc(100vw - 40px));

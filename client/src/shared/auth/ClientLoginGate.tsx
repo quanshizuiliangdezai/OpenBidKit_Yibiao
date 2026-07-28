@@ -18,7 +18,13 @@ export function ClientLoginGate() {
   const [errorMsg, setErrorMsg] = useState('');
   const usernameRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    const timer = setTimeout(() => usernameRef.current?.focus(), 0);
+    // 退出登录重新弹出门禁时，确保页面与输入框都获得焦点；
+    // 某些 Electron 环境下窗口或 webview 焦点会丢失，导致键盘输入无响应。
+    window.focus();
+    const timer = setTimeout(() => {
+      usernameRef.current?.focus();
+      usernameRef.current?.select();
+    }, 50);
     return () => clearTimeout(timer);
   }, [mode]);
 
@@ -103,7 +109,7 @@ export function ClientLoginGate() {
             </label>
             <label>
               用户名
-              <input ref={usernameRef} value={username} onChange={(e) => setUsername(e.target.value)} required />
+              <input ref={usernameRef} autoFocus value={username} onChange={(e) => setUsername(e.target.value)} required />
             </label>
             <label>
               密码
