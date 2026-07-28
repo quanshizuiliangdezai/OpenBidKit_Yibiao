@@ -102,9 +102,11 @@ const statusLabels: Record<KnowledgeDocument['status'], string> = {
 };
 
 // 回收站 24h 倒计时显示
+// 服务端 deleted_at 为无时区 ISO 字符串（服务器本地时间），用户与服务器同处东八区，
+// 直接按本地时间解析即可；若服务端返回带 Z/时区偏移的 ISO 字符串，Date.parse 也能正确处理。
 function formatTrashRemaining(deletedAt?: string): string {
   if (!deletedAt) return '';
-  const deletedMs = Date.parse(deletedAt.replace(' ', 'T') + (deletedAt.includes('Z') ? '' : 'Z'));
+  const deletedMs = Date.parse(deletedAt.replace(' ', 'T'));
   if (Number.isNaN(deletedMs)) return '';
   const elapsedMs = Date.now() - deletedMs;
   const remainMs = 24 * 3600 * 1000 - elapsedMs;
