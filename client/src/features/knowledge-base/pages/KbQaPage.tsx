@@ -96,15 +96,28 @@ function KbQaPage() {
       }
 
       if (docs.length === 0) {
+        // 知识库无相关内容：回退到通用聊天（非知识库内容），让问答可用于闲聊
+        const answer = await aiClient.chat({
+          messages: [
+            {
+              role: 'system',
+              content:
+                '你是易标投标工具箱的智能助手，可以正常和用户聊天，也可以回答各类问题。' +
+                '当用户的问题与知识库无关时，凭你的常识作答即可；涉及投标、标书等专业问题时给出有帮助的建议。',
+            },
+            { role: 'user', content: question },
+          ],
+          temperature: 0.7,
+          logTitle: '知识库问答(闲聊回退)',
+        });
         setMessages((prev) => [
           ...prev,
           {
             role: 'assistant',
-            content: '未在选中的知识库中找到与问题相关的资料，请尝试换个关键词，或切换到其他知识库来源。',
+            content: `${answer || '模型未返回内容'}\n\n> 注：以上内容未引用知识库，为通用回答。`,
           },
         ]);
         setLastSources([]);
-        setLoading(false);
         return;
       }
 
