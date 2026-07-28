@@ -194,7 +194,7 @@ function buildToolCheckStatus({ descriptor, expectedPath, resolution, smoke }) {
   }
   if (!resolvedToExpected) {
     if (POWERSHELL_ALIAS_PRONE_COMMANDS.has(descriptor.command) && isPowerShellAlias) {
-      return { status: 'warning', message: `命令可执行，但当前由 PowerShell ${resolution.command_type} 处理` };
+      return { status: 'success', message: `可用（由 PowerShell ${resolution.command_type} 处理）` };
     }
     if (critical) {
       return { status: 'error', message: `命令未解析到易标集成路径：${resolution.source}` };
