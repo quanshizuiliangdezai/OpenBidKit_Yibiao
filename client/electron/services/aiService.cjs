@@ -65,14 +65,20 @@ function trimBaseUrl(baseUrl) {
 }
 
 /**
- * 把用户常填的简写模型名补成 sub2api / OpenAI 白名单里的正式名。
- * 例如 "image-2" → "gpt-image-2"，"image-1" → "gpt-image-1"。
- * 无 provider 特异性，因为正规 OpenAI-like 接口不会用裸 "image-2" 作为模型名。
+ * 把用户常填的简写/Agnes 模型名补成 sub2api / OpenAI 白名单里的正式名。
+ * 例如 "image-2" → "gpt-image-2"，"agnes-image-2.1-flash" → "gpt-image-2"。
+ * 无 provider 特异性，因为正规 OpenAI-like 接口不会用裸 "image-2" 或 Agnes 原名作为模型名。
  */
 function normalizeImageModelName(modelName) {
   const raw = String(modelName || '').trim();
-  if (/^image-\d+(\.\d+)?$/.test(raw) && !raw.toLowerCase().startsWith('gpt-')) {
+  const lower = raw.toLowerCase();
+  if (/^image-\d+(\.\d+)?$/.test(raw) && !lower.startsWith('gpt-')) {
     return `gpt-${raw}`;
+  }
+  // sub2api 图片白名单只认 gpt-image-* / dall-e-*，Agnes 原名会被拒。
+  // 统一映射为 gpt-image-2，由服务器上的 sub2api-image-proxy 再转 Agnes 真名。
+  if (lower.startsWith('agnes-image-')) {
+    return 'gpt-image-2';
   }
   return raw;
 }
