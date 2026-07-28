@@ -1545,6 +1545,14 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             else:
                 if len(seg) >= 2:
                     patterns.append(seg)
+        # 年份归一化：让"25年"也能匹配文档里的"2025年"（当前世纪），提升召回
+        _year_norm = []
+        for _p in patterns:
+            _year_norm.append(_p)
+            _m = re.search(r'(\d{2})年', _p)
+            if _m:
+                _year_norm.append(_p.replace(_m.group(0), '20' + _m.group(1) + '年', 1))
+        patterns = _year_norm
         seen = set()
         uniq = []
         for p in patterns:
