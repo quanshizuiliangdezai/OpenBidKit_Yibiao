@@ -227,9 +227,9 @@ const defaultExportFormat = {
 };
 
 // 知识库语义检索（RAG）用的 embedding 模型配置。
-// base_url/api_key 为空时运行期回退到当前文本模型 provider 的 base_url/api_key。
+// 默认开启：base_url/api_key/model_name 均留空时，运行期直接复用文本模型的配置，无需单独设置。
 const defaultEmbeddingModel = {
-  enabled: false,
+  enabled: true,
   base_url: '',
   api_key: '',
   model_name: '',
@@ -488,6 +488,7 @@ function normalizeAgentModeScenarios(source) {
 // 归一化 embedding 模型配置（知识库语义检索）。
 function normalizeEmbeddingModel(source) {
   const src = source && typeof source === 'object' ? source : {};
+  // 注：enabled 不再作为语义检索的总开关；只要文本模型已配置即自动可用（base_url/api_key/model_name 运行期回退到文本模型）。
   return {
     enabled: src.enabled === undefined ? defaultEmbeddingModel.enabled : Boolean(src.enabled),
     base_url: typeof src.base_url === 'string' ? src.base_url.trim() : defaultEmbeddingModel.base_url,

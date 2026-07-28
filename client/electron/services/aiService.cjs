@@ -1734,15 +1734,17 @@ async function generateImageWithConfig(app, config, request) {
 
 /**
  * 解析知识库语义检索用的 embedding 配置。
- * base_url / api_key 为空时回退到当前文本模型 provider 的配置；model_name 必须显式填写。
+ * 语义检索直接复用文本模型：base_url / api_key 为空时回退到当前文本模型的配置；
+ * 未单独填写 embedding 模型名时，直接用文本模型的 model_name。
+ * 这样用户只需配置一次文本模型，无需再单独弄一套 embedding 设置。
  */
 function resolveEmbeddingConfig(config) {
   const emb = config?.embedding_model && typeof config.embedding_model === 'object' ? config.embedding_model : {};
   const baseUrl = trimBaseUrl(emb.base_url) || trimBaseUrl(config?.base_url);
   const apiKey = String(emb.api_key || '').trim() || String(config?.api_key || '').trim();
-  const modelName = String(emb.model_name || '').trim();
+  const modelName = String(emb.model_name || '').trim() || String(config?.model_name || '').trim();
   return {
-    enabled: Boolean(emb.enabled),
+    enabled: true,
     base_url: baseUrl,
     api_key: apiKey,
     model_name: modelName,
@@ -1756,13 +1758,13 @@ function resolveEmbeddingConfig(config) {
 async function embedTextsWithConfig(config, texts) {
   const resolved = resolveEmbeddingConfig(config);
   if (!resolved.model_name) {
-    throw new Error('请先在设置中配置知识库语义检索的 Embedding 模型名称');
+    throw new Error('请先在「设置 → 文本模型」中配置模型（语义检索会复用文本模型的 Base URL / API Key / 模型名）');
   }
   if (!resolved.base_url) {
-    throw new Error('请先在设置中配置 Embedding 模型的 Base URL（或先配置文本模型）');
+    throw new Error('请先配置文本模型（语义检索复用文本模型的 Base URL）');
   }
   if (!resolved.api_key) {
-    throw new Error('请先在设置中配置 Embedding 模型的 API Key（或先配置文本模型）');
+    throw new Error('请先配置文本模型（语义检索复用文本模型的 API Key）');
   }
   const input = Array.isArray(texts) ? texts.map((t) => String(t ?? '')) : [String(texts ?? '')];
   if (!input.length) {
@@ -1958,10 +1960,15 @@ function createAiService({ app, configStore }) {
       });
     },
 
-    /** 当前配置是否可用 embedding（enabled 且 model_name 已填）。 */
+    /** 当前配置是否可用 embedding：文本模型已配置（base_url + api_key + model_name）即自动可用，无需单独开关。 */
     isEmbeddingAvailable() {
       const resolved = resolveEmbeddingConfig(configStore.load());
-      return Boolean(resolved.enabled && resolved.model_name && resolved.base_url && resolved.api_key);
+      return Boolean(resolved.base_url && resolved.api_key && resolved.model_name);
+    },
+
+    /** 返回当前生效的 embedding 模型名（已回退到文本模型）。 */
+    getEmbeddingModelName() {
+      return resolveEmbeddingConfig(configStore.load()).model_name;
     },
 
     /** 测试 embedding 模型配置（config 为渲染层传入的完整客户端配置）。 */

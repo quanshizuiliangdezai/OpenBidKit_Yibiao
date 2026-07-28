@@ -87,9 +87,13 @@ function createKbQaRetrievalService({ db, aiService, kbAuthService }) {
   // ---- 索引维护（增量：content_hash + embedding_model 变化才重建）----
 
   function getEmbeddingModelName() {
+    // 语义检索复用文本模型：embedding 模型名可能直接来自文本模型的 model_name
+    if (typeof aiService.getEmbeddingModelName === 'function') {
+      return aiService.getEmbeddingModelName() || '';
+    }
     const config = aiService.getConfig();
     const emb = config?.embedding_model || {};
-    return String(emb.model_name || '').trim();
+    return String(emb.model_name || config?.model_name || '').trim();
   }
 
   async function syncIndexForSource(source, docs) {

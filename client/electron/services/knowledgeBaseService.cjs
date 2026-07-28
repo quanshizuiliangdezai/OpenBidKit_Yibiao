@@ -2300,6 +2300,8 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
 
     // 用服务器文档 ID 创建本地分析记录并启动分析管道。
     // filePath 是从服务器下载到本地的临时文件路径。
+    // 幂等：重复同步（同一 documentId 已存在本地记录）时重置状态重新分析，
+    // 避免 createDocument 因主键冲突抛错导致分析被静默跳过。
     async analyzeExternalFile(documentId, filePath, fileName, folderId, webContents) {
       const ext = path.extname(filePath).toLowerCase();
       if (!supportedExtensions.has(ext)) {
@@ -2309,7 +2311,17 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       const effectiveFolderId = knowledgeBaseStore.ensureFolder(folderId, '导入文档');
       const documentDir = path.join('folders', effectiveFolderId, 'documents', documentId).replace(/\\/g, '/');
       const sourceName = `source${ext}`;
-      const document = {
+      let existing = null;
+      try {
+        existing = knowledgeBaseStore.getDocument(documentId);
+      } catch {
+        existing = null;
+      }
+      // 已经分析成功过的文档无需重复跑 AI，直接复用结果。
+      if (existing && existing.status === 'success') {
+        return existing;
+      }
+      const documentFields = {
         id: documentId,
         folder_id: effectiveFolderId,
         file_name: fileName || path.basename(filePath),
@@ -2325,10 +2337,16 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         candidate_item_count: 0,
         discarded_block_count: 0,
         system_discarded_after_retry_count: 0,
+        error: null,
         created_at: now(),
         updated_at: now(),
       };
-      const savedDocument = knowledgeBaseStore.createDocument(document);
+      let savedDocument;
+      if (existing) {
+        savedDocument = knowledgeBaseStore.updateDocument(documentId, documentFields);
+      } else {
+        savedDocument = knowledgeBaseStore.createDocument(documentFields);
+      }
       emitProgress(webContents, savedDocument);
       prepareDocument(documentId, filePath, webContents);
       return savedDocument;

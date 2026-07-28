@@ -938,15 +938,23 @@ function KnowledgeBasePage() {
       const syncedItems = (result.data?.synced || []).filter((item) => item.ok);
       const synced = syncedItems.length;
       const targetFolderId = syncedItems[0]?.folder_id || `team-import-${authStatus?.employee?.id ?? ''}`;
+
       if (synced === 0) {
-        showToast('选中的文件夹内没有文档，未同步任何内容（保留当前选择）', 'info');
-      } else {
-        showToast(`已同步 ${synced} 个文档到个人知识库（保留当前选择）`, 'success');
+        showToast('选中的文件夹内没有文档，未同步任何内容', 'info');
+        if (kbTab === 'team') await loadTeamTree();
+        return;
       }
-      // 同步后保持当前团队库视图，不跳转，后台为已同步文档启动本地分析
-      if (syncedItems.length && targetFolderId) {
+
+      showToast(`已同步 ${synced} 个文档到个人知识库（位于“团队库导入”文件夹）`, 'success');
+
+      // 为已同步文档在本地启动分析（复用与上传相同的分析管道）；错误不再静默吞掉
+      const analyzeErrors: string[] = [];
+      if (targetFolderId) {
         for (const item of syncedItems) {
-          if (!item.personal_id || !item.file_name) continue;
+          if (!item.personal_id || !item.file_name) {
+            analyzeErrors.push(`文档「${item.file_name || item.id}」缺少同步信息，跳过`);
+            continue;
+          }
           try {
             const downloadResult = await window.yibiao?.kbPersonal.downloadDocument(
               String(item.personal_id),
@@ -959,14 +967,29 @@ function KnowledgeBasePage() {
                 item.file_name,
                 targetFolderId,
               );
+            } else {
+              analyzeErrors.push(`文档「${item.file_name}」下载失败，无法分析`);
             }
           } catch (analyzeError) {
-            console.warn(`同步文档 ${item.personal_id} 启动本地分析失败`, analyzeError);
+            analyzeErrors.push(
+              `文档「${item.file_name}」启动分析失败：${analyzeError instanceof Error ? analyzeError.message : String(analyzeError)}`,
+            );
           }
         }
       }
+
+      // 同步后自动切到个人库并选中“团队库导入”文件夹，避免用户以为没同步
+      setKbTab('personal');
       await loadPersonalTree();
-      if (kbTab === 'team') await loadTeamTree();
+      if (targetFolderId) setActiveFolderId(targetFolderId);
+      await loadPersonalTree();
+      // 分析是异步过程，稍后刷新两次以显示分析进度与结果
+      window.setTimeout(() => { void loadPersonalTree(); }, 4000);
+      window.setTimeout(() => { void loadPersonalTree(); }, 12000);
+
+      if (analyzeErrors.length) {
+        showToast(`已同步 ${synced} 个文档，但 ${analyzeErrors.length} 个未能自动分析：${analyzeErrors[0]}`, 'error');
+      }
     } catch (error) {
       showToast(error instanceof Error ? error.message : '同步到个人失败', 'error');
     } finally {

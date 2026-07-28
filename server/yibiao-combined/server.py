@@ -1515,10 +1515,46 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         finally:
             conn.close()
 
+    def _qa_keyword_patterns(self, kw):
+        """把自然语言问句拆成多个检索词（整句 + 中文2-gram + 英文/数字词），用于 OR 匹配提升召回。"""
+        import re
+        raw = (kw or '').strip()
+        if not raw:
+            return []
+        patterns = [raw]
+        for seg in re.split(r'[\s,，。.、；;：:！!？?""\'\'（）()【】\[\]<>《》/\\|+\-=~`@#$%^&*_]+', raw):
+            seg = seg.strip()
+            if not seg:
+                continue
+            if re.search(r'[\u4e00-\u9fff]', seg):
+                for m in re.finditer(r'[\u4e00-\u9fff]+', seg):
+                    s = m.group(0)
+                    if len(s) >= 2:
+                        for i in range(len(s) - 1):
+                            patterns.append(s[i:i + 2])
+                    elif len(s) == 1:
+                        patterns.append(s)
+                if re.search(r'[0-9A-Za-z]', seg):
+                    patterns.append(seg)
+            else:
+                if len(seg) >= 2:
+                    patterns.append(seg)
+        seen = set()
+        uniq = []
+        for p in patterns:
+            p = p.replace('%', '').replace('_', '')
+            if not p or p in seen:
+                continue
+            seen.add(p)
+            uniq.append('%' + p + '%')
+        return uniq[:16]
+
     def _qa_team_retrieve(self, kw, limit=3, snippet_chars=6000):
-        """团队库 QA 召回：按正文/标题匹配，返回含 content_text 片段的文档列表。"""
+        """团队库 QA 召回：按正文/标题多词 OR 匹配，返回含 content_text 片段的文档列表。"""
         import sqlite3 as _sql
-        pattern = '%' + kw.replace('%', '').replace('_', '') + '%'
+        patterns = self._qa_keyword_patterns(kw)
+        if not patterns:
+            return []
         conn = _sql.connect(kb_db.DB_PATH)
         try:
             conn.execute('PRAGMA journal_mode=WAL')
@@ -1526,14 +1562,16 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             cols = [c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()]
             if 'content_text' not in cols:
                 return []
-            rows = conn.execute(
-                "SELECT id, folder_id, title, file_name, mime_type, content_text, created_at "
-                "FROM knowledge_documents "
-                "WHERE (deleted_at IS NULL OR deleted_at='') AND "
-                "      (title LIKE ? OR file_name LIKE ? OR COALESCE(content_text,'') LIKE ?) "
-                "ORDER BY created_at DESC LIMIT ?",
-                (pattern, pattern, pattern, limit)
-            ).fetchall()
+            or_clauses = []
+            args = []
+            for pat in patterns:
+                or_clauses.append("(title LIKE ? OR file_name LIKE ? OR COALESCE(content_text,'') LIKE ?)")
+                args.extend([pat, pat, pat])
+            q = ("SELECT id, folder_id, title, file_name, mime_type, content_text, created_at "
+                 "FROM knowledge_documents "
+                 "WHERE (deleted_at IS NULL OR deleted_at='') AND (" + " OR ".join(or_clauses) + ") "
+                 "ORDER BY created_at DESC LIMIT ?")
+            rows = conn.execute(q, tuple(args) + (limit,)).fetchall()
             out = []
             for r in rows:
                 text = (r['content_text'] or '')
@@ -1553,13 +1591,15 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             conn.close()
 
     def _qa_personal_retrieve(self, kw, employee, limit=3, snippet_chars=6000):
-        """个人库 QA 召回：按正文/标题匹配，返回含 content_text 片段的文档列表。"""
+        """个人库 QA 召回：按正文/标题多词 OR 匹配，返回含 content_text 片段的文档列表。"""
         conn = _master_db_conn()
         if conn is None:
             return []
         try:
             self._ensure_owner_cols(conn)
-            pattern = '%' + kw.replace('%', '').replace('_', '') + '%'
+            patterns = self._qa_keyword_patterns(kw)
+            if not patterns:
+                return []
             owner_filter = ''
             args = []
             if employee and employee.get('role') != 'admin':
@@ -1568,12 +1608,16 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             cols = [c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()]
             if 'content_text' not in cols:
                 return []
+            or_clauses = []
+            pat_args = []
+            for pat in patterns:
+                or_clauses.append("(file_name LIKE ? OR COALESCE(content_text,'') LIKE ?)")
+                pat_args.extend([pat, pat])
             q = ("SELECT document_id,folder_id,file_name,COALESCE(content_text,'') AS content_text,created_at "
                  "FROM knowledge_documents "
-                 "WHERE (deleted_at IS NULL OR deleted_at='') AND "
-                 "      (file_name LIKE ? OR COALESCE(content_text,'') LIKE ?)" + owner_filter +
+                 "WHERE (deleted_at IS NULL OR deleted_at='') AND (" + " OR ".join(or_clauses) + ")" + owner_filter +
                  " ORDER BY created_at DESC LIMIT ?")
-            rows = conn.execute(q, (pattern, pattern) + tuple(args) + (limit,)).fetchall()
+            rows = conn.execute(q, tuple(pat_args) + tuple(args) + (limit,)).fetchall()
             out = []
             for r in rows:
                 text = (r['content_text'] or '')
