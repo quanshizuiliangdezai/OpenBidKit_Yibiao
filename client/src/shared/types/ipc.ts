@@ -583,7 +583,12 @@ export interface YibiaoBridge {
     readMarkdown: (documentId: string) => Promise<string>;
     readItems: (documentId: string) => Promise<KnowledgeItem[]>;
     readAnalysis: (documentId: string) => Promise<KnowledgeAnalysisSnapshot>;
-    analyzeExternalFile: (documentId: string | number, filePath: string, fileName: string, folderId: string | number) => Promise<KnowledgeDocument>;
+    analyzeExternalFile: (documentId: string | number, filePath: string, fileName: string, folderId: string | number, libraryType?: 'team' | 'personal') => Promise<KnowledgeDocument>;
+    hydrateTeamAnalysis: (documentId: string | number, folderId: string | number) => Promise<{
+      id: string; status: KnowledgeDocument['status']; progress: number; message: string;
+      item_count: number; block_count: number; filtered_block_count: number;
+      candidate_item_count: number; file_name: string;
+    } | null>;
     getLocalStatus: (documentId: string | number) => Promise<{
       id: string; status: KnowledgeDocument['status']; progress: number; message: string;
       item_count: number; block_count: number; filtered_block_count: number;

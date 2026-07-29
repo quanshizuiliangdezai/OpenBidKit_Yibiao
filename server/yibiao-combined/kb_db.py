@@ -5,6 +5,7 @@
 # 密码：pbkdf2_hmac(sha256) + 随机 salt，绝不存明文
 import sqlite3
 import os
+import json
 import hashlib
 import secrets
 import datetime
@@ -90,6 +91,17 @@ def init_db():
             created_at TEXT NOT NULL,
             FOREIGN KEY(folder_id) REFERENCES knowledge_folders(id) ON DELETE CASCADE,
             FOREIGN KEY(owner_id) REFERENCES employees(id) ON DELETE SET NULL
+        );
+        CREATE TABLE IF NOT EXISTS kb_analysis (
+            document_id   INTEGER PRIMARY KEY,
+            status        TEXT,
+            payload       TEXT,
+            item_count    INTEGER,
+            block_count   INTEGER,
+            analyzer_id   INTEGER,
+            analyzer_name TEXT,
+            updated_at    TEXT NOT NULL,
+            FOREIGN KEY(document_id) REFERENCES knowledge_documents(id) ON DELETE CASCADE
         );
         CREATE TABLE IF NOT EXISTS permission_groups (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1304,6 +1316,73 @@ def search_documents_fulltext(keyword):
                 "ORDER BY d.title",
                 (pattern, pattern, pattern)).fetchall()
             return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+
+# ---------- 团队库分析共享（任一人分析，全员可读）----------
+
+def save_team_analysis(document_id, status, payload, item_count=None, block_count=None,
+                       analyzer_id=None, analyzer_name=None):
+    """写回/更新某团队文档的分析结果（切块/条目等序列化为 JSON 文本）。"""
+    with _lock:
+        conn = _conn()
+        try:
+            payload_str = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+            conn.execute(
+                """INSERT INTO kb_analysis
+                   (document_id, status, payload, item_count, block_count, analyzer_id, analyzer_name, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(document_id) DO UPDATE SET
+                     status=excluded.status, payload=excluded.payload,
+                     item_count=excluded.item_count, block_count=excluded.block_count,
+                     analyzer_id=excluded.analyzer_id, analyzer_name=excluded.analyzer_name,
+                     updated_at=excluded.updated_at""",
+                (int(document_id), status, payload_str, item_count, block_count,
+                 analyzer_id, analyzer_name, datetime.datetime.now().isoformat())
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_team_analysis(document_id):
+    """返回分析结果 dict 或 None。"""
+    with _lock:
+        conn = _conn()
+        try:
+            row = conn.execute(
+                "SELECT document_id, status, payload, item_count, block_count, analyzer_id, analyzer_name, updated_at "
+                "FROM kb_analysis WHERE document_id=?", (int(document_id),)
+            ).fetchone()
+        finally:
+            conn.close()
+    if not row:
+        return None
+    payload = row['payload']
+    try:
+        payload_obj = json.loads(payload) if payload else None
+    except (TypeError, ValueError):
+        payload_obj = None
+    return {
+        'document_id': row['document_id'],
+        'status': row['status'],
+        'payload': payload_obj,
+        'item_count': row['item_count'],
+        'block_count': row['block_count'],
+        'analyzer_id': row['analyzer_id'],
+        'analyzer_name': row['analyzer_name'],
+        'updated_at': row['updated_at'],
+    }
+
+
+def delete_team_analysis(document_id):
+    """删除某文档的分析缓存（文档被删时调用）。"""
+    with _lock:
+        conn = _conn()
+        try:
+            conn.execute("DELETE FROM kb_analysis WHERE document_id=?", (int(document_id),))
+            conn.commit()
         finally:
             conn.close()
 

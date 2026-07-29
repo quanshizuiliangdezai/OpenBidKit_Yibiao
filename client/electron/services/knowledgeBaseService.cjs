@@ -1044,7 +1044,7 @@ function createReport({ blocks, filteredBlocks, candidateItems, finalItems, matc
   };
 }
 
-function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore }) {
+function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore, kbTeamService }) {
   const baseDir = getKnowledgeBaseDir(app);
   const activePreparations = new Set();
   const activeMatches = new Set();
@@ -1162,7 +1162,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
     }
   }
 
-  async function prepareDocument(documentId, sourceFilePath, webContents) {
+  async function prepareDocument(documentId, sourceFilePath, webContents, libraryType) {
     if (activePreparations.has(documentId)) {
       debugLog(documentId, 'prepare:skip-active');
       return;
@@ -1491,7 +1491,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
 
       if (!isDeveloperMode()) {
         debugLog(documentId, 'prepare:auto-match');
-        await matchDocument(documentId, webContents);
+        await matchDocument(documentId, webContents, { libraryType });
       }
     } catch (error) {
       debugLog(documentId, 'prepare:error', {
@@ -1506,6 +1506,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
   }
 
   async function matchDocument(documentId, webContents, options = {}) {
+    const libraryType = options?.libraryType;
     if (activeMatches.has(documentId)) {
       debugLog(documentId, 'match:skip-active');
       return;
@@ -2057,6 +2058,32 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         discarded_block_count: saveResult.report.discarded_blocks_count,
         system_discarded_after_retry_count: saveResult.report.system_discarded_after_retry_count,
       }, webContents);
+
+      // 团队库分析完成后，把完整结果（切块/条目/报告）回写服务器，实现「任一人分析、全员可见」。
+      // libraryType !== 'team'（个人库）不回写，个人分析保持本机私有。
+      if (libraryType === 'team' && kbTeamService && kbTeamService.saveAnalysis) {
+        try {
+          const markdown = knowledgeBaseStore.readMarkdown(documentId);
+          const parserLabel = getDocument(documentId).parser_label || null;
+          const sharedPayload = {
+            markdown,
+            parser_label: parserLabel,
+            blocks,
+            filtered_blocks: filteredBlocks,
+            candidate_items: recoveryResult.items,
+            final_items: finalItems,
+            report: saveResult.report,
+            discarded: recoveryResult.discarded,
+            system_discarded_after_retry: recoveryResult.system_discarded,
+          };
+          await kbTeamService.saveAnalysis(documentId, sharedPayload);
+          debugLog(documentId, 'match:shared-analysis-saved', { item_count: finalItems.length });
+        } catch (shareErr) {
+          debugLog(documentId, 'match:shared-analysis-failed', {
+            message: shareErr?.message || String(shareErr),
+          });
+        }
+      }
     } catch (error) {
       debugLog(documentId, 'match:error', {
         message: error.message || String(error),
@@ -2296,7 +2323,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
     // filePath 是从服务器下载到本地的临时文件路径。
     // 幂等：重复同步（同一 documentId 已存在本地记录）时重置状态重新分析，
     // 避免 createDocument 因主键冲突抛错导致分析被静默跳过。
-    async analyzeExternalFile(documentId, filePath, fileName, folderId, webContents) {
+    async analyzeExternalFile(documentId, filePath, fileName, folderId, webContents, libraryType) {
       const ext = path.extname(filePath).toLowerCase();
       if (!supportedExtensions.has(ext)) {
         throw new Error(`不支持的文件类型：${ext}`);
@@ -2342,7 +2369,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         savedDocument = knowledgeBaseStore.createDocument(documentFields);
       }
       emitProgress(webContents, savedDocument);
-      prepareDocument(documentId, filePath, webContents);
+      prepareDocument(documentId, filePath, webContents, libraryType);
       return savedDocument;
     },
 
@@ -2383,6 +2410,65 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         return { success: true, message: '本地分析数据已清除' };
       } catch (error) {
         return { success: false, message: error?.message || '清除本地分析数据失败' };
+      }
+    },
+
+    // 团队库：若本机无分析，则从服务器拉取共享分析结果水合到本地库，使「任一人分析、全员可见」。
+    // 返回本地分析状态摘要（与 getLocalDocumentStatus 一致）或 null（无共享分析）。
+    // 任何网络/鉴权异常都被吞掉并返回 null，避免阻断文档列表加载。
+    async hydrateTeamAnalysis(documentId, folderId) {
+      try {
+        const local = knowledgeBaseStore.getDocument(documentId);
+        if (local && local.status === 'success') {
+          return getLocalDocumentStatus(documentId);
+        }
+      } catch {
+        // 本机无记录，继续尝试从服务器拉取
+      }
+      if (!kbTeamService || !kbTeamService.getAnalysis) return null;
+      let analysis;
+      try {
+        analysis = await kbTeamService.getAnalysis(documentId);
+      } catch (err) {
+        debugLog(documentId, 'hydrate:server-analysis-failed', { message: err?.message || String(err) });
+        return null;
+      }
+      if (!analysis || !analysis.payload) return null;
+      try {
+        const effectiveFolderId = knowledgeBaseStore.ensureFolder(folderId, '导入文档');
+        let existing = null;
+        try {
+          existing = knowledgeBaseStore.getDocument(documentId);
+        } catch {
+          existing = null;
+        }
+        if (!existing) {
+          knowledgeBaseStore.createDocument({
+            id: documentId,
+            folder_id: effectiveFolderId,
+            file_name: analysis.payload.file_name || String(documentId),
+            document_dir: path.join('folders', effectiveFolderId, 'documents', documentId).replace(/\\/g, '/'),
+            source_path: path.join('folders', effectiveFolderId, 'documents', documentId, 'source').replace(/\\/g, '/'),
+            markdown_path: path.join('folders', effectiveFolderId, 'documents', documentId, 'content.md').replace(/\\/g, '/'),
+            status: 'pending',
+            progress: 0,
+            message: '等待处理',
+            item_count: 0,
+            block_count: 0,
+            filtered_block_count: 0,
+            candidate_item_count: 0,
+            discarded_block_count: 0,
+            system_discarded_after_retry_count: 0,
+            error: null,
+            created_at: now(),
+            updated_at: now(),
+          });
+        }
+        knowledgeBaseStore.hydrateFromServerPayload(documentId, analysis.payload);
+        return getLocalDocumentStatus(documentId);
+      } catch (err) {
+        debugLog(documentId, 'hydrate:failed', { message: err?.message || String(err) });
+        return null;
       }
     },
   };

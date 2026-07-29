@@ -188,10 +188,10 @@ function registerWorkspaceDatabaseStatusIpc({ mainWindow }) {
   };
 }
 
-function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, kbAuthService, updateStatus, mainWindow }) {
+function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, kbAuthService, kbTeamService, updateStatus, mainWindow }) {
   const sqliteDatabase = createSqliteDatabase(app, { onStatus: updateStatus });
   const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
-  const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
+  const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore, kbTeamService });
   const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService });
   const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db });
   const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore });
@@ -358,7 +358,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     databaseStatus.updateStatus({ phase: 'checking', ready: false, message: '正在检查本地数据库' });
     setTimeout(() => {
       try {
-        registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, kbAuthService, updateStatus: databaseStatus.updateStatus, mainWindow });
+        registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, kbAuthService, kbTeamService, updateStatus: databaseStatus.updateStatus, mainWindow });
       } catch (error) {
         databaseStatus.updateStatus({
           phase: 'error',

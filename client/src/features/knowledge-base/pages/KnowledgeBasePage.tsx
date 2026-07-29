@@ -776,10 +776,17 @@ function KnowledgeBasePage() {
         return;
       }
       const { folders: serverFolders, documents: serverDocuments } = result.data;
-      // 为每个文档检查本地分析状态
+      // 为每个文档检查本地分析状态；团队库若本机无分析，尝试从服务器拉取共享分析结果水合到本地库
       const documents = await Promise.all(
         serverDocuments.map(async (doc) => {
-          const localStatus = await getLocalStatusSafe(doc.id);
+          let localStatus = await getLocalStatusSafe(doc.id);
+          if (!localStatus && kbTab === 'team') {
+            try {
+              localStatus = (await window.yibiao?.knowledgeBase.hydrateTeamAnalysis(doc.id, doc.folder_id ?? '')) ?? null;
+            } catch {
+              localStatus = null;
+            }
+          }
           return adaptServerDocument(doc, localStatus);
         }),
       );
@@ -970,6 +977,7 @@ function KnowledgeBasePage() {
                 downloadResult.data.localPath,
                 item.file_name,
                 targetFolderId,
+                'team',
               );
             } else {
               analyzeErrors.push(`文档「${item.file_name}」下载失败，无法分析`);
@@ -1042,6 +1050,7 @@ function KnowledgeBasePage() {
                 downloadResult.data.localPath,
                 item.file_name,
                 targetFolderId,
+                'personal',
               );
             } else {
               analyzeErrors.push(`文档「${item.file_name}」下载失败，无法分析`);
@@ -1107,6 +1116,7 @@ function KnowledgeBasePage() {
                   downloadResult.data.localPath,
                   fileName,
                   String(targetFolder.id),
+                  'personal',
                 );
               }
             } catch (analyzeError) {
@@ -1136,6 +1146,7 @@ function KnowledgeBasePage() {
                 downloadResult.data.localPath,
                 String(doc.file_name || doc.title || doc.name || doc.original_name || 'document'),
                 String(targetFolder.id),
+                'team',
               );
             }
           } catch (analyzeError) {
@@ -1271,7 +1282,14 @@ function KnowledgeBasePage() {
         const res = await window.yibiao?.kbTeam.search(q, mode);
         if (!res?.success) throw new Error(res?.error || '搜索失败');
         results = await Promise.all((res.data || []).map(async (doc) => {
-          const localStatus = await getLocalStatusSafe(doc.id);
+          let localStatus = await getLocalStatusSafe(doc.id);
+          if (!localStatus) {
+            try {
+              localStatus = (await window.yibiao?.knowledgeBase.hydrateTeamAnalysis(doc.id, doc.folder_id ?? '')) ?? null;
+            } catch {
+              localStatus = null;
+            }
+          }
           return adaptServerDocument(doc, localStatus);
         }));
       } else {
@@ -1543,6 +1561,7 @@ function KnowledgeBasePage() {
         downloadResult.data.localPath,
         document.file_name,
         document.folder_id,
+        kbTab,
       );
       if (updatedDocument) {
         setIndex((prev) => ({

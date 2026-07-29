@@ -850,6 +850,35 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 detail='上传文档: %s (%.1fKB)' % (title, (len(f['data']) / 1024)), ip=_client_ip(self))
             return self._send(200, {'success': True, 'data': {k: doc[k] for k in ('id', 'folder_id', 'owner_id', 'title', 'file_name', 'file_size', 'mime_type', 'created_at')}})
 
+        # ==================== 团队库分析共享：写回分析结果 ====================
+        m = re.match(r'^/api/documents/(\d+)/analysis$', path)
+        if m:
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            doc = kb_db.get_document(m.group(1))
+            if not doc:
+                return self._send(404, {'error': '文档不存在'})
+            payload = data.get('payload')
+            if payload is None:
+                return self._send(400, {'error': '缺少 payload'})
+            if not isinstance(payload, str):
+                payload = json.dumps(payload, ensure_ascii=False)
+            kb_db.save_team_analysis(
+                m.group(1),
+                data.get('status') or 'success',
+                payload,
+                item_count=data.get('item_count'),
+                block_count=data.get('block_count'),
+                analyzer_id=employee['id'],
+                analyzer_name=employee.get('display_name') or employee.get('username'),
+            )
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee.get('username'),
+                role=employee.get('role'), action='doc', target_type='document', target_id=m.group(1),
+                detail='团队库分析写回（全员共享）', ip=_client_ip(self))
+            return self._send(200, {'success': True, 'message': '分析已保存，全员可共享'})
+
         # ==================== 个人库写接口（需登录会话）====================
         if path == '/api/personal/folders':
             employee = self._auth()
@@ -2205,6 +2234,20 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 return self._send(404, {'error': '文件已丢失'})
             self._send_file(full, doc['file_name'], doc['mime_type'])
             return
+        # ==================== 团队库分析共享：读取分析结果 ====================
+        m = re.match(r'^/api/documents/(\d+)/analysis$', path)
+        if m:
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            doc = kb_db.get_document(m.group(1))
+            if not doc:
+                return self._send(404, {'error': '文档不存在'})
+            analysis = kb_db.get_team_analysis(m.group(1))
+            if not analysis:
+                return self._send(404, {'error': '暂无共享分析结果', 'analyzed': False})
+            return self._send(200, {'success': True, 'analyzed': True, 'data': analysis})
+
         if path == '/api/folders':
             employee = self._auth()
             if not employee:
@@ -2350,6 +2393,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             ok, err = kb_db.delete_document(m.group(1), employee['id'])
             if not ok:
                 return self._send(400, {'error': err})
+            try:
+                kb_db.delete_team_analysis(m.group(1))
+            except Exception:
+                pass
             audit_event(
                 account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
                 role=employee.get('role'), action='doc', target_type='document', target_id=m.group(1),

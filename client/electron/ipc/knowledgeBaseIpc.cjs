@@ -17,8 +17,10 @@ function registerKnowledgeBaseIpc({ knowledgeBaseService }) {
   ipcMain.handle('knowledge-base:read-markdown', (_event, documentId) => knowledgeBaseService.readMarkdown(documentId));
   ipcMain.handle('knowledge-base:read-items', (_event, documentId) => knowledgeBaseService.readItems(documentId));
   ipcMain.handle('knowledge-base:read-analysis', (_event, documentId) => knowledgeBaseService.readAnalysis(documentId));
-  // 方案 D：服务器文档的本地分析桥
-  ipcMain.handle('knowledge-base:analyze-external-file', (event, documentId, filePath, fileName, folderId) => knowledgeBaseService.analyzeExternalFile(documentId, filePath, fileName, folderId, event.sender));
+  // 方案 D：服务器文档的本地分析桥（libraryType 透传：'team' 回写共享分析，'personal' 不回写）
+  ipcMain.handle('knowledge-base:analyze-external-file', (event, documentId, filePath, fileName, folderId, libraryType) => knowledgeBaseService.analyzeExternalFile(documentId, filePath, fileName, folderId, event.sender, libraryType));
+  // 团队库：本机无分析时从服务器拉取共享分析结果水合到本地库
+  ipcMain.handle('knowledge-base:hydrate-team-analysis', (_event, documentId, folderId) => knowledgeBaseService.hydrateTeamAnalysis(documentId, folderId));
   ipcMain.handle('knowledge-base:get-local-status', (_event, documentId) => knowledgeBaseService.getLocalDocumentStatus(documentId));
   ipcMain.handle('knowledge-base:delete-local-analysis', (_event, documentId) => knowledgeBaseService.deleteLocalAnalysis(documentId));
 }

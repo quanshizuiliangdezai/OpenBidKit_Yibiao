@@ -302,6 +302,31 @@ function createKbTeamService({ kbAuthService, app }) {
     return { folders, documents };
   }
 
+  // ---- 团队文档分析共享（任一人分析，全员可读）----
+
+  /** 写回团队文档的共享分析结果（切块/条目/报告等完整 payload）。
+   * 服务端契约：POST /api/documents/<id>/analysis body {status, payload} */
+  async function saveAnalysis(documentId, payload) {
+    const { ok, status, data } = await api(`/api/documents/${documentId}/analysis`, {
+      method: 'POST',
+      body: { status: 'success', payload },
+    });
+    if (!ok) {
+      const msg = data?.error || `保存共享分析失败（${status}）`;
+      throw new Error(msg);
+    }
+    return data?.data || data || { success: true };
+  }
+
+  /** 读取团队文档的共享分析结果；无结果返回 null（HTTP 404）。
+   * 服务端契约：GET /api/documents/<id>/analysis → {success, analyzed, data} */
+  async function getAnalysis(documentId) {
+    const { ok, status, data } = await api(`/api/documents/${documentId}/analysis`);
+    if (status === 404) return null;
+    if (!ok) throw new Error(data?.error || `读取共享分析失败（${status}）`);
+    return data?.data || null;
+  }
+
   // ---- 文档版本历史（优化④）----
 
   async function getDocumentVersions(documentId) {
@@ -329,6 +354,8 @@ function createKbTeamService({ kbAuthService, app }) {
     listTrash,
     restoreFromTrash,
     exportZip,
+    saveAnalysis,
+    getAnalysis,
   };
 }
 

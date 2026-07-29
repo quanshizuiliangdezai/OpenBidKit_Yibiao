@@ -1074,6 +1074,48 @@ function createKnowledgeBaseStore({ app, db }) {
     };
   }
 
+  // ---- 团队分析共享：把服务端返回的完整 payload 水合进本地库 ----
+
+  /** 将服务端共享分析结果（payload）写回本地知识库，使未在本机分析的用户也能直接查看。
+   * payload 结构（与 knowledgeBaseService 回写一致）：
+   * { markdown, parser_label, blocks, filtered_blocks, candidate_items, final_items, report, discarded, system_discarded_after_retry }
+   * 复用 saveBlocks/saveMatchResult 等原语，保证 QA / 查看逻辑零改动。 */
+  function hydrateFromServerPayload(documentId, payload) {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('共享分析结果格式无效');
+    }
+    const markdown = payload.markdown || '';
+    const document = getDocument(documentId);
+    const markdownPath = resolvePath(document.markdown_path);
+    try {
+      fs.mkdirSync(path.dirname(markdownPath), { recursive: true });
+      fs.writeFileSync(markdownPath, markdown || '', 'utf-8');
+    } catch (err) {
+      // markdown 文件写入失败不阻断其余水合
+      console.warn('[kbStore] hydrate markdown file failed:', err);
+    }
+    updateMarkdownMetadata(documentId, markdown, payload.parser_label || null);
+
+    const blocks = Array.isArray(payload.blocks) ? payload.blocks : [];
+    const filteredBlocks = Array.isArray(payload.filtered_blocks) ? payload.filtered_blocks : [];
+    replaceBlocks(documentId, blocks, filteredBlocks);
+
+    const candidateItems = Array.isArray(payload.candidate_items) ? payload.candidate_items : [];
+    const finalItems = Array.isArray(payload.final_items) ? payload.final_items : [];
+    const report = payload.report || null;
+    const matchResult = {
+      discarded: Array.isArray(payload.discarded) ? payload.discarded : [],
+      system_discarded_after_retry: Array.isArray(payload.system_discarded_after_retry) ? payload.system_discarded_after_retry : [],
+    };
+    saveMatchResult(documentId, { candidateItems, finalItems, matchResult, report });
+
+    updateDocument(documentId, {
+      status: 'success',
+      progress: 100,
+      message: '已从团队共享分析加载',
+    });
+  }
+
   function readAnalysis(documentId, options = {}) {
     const document = getDocument(documentId);
     const markdown = readMarkdown(documentId);
@@ -1439,6 +1481,7 @@ function createKnowledgeBaseStore({ app, db }) {
     saveMatchResult,
     readItems,
     readAnalysis,
+    hydrateFromServerPayload,
     getOutlineReferences,
     getMigrationStatus,
     migrateLegacy,
