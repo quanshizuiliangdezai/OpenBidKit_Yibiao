@@ -468,6 +468,39 @@ function KnowledgeBasePage() {
     return true;
   };
 
+  // 按树形顺序排列可见文件夹，保证子文件夹紧跟在父文件夹下方，不会跑到其它根文件夹上面
+  const visibleFoldersInTreeOrder = useMemo(() => {
+    const result: KnowledgeFolder[] = [];
+    const visited = new Set<string>();
+    const appendWithChildren = (folder: KnowledgeFolder) => {
+      if (visited.has(folder.id)) return;
+      visited.add(folder.id);
+      // 如果父级被折叠，该文件夹不可见，跳过
+      let pid = folderParentMap.get(folder.id) || null;
+      while (pid) {
+        if (collapsedFolders.has(pid)) return;
+        pid = folderParentMap.get(pid) || null;
+      }
+      result.push(folder);
+      for (const child of folderChildrenMap.get(folder.id) || []) {
+        appendWithChildren(child);
+      }
+    };
+    // 先按原始顺序处理所有根文件夹
+    for (const folder of index.folders) {
+      if (!folder.parent_id) {
+        appendWithChildren(folder);
+      }
+    }
+    // 兜底：任何未访问过的可见文件夹（孤儿或父级不在列表中）
+    for (const folder of index.folders) {
+      if (!visited.has(folder.id)) {
+        appendWithChildren(folder);
+      }
+    }
+    return result;
+  }, [index.folders, folderParentMap, folderChildrenMap, collapsedFolders]);
+
   // C5 搜索（name / content 双模式）
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState<'name' | 'content'>('name');
@@ -1888,9 +1921,7 @@ function KnowledgeBasePage() {
             </div>
           ) : index.folders.length ? (
             <div className="knowledge-folder-list">
-              {index.folders
-                .filter((folder) => isFolderVisible(folder.id))
-                .map((folder) => {
+              {visibleFoldersInTreeOrder.map((folder) => {
                   const count = documentsByFolder.get(folder.id)?.length || 0;
                   const hasChildren = (folderChildrenMap.get(folder.id)?.length || 0) > 0;
                   const isCollapsed = collapsedFolders.has(folder.id);
