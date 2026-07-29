@@ -2441,6 +2441,12 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         if (local && local.status === 'success') {
           return getLocalDocumentStatus(documentId);
         }
+        // 本地有非 success 记录时，若分析任务仍在活跃运行，必须保护本地进度，
+        // 避免被服务器返回的 null/无分析覆盖成「等待处理」。
+        if (local && (activePreparations.has(documentId) || activeMatches.has(documentId))) {
+          debugLog(documentId, 'hydrate:skip-active-analysis');
+          return getLocalDocumentStatus(documentId);
+        }
       } catch {
         // 本机无记录，继续尝试从服务器拉取
       }
