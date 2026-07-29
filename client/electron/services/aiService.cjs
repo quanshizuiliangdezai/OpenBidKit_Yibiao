@@ -31,6 +31,24 @@ const JINLONG_DEPRECATED_MODEL_MAP = {
   'gpt-5.6-luna': 'gpt-5.6-terra',
 };
 const IMAGE_MODEL_TEST_TIMEOUT_MESSAGE = '生图模型测试超时，请检查 Base URL、API Key 或模型名称';
+
+async function fetchImageAsBase64(imageUrl) {
+  try {
+    const response = await fetch(imageUrl, { method: 'GET' });
+    if (!response.ok) {
+      return null;
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (!buffer || buffer.length === 0) {
+      return null;
+    }
+    const contentType = response.headers.get('content-type') || 'image/png';
+    return { data: buffer.toString('base64'), mimeType: contentType };
+  } catch {
+    return null;
+  }
+}
+
 const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
 const ANALYTICS_PROJECT_NAME = 'yibiao-client';
 const MODEL_INFO_ENDPOINT = 'https://analytics.agnet.top/model-info';
@@ -1419,11 +1437,22 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
     trackAiRequest(app, config, { ai_request_type: 'image', usage: extractOpenAIUsage(responseData) });
     analyticsTracked = true;
     const firstImage = responseData.data?.[0] || {};
-    const imageUrl = firstImage.url || '';
-    const imageData = firstImage.b64_json || '';
+    let imageUrl = firstImage.url || '';
+    let imageData = firstImage.b64_json || '';
+    let mimeType = 'image/png';
 
     if (!imageUrl && !imageData) {
       throw createAiResponseDataError(getOpenAICompatibleImageFailureMessage(responseData, `${meta.label}生图测试未返回图片数据`), responseData);
+    }
+
+    // Electron 渲染进程默认开启 webSecurity，无法直接显示跨域远程图片 URL；
+    // 在测试场景下把远程 URL 下载为 base64，返回给前端即可直接预览。
+    if (imageUrl && !imageData) {
+      const fetched = await fetchImageAsBase64(imageUrl);
+      if (fetched?.data) {
+        imageData = fetched.data;
+        mimeType = fetched.mimeType;
+      }
     }
 
     writeAiLog(app, config, {
@@ -1437,7 +1466,7 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
       result: {
         image_url: imageUrl,
         image_data: imageData ? '[base64 omitted]' : '',
-        mime_type: 'image/png',
+        mime_type: mimeType,
       },
       created_at: new Date().toISOString(),
     });
@@ -1447,7 +1476,7 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
       message: imageUrl ? `测试成功：已生成图片 ${imageUrl}` : '测试成功：已返回生图结果',
       image_url: imageUrl,
       image_data: imageData,
-      mime_type: 'image/png',
+      mime_type: mimeType,
     };
   } catch (error) {
     if (!analyticsTracked) {

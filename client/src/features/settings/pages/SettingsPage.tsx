@@ -1125,7 +1125,9 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       }));
       setSavedConfig(testedConfig);
       trackConfigUsage({}, testedConfig);
-      const previewSrc = result?.image_url || (result?.image_data ? `data:${result.mime_type || 'image/png'};base64,${result.image_data}` : '');
+      const previewSrc = result?.image_data
+        ? `data:${result.mime_type || 'image/png'};base64,${result.image_data}`
+        : (result?.image_url || '');
 
       if (previewSrc) {
         setImageTestPreview({ src: previewSrc, title: `${imageProviderLabels[state.imageModel.provider]} 测试图片` });
