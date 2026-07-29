@@ -2056,7 +2056,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
           final_item_count: finalItems.length,
           report,
         });
-        return { final_item_count: finalItems.length, report };
+        return { final_item_count: finalItems.length, report, finalItems };
       });
       updateDocument(documentId, {
         status: 'success',
@@ -2081,13 +2081,13 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
             blocks,
             filtered_blocks: filteredBlocks,
             candidate_items: recoveryResult.items,
-            final_items: finalItems,
+            final_items: saveResult.finalItems,
             report: saveResult.report,
             discarded: recoveryResult.discarded,
             system_discarded_after_retry: recoveryResult.system_discarded,
           };
           await kbTeamService.saveAnalysis(documentId, sharedPayload);
-          debugLog(documentId, 'match:shared-analysis-saved', { item_count: finalItems.length });
+          debugLog(documentId, 'match:shared-analysis-saved', { item_count: saveResult.finalItems.length });
         } catch (shareErr) {
           const shareErrMsg = shareErr?.message || String(shareErr);
           debugLog(documentId, 'match:shared-analysis-failed', { message: shareErrMsg });
