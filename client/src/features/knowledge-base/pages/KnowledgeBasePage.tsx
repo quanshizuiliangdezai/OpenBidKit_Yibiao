@@ -786,7 +786,7 @@ function KnowledgeBasePage() {
       const documents = await Promise.all(
         serverDocuments.map(async (doc) => {
           let localStatus = await getLocalStatusSafe(doc.id);
-          if (!localStatus && kbTab === 'team') {
+          if (kbTab === 'team' && (!localStatus || localStatus.status !== 'success')) {
             try {
               localStatus = (await window.yibiao?.knowledgeBase.hydrateTeamAnalysis(doc.id, doc.folder_id ?? '')) ?? null;
             } catch {
@@ -1289,7 +1289,7 @@ function KnowledgeBasePage() {
         if (!res?.success) throw new Error(res?.error || '搜索失败');
         results = await Promise.all((res.data || []).map(async (doc) => {
           let localStatus = await getLocalStatusSafe(doc.id);
-          if (!localStatus) {
+          if (!localStatus || localStatus.status !== 'success') {
             try {
               localStatus = (await window.yibiao?.knowledgeBase.hydrateTeamAnalysis(doc.id, doc.folder_id ?? '')) ?? null;
             } catch {
