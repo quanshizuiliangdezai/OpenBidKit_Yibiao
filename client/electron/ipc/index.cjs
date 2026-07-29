@@ -247,7 +247,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     }
   });
   const developerExpansionReplaceTestService = createDeveloperExpansionReplaceTestService({ aiService });
-  const agentService = createAgentService({ app, configStore, mainWindow, aiService });
+  const agentService = createAgentService({ app, configStore, mainWindow, aiService, licenseService });
   const fileService = createFileService({ app, configStore });
   const exportService = createExportService({ configStore });
   const systemFontService = createSystemFontService();
