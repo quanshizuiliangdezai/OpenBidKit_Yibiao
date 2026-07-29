@@ -2066,6 +2066,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
           const markdown = knowledgeBaseStore.readMarkdown(documentId);
           const parserLabel = getDocument(documentId).parser_label || null;
           const sharedPayload = {
+            file_name: getDocument(documentId).file_name || null,
             markdown,
             parser_label: parserLabel,
             blocks,
