@@ -1087,6 +1087,15 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
     }
   }
 
+  function emitToast(webContents, { level, message }) {
+    if (!webContents?.isDestroyed()) {
+      webContents.send('knowledge-base:event', { type: 'toast', level, message });
+    }
+  }
+
+  // 记录每个本地文档对应的库类型（team/personal），用于 startMatching 等无 libraryType 场景回写判断。
+  const documentLibraryType = new Map();
+
   function updateDocument(documentId, partial, webContents) {
     const document = knowledgeBaseStore.updateDocument(documentId, { ...partial, updated_at: now() });
     if (document) emitProgress(webContents, document);
@@ -1506,7 +1515,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
   }
 
   async function matchDocument(documentId, webContents, options = {}) {
-    const libraryType = options?.libraryType;
+    const libraryType = options?.libraryType || documentLibraryType.get(String(documentId));
     if (activeMatches.has(documentId)) {
       debugLog(documentId, 'match:skip-active');
       return;
@@ -2080,8 +2089,11 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
           await kbTeamService.saveAnalysis(documentId, sharedPayload);
           debugLog(documentId, 'match:shared-analysis-saved', { item_count: finalItems.length });
         } catch (shareErr) {
-          debugLog(documentId, 'match:shared-analysis-failed', {
-            message: shareErr?.message || String(shareErr),
+          const shareErrMsg = shareErr?.message || String(shareErr);
+          debugLog(documentId, 'match:shared-analysis-failed', { message: shareErrMsg });
+          emitToast(webContents, {
+            level: 'error',
+            message: `团队共享分析保存失败：${shareErrMsg}（本机已完成，其他成员暂时看不到）`,
           });
         }
       }
@@ -2325,6 +2337,10 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
     // 幂等：重复同步（同一 documentId 已存在本地记录）时重置状态重新分析，
     // 避免 createDocument 因主键冲突抛错导致分析被静默跳过。
     async analyzeExternalFile(documentId, filePath, fileName, folderId, webContents, libraryType) {
+      // 记录文档所属库类型，供 startMatching 等链路在无法透传时判断是否需要回写共享分析。
+      if (libraryType) {
+        documentLibraryType.set(String(documentId), libraryType);
+      }
       const ext = path.extname(filePath).toLowerCase();
       if (!supportedExtensions.has(ext)) {
         throw new Error(`不支持的文件类型：${ext}`);
@@ -2418,6 +2434,8 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
     // 返回本地分析状态摘要（与 getLocalDocumentStatus 一致）或 null（无共享分析）。
     // 任何网络/鉴权异常都被吞掉并返回 null，避免阻断文档列表加载。
     async hydrateTeamAnalysis(documentId, folderId) {
+      // 从服务器水合的文档必然是团队库文档，记录类型供后续匹配使用。
+      documentLibraryType.set(String(documentId), 'team');
       try {
         const local = knowledgeBaseStore.getDocument(documentId);
         if (local && local.status === 'success') {

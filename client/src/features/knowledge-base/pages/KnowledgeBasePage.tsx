@@ -641,7 +641,13 @@ function KnowledgeBasePage() {
     void checkAuthAndLoad();
     window.addEventListener('focus', loadDeveloperMode);
     document.addEventListener('visibilitychange', loadDeveloperMode);
-    const unsubscribe = window.yibiao?.knowledgeBase.onEvent(({ document }) => {
+    const unsubscribe = window.yibiao?.knowledgeBase.onEvent((event) => {
+      if (event?.type === 'toast' && event.message) {
+        showToast(event.message, event.level || 'info');
+        return;
+      }
+      const { document } = event || {};
+      if (!document) return;
       const parseMessage = document.error || document.message;
       if (document.status === 'error'
         && isLibreOfficeRequiredMessage(parseMessage)

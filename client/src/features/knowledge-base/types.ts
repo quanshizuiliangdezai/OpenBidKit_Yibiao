@@ -139,5 +139,8 @@ export interface KnowledgeBaseUploadResult {
 }
 
 export interface KnowledgeBaseEvent {
-  document: KnowledgeDocument;
+  document?: KnowledgeDocument;
+  type?: 'toast';
+  level?: 'info' | 'success' | 'error';
+  message?: string;
 }
