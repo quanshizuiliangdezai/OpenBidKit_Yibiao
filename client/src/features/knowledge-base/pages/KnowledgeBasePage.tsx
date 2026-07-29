@@ -786,11 +786,10 @@ function KnowledgeBasePage() {
       const documents = await Promise.all(
         serverDocuments.map(async (doc) => {
           let localStatus = await getLocalStatusSafe(doc.id);
-          // 仅当本机「完全没有记录」时才向服务器水合共享分析。
-          // 一旦本地已有记录（即使是 pending/copying/extracting/error），必须原样展示本地真实进度，
-          // 绝不能在分析进行中调用 hydrateTeamAnalysis——服务器此时还没有共享分析，返回 null 会把
-          // 状态覆盖回「等待处理」，导致用户以为上传没反应。
-          if (kbTab === 'team' && !localStatus) {
+          // 团队库：本地未完成（或非 success）时尝试从服务器水合共享分析。
+          // 真正的覆盖决策由主进程 hydrateTeamAnalysis 守护：若本地分析任务仍在活跃运行，
+          // 它会直接返回本地状态，避免服务器尚无共享分析时返回 null 把进度覆盖回「等待处理」。
+          if (kbTab === 'team' && (!localStatus || localStatus.status !== 'success')) {
             try {
               localStatus = (await window.yibiao?.knowledgeBase.hydrateTeamAnalysis(doc.id, doc.folder_id ?? '')) ?? null;
             } catch {
@@ -1293,8 +1292,8 @@ function KnowledgeBasePage() {
         if (!res?.success) throw new Error(res?.error || '搜索失败');
         results = await Promise.all((res.data || []).map(async (doc) => {
           let localStatus = await getLocalStatusSafe(doc.id);
-          // 与 loadTeamTree 保持一致：仅本机完全无记录时才水合，本地已有记录（含 pending）一律原样展示。
-          if (!localStatus) {
+          // 与 loadTeamTree 保持一致：本地未完成时由主进程决定是否水合共享分析。
+          if (!localStatus || localStatus.status !== 'success') {
             try {
               localStatus = (await window.yibiao?.knowledgeBase.hydrateTeamAnalysis(doc.id, doc.folder_id ?? '')) ?? null;
             } catch {

@@ -1592,7 +1592,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             uniq.append('%' + p + '%')
         return uniq[:16]
 
-    def _qa_team_retrieve(self, kw, limit=3, snippet_chars=6000):
+    def _qa_team_retrieve(self, kw, limit=3, snippet_chars=2500):
         """团队库 QA 召回：按正文/标题多词 OR 匹配，返回含 content_text 片段的文档列表。"""
         import sqlite3 as _sql
         patterns = self._qa_keyword_patterns(kw)
@@ -1633,7 +1633,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         finally:
             conn.close()
 
-    def _qa_personal_retrieve(self, kw, employee, limit=3, snippet_chars=6000):
+    def _qa_personal_retrieve(self, kw, employee, limit=3, snippet_chars=2500):
         """个人库 QA 召回：按正文/标题多词 OR 匹配，返回含 content_text 片段的文档列表。"""
         conn = _master_db_conn()
         if conn is None:

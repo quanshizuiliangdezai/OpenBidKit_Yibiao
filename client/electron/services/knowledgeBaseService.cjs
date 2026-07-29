@@ -2435,16 +2435,19 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
     // 任何网络/鉴权异常都被吞掉并返回 null，避免阻断文档列表加载。
     async hydrateTeamAnalysis(documentId, folderId) {
       // 从服务器水合的文档必然是团队库文档，记录类型供后续匹配使用。
-      documentLibraryType.set(String(documentId), 'team');
+      const docId = String(documentId);
+      documentLibraryType.set(docId, 'team');
+      let local = null;
       try {
-        const local = knowledgeBaseStore.getDocument(documentId);
+        local = knowledgeBaseStore.getDocument(documentId);
         if (local && local.status === 'success') {
+          debugLog(docId, 'hydrate:local-success');
           return getLocalDocumentStatus(documentId);
         }
         // 本地有非 success 记录时，若分析任务仍在活跃运行，必须保护本地进度，
         // 避免被服务器返回的 null/无分析覆盖成「等待处理」。
-        if (local && (activePreparations.has(documentId) || activeMatches.has(documentId))) {
-          debugLog(documentId, 'hydrate:skip-active-analysis');
+        if (local && (activePreparations.has(docId) || activeMatches.has(docId))) {
+          debugLog(docId, 'hydrate:skip-active-analysis', { status: local.status });
           return getLocalDocumentStatus(documentId);
         }
       } catch {
@@ -2457,6 +2460,12 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       } catch (err) {
         debugLog(documentId, 'hydrate:server-analysis-failed', { message: err?.message || String(err) });
         return null;
+      }
+      // 本地已是 error 且服务器没有共享分析时，保留 error 状态，
+      // 避免把失败状态覆盖成「等待处理」让用户困惑。
+      if (local && local.status === 'error' && (!analysis || !analysis.payload)) {
+        debugLog(docId, 'hydrate:preserve-error');
+        return getLocalDocumentStatus(documentId);
       }
       if (!analysis || !analysis.payload) return null;
       try {

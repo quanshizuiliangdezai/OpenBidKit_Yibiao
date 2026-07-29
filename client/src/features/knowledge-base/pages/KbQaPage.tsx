@@ -20,11 +20,23 @@ const QA_SYSTEM_PROMPT = `你是标讯知识库问答助手。请严格根据下
 3. 如果资料有冲突，请指出并给出判断依据；
 4. 不要编造参考资料中不存在的内容。`;
 
+/** 每篇参考资料最多保留多少字符；总长度也有上限，避免把海量无关正文塞进 LLM 导致响应极慢。 */
+const MAX_CHARS_PER_DOC = 2500;
+const MAX_TOTAL_PROMPT_CHARS = 8000;
+
 function buildPrompt(question: string, docs: KbQaDocument[]) {
-  const refs = docs
-    .map((d, i) => `[${i + 1}] ${d.title}\n${d.content_text || '(无正文)'}`)
-    .join('\n\n---\n\n');
-  return `${QA_SYSTEM_PROMPT}\n\n参考资料：\n\n${refs}\n\n用户问题：${question}`;
+  let totalChars = 0;
+  const refs: string[] = [];
+  for (let i = 0; i < docs.length; i += 1) {
+    const d = docs[i];
+    const text = (d.content_text || '').slice(0, MAX_CHARS_PER_DOC);
+    totalChars += text.length + d.title.length + 20;
+    if (totalChars > MAX_TOTAL_PROMPT_CHARS) {
+      break;
+    }
+    refs.push(`[${i + 1}] ${d.title}\n${text || '(无正文)'}`);
+  }
+  return `${QA_SYSTEM_PROMPT}\n\n参考资料：\n\n${refs.join('\n\n---\n\n')}\n\n用户问题：${question}`;
 }
 
 function KbQaPage() {
@@ -38,6 +50,7 @@ function KbQaPage() {
     },
   ]);
   const [lastSources, setLastSources] = useState<KbQaDocument[]>([]);
+  const [qaStage, setQaStage] = useState<'retrieving' | 'generating' | null>(null);
   const { showToast } = useToast();
 
   const handleAsk = async () => {
@@ -45,6 +58,7 @@ function KbQaPage() {
     if (!question) return;
 
     setLoading(true);
+    setQaStage('retrieving');
     setMessages((prev) => [...prev, { role: 'user', content: question }]);
     setInput('');
 
@@ -96,6 +110,7 @@ function KbQaPage() {
       }
 
       if (docs.length === 0) {
+        setQaStage(null);
         // 知识库无相关内容：回退到通用聊天（非知识库内容），让问答可用于闲聊
         const answer = await aiClient.chat({
           messages: [
@@ -107,6 +122,8 @@ function KbQaPage() {
             },
             { role: 'user', content: question },
           ],
+          timeout_ms: 120000,
+          timeout_message: '生成回答超时，请稍后重试',
           logTitle: '知识库问答(闲聊回退)',
         });
         setMessages((prev) => [
@@ -120,13 +137,18 @@ function KbQaPage() {
         return;
       }
 
+      // 检索完成，先展示参考来源，再调用 LLM 生成答案，避免用户长时间看不到任何进展。
       setLastSources(docs);
       if (ragWarning) {
         showToast(ragWarning, 'info');
       }
+      setQaStage('generating');
+
       const prompt = buildPrompt(question, docs);
       const answer = await aiClient.chat({
         messages: [{ role: 'user', content: prompt }],
+        timeout_ms: 120000,
+        timeout_message: '生成回答超时，请稍后重试',
         logTitle: '知识库问答',
       });
 
@@ -137,6 +159,7 @@ function KbQaPage() {
       setMessages((prev) => [...prev, { role: 'assistant', content: `出错了：${msg}` }]);
     } finally {
       setLoading(false);
+      setQaStage(null);
     }
   };
 
@@ -193,7 +216,15 @@ function KbQaPage() {
             <div className="kb-qa-message assistant">
               <div className="kb-qa-message-role">AI 助手</div>
               <div className="kb-qa-message-body">
-                <span className="kb-qa-thinking">正在检索资料并生成回答…</span>
+                {qaStage === 'retrieving' && (
+                  <span className="kb-qa-thinking">正在检索参考资料…</span>
+                )}
+                {qaStage === 'generating' && (
+                  <span className="kb-qa-thinking">
+                    已找到 {lastSources.length} 篇参考资料，正在生成回答…
+                  </span>
+                )}
+                {!qaStage && <span className="kb-qa-thinking">正在处理…</span>}
               </div>
             </div>
           )}

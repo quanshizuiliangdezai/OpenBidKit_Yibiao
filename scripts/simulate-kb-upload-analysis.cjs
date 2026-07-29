@@ -11,12 +11,15 @@
  *       覆盖为 null（服务器此时还没有共享分析），界面永远显示「等待处理」，
  *       用户误以为上传没有触发分析。
  *
- * 修复（本次）：
- *   1. renderer 端：仅当本机「完全没有记录」时才调用 hydrateTeamAnalysis。
- *      本地一旦有任何记录（pending/copying/extracting/error/…）一律原样展示。
- *   2. main process 端：hydrateTeamAnalysis 增加防御——若本地已有非 success 记录
- *      且分析任务仍在活跃运行（activePreparations/activeMatches），直接返回本地
- *      状态，避免被服务器 null 覆盖。
+ * 修复（本次最终方案）：
+ *   1. renderer 端：本地未完成（或非 success）时统一调用 hydrateTeamAnalysis，
+ *      把水合决策交给主进程，而不是在 renderer 里用「有无记录」硬切断。
+ *   2. main process 端：hydrateTeamAnalysis 做最终裁判——
+ *      • 本地 success -> 直接返回本地；
+ *      • 本地非 success 且分析任务仍在活跃运行 -> 保护本地进度，返回本地状态；
+ *      • 本机无记录 或 本地非 success 但无活跃任务 -> 从服务器拉取共享分析水合。
+ *   这样既能保护 A 电脑上传后的实时进度，又能让 B 电脑的陈旧 pending/error 被
+ *   服务器已完成的共享分析正确覆盖。
  *
  * 本脚本不依赖 Electron / better-sqlite3，纯逻辑复现并断言修复前后行为。
  */
@@ -43,12 +46,23 @@ function resolvePrevFix(localStatus, serverHasAnalysis) {
   return ls?.status || 'pending';
 }
 
-// FIXED: 仅本机完全无记录时才水合（本次最终修复）
-function resolveFixed(localStatus, serverHasAnalysis) {
+// FIXED: renderer 端本地非 success 即触发水合；最终决策由主进程 hydrateTeamAnalysis
+// 根据「本地是否活跃分析」及「本地是否为 error」判定是否覆盖。
+// isActive=true 表示本地分析任务仍在运行。
+function resolveFixed(localStatus, serverHasAnalysis, isActive) {
   const kbTab = 'team';
   let ls = localStatus;
-  if (kbTab === 'team' && !ls) {
-    ls = serverHasAnalysis ? { status: 'success' } : null;
+  if (kbTab === 'team' && (!ls || ls.status !== 'success')) {
+    // 主进程守卫：
+    // 1) 本地 error 且服务器没有共享分析 -> 保留 error，不覆盖成 pending；
+    // 2) 本地非 success 且分析活跃 -> 保护本地；
+    // 3) 本机无记录 / 非活跃 -> 允许服务器水合。
+    if (ls && ls.status === 'error' && !serverHasAnalysis) {
+      return 'error';
+    }
+    if (!ls || !isActive) {
+      ls = serverHasAnalysis ? { status: 'success' } : null;
+    }
   }
   return ls?.status || 'pending';
 }
@@ -85,7 +99,8 @@ let fixedShowsProgress = true;
 for (const real of pipelineSequence) {
   const buggy = resolveBuggy({ status: real }, false);
   const prevFix = resolvePrevFix({ status: real }, false);
-  const fixed = resolveFixed({ status: real }, false);
+  // A 电脑上传后分析任务活跃，isActive=true
+  const fixed = resolveFixed({ status: real }, false, real !== 'success');
   if (real !== 'success' && buggy !== 'pending') buggyAllPending = false;
   if (real === 'pending' && prevFix === 'pending') prevFixInitialPending = true;
   if (real !== 'success' && fixed !== real) fixedShowsProgress = false;
@@ -103,7 +118,8 @@ console.log(' 场景二：分析中途出错（如 AI 解析失败 / LibreOffice
 console.log('========================================================');
 {
   const buggy = resolveBuggy({ status: 'error' }, false);
-  const fixed = resolveFixed({ status: 'error' }, false);
+  // 出错后分析任务已结束（isActive=false），服务器也无共享分析 -> 显示本地 error
+  const fixed = resolveFixed({ status: 'error' }, false, false);
   console.log(`   本地 error ->  [BUGGY ${statusLabel[buggy]}]  /  [FIXED ${statusLabel[fixed]}]`);
   assert(buggy === 'pending', 'BUGGY：错误被掩盖成「等待处理」，用户无从排查');
   assert(fixed === 'error', 'FIXED：错误状态可见，用户能看到真实失败原因');
@@ -115,15 +131,27 @@ console.log(' 场景三：团队成员 B 打开 A 已分析并回写服务器的
 console.log('========================================================');
 {
   const buggy = resolveBuggy(null, true); // B 本机无记录，服务器有分析
-  const fixed = resolveFixed(null, true);
+  const fixed = resolveFixed(null, true, false);
   console.log(`   本机无记录+服务器有分析 ->  [BUGGY ${statusLabel[buggy]}]  /  [FIXED ${statusLabel[fixed]}]`);
   assert(buggy === 'success' && fixed === 'success', '共享分析可被正确水合为「已完成」');
 }
 {
   const buggy = resolveBuggy(null, false); // B 本机无记录，服务器也还没有分析
-  const fixed = resolveFixed(null, false);
+  const fixed = resolveFixed(null, false, false);
   console.log(`   本机无记录+服务器无分析 ->  [BUGGY ${statusLabel[buggy]}]  /  [FIXED ${statusLabel[fixed]}]`);
   assert(buggy === 'pending' && fixed === 'pending', '真正未分析的文档显示「等待处理」（正确）');
+}
+{
+  // B 本机曾有陈旧 pending（之前 bug 残留），现在 A 已回写服务器，B 无活跃任务
+  const fixed = resolveFixed({ status: 'pending' }, true, false);
+  console.log(`   B 陈旧 pending + 服务器有分析 ->  FIXED 显示：${statusLabel[fixed]}`);
+  assert(fixed === 'success', 'FIXED：B 电脑陈旧的 pending 会被服务器共享分析覆盖为「已完成」');
+}
+{
+  // B 本机曾有 error（之前分析失败），现在 A 已回写服务器，B 无活跃任务
+  const fixed = resolveFixed({ status: 'error' }, true, false);
+  console.log(`   B 本地 error + 服务器有分析 ->  FIXED 显示：${statusLabel[fixed]}`);
+  assert(fixed === 'success', 'FIXED：B 电脑的 error 状态会被服务器共享分析覆盖为「已完成」');
 }
 
 console.log('');
@@ -133,15 +161,15 @@ console.log('========================================================');
 {
   // 关键时序：analyzeExternalFile 创建 pending 后立即返回，renderer 调用 loadTeamTree
   const localStatusAtLoadTime = { status: 'pending' };
-  const fixed = resolveFixed(localStatusAtLoadTime, false);
-  console.log(`   analyzeExternalFile 刚返回（本地 pending）-> FIXED 显示：${statusLabel[fixed]}`);
-  assert(fixed === 'pending', 'FIXED：上传瞬间的 pending 不被水合，用户能看到「等待处理」而非被覆盖');
+  const fixed = resolveFixed(localStatusAtLoadTime, false, true);
+  console.log(`   analyzeExternalFile 刚返回（本地 pending+活跃）-> FIXED 显示：${statusLabel[fixed]}`);
+  assert(fixed === 'pending', 'FIXED：上传瞬间的 pending 因活跃任务被保护，不会被覆盖');
 }
 {
   // prepareDocument 已推进到 copying 后，renderer 收到 event 并刷新
   const localStatusAfterEvent = { status: 'copying', progress: 5, message: '正在复制原始文件' };
-  const fixed = resolveFixed(localStatusAfterEvent, false);
-  console.log(`   prepareDocument 推进到 copying 后 -> FIXED 显示：${statusLabel[fixed]}`);
+  const fixed = resolveFixed(localStatusAfterEvent, false, true);
+  console.log(`   prepareDocument 推进到 copying 后（活跃）-> FIXED 显示：${statusLabel[fixed]}`);
   assert(fixed === 'copying', 'FIXED：分析进度推进后如实显示，不会被水合回退');
 }
 
@@ -172,7 +200,7 @@ if (process.exitCode === 1) {
   console.log('✅ 全部断言通过：');
   console.log('   • A 电脑上传后会如实显示实时分析进度，不再卡在「等待处理」');
   console.log('   • 分析出错时错误状态可见，不会被掩盖');
-  console.log('   • B 电脑仍可水合 A 已回写的共享分析');
+  console.log('   • B 电脑（含陈旧 pending/error）仍可水合 A 已回写的共享分析');
   console.log('   • hydrateTeamAnalysis 服务端防御活跃任务被覆盖');
 }
 console.log('========================================================');
