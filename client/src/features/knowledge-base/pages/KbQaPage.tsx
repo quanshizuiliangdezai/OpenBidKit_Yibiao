@@ -85,6 +85,7 @@ function KbQaPage() {
       }
 
       // 2) 回退：语义检索无结果或不可用时，使用关键词检索
+      let keywordError: string | undefined;
       if (docs.length === 0) {
         const limit = 3;
         const [teamRes, personalRes] = await Promise.all([
@@ -95,6 +96,17 @@ function KbQaPage() {
             ? window.yibiao?.kbPersonal.qaRetrieve(question, limit)
             : Promise.resolve({ success: true, data: [] }),
         ]);
+
+        const teamErr = (teamRes as { success: boolean; data?: KbQaDocument[]; error?: string; needLogin?: boolean } | undefined)?.error;
+        const personalErr = (personalRes as { success: boolean; data?: KbQaDocument[]; error?: string; needLogin?: boolean } | undefined)?.error;
+        if (teamRes && !teamRes.success && teamErr) {
+          keywordError = `团队库检索失败：${teamErr}`;
+        }
+        if (personalRes && !personalRes.success && personalErr) {
+          keywordError = keywordError
+            ? `${keywordError}；个人库检索失败：${personalErr}`
+            : `个人库检索失败：${personalErr}`;
+        }
 
         const teamDocs: KbQaDocument[] = Array.isArray(teamRes?.data) ? teamRes.data : [];
         const personalDocs: KbQaDocument[] = Array.isArray(personalRes?.data) ? personalRes.data : [];
@@ -111,6 +123,11 @@ function KbQaPage() {
 
       if (docs.length === 0) {
         setQaStage(null);
+        const sourceLabel =
+          source === 'team' ? '团队库' : source === 'personal' ? '个人库' : '团队库和个人库';
+        const errHint = keywordError ? `（${keywordError}）` : '';
+        const emptyHint = `未在${sourceLabel}中检索到与「${question}」相关的内容。${errHint}\n\n可能原因：\n1. 知识库中暂无匹配文档；\n2. 文档尚未分析完成；\n3. 关键词与文档标题/正文差异较大。\n\n你可以尝试更换关键词、切换到「全部」来源，或直接提问，我会基于通用知识作答。`;
+
         // 知识库无相关内容：回退到通用聊天（非知识库内容），让问答可用于闲聊
         const answer = await aiClient.chat({
           messages: [
@@ -130,7 +147,7 @@ function KbQaPage() {
           ...prev,
           {
             role: 'assistant',
-            content: `${answer || '模型未返回内容'}\n\n> 注：以上内容未引用知识库，为通用回答。`,
+            content: `${emptyHint}\n\n---\n\n${answer || '模型未返回内容'}\n\n> 注：以上回答未引用知识库，为通用回答。`,
           },
         ]);
         setLastSources([]);

@@ -68,10 +68,13 @@ function registerKbPersonalIpc({ kbAuthService, app }) {
   // 知识库问答召回（带 content_text 片段）
   ipcMain.handle('kb-personal:qa-retrieve', async (_event, keyword, limit) => {
     try {
+      console.log('[kb-personal:qa-retrieve] keyword=%s limit=%s', keyword, limit);
       const docs = await personalService.qaRetrieve(keyword, limit);
+      console.log('[kb-personal:qa-retrieve] returned %d docs for keyword=%s', docs?.length || 0, keyword);
       return { success: true, data: docs };
     } catch (err) {
-      return { error: err.message || '召回失败' };
+      console.error('[kb-personal:qa-retrieve] failed:', err);
+      return { success: false, error: err.message || '召回失败' };
     }
   });
 
