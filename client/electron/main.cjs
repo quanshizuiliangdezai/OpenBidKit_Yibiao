@@ -418,6 +418,21 @@ function openDeveloperTokenStatsWindow() {
 
 app.whenReady().then(() => {
   nativeTheme.themeSource = 'light';
+
+  // 全局焦点恢复：Electron 在窗口重新获得 OS 焦点时，webContents 有时未拿到
+  // 键盘焦点，表现为“输入框点不进去，必须点外部再点回”。这里在每次窗口获得
+  // 焦点时强制让 webContents 取得键盘焦点，从根上解决所有页面 / 所有窗口的同类
+  // 输入问题（登录框、新建文件夹、设置表单、各类弹窗输入框等）。
+  app.on('browser-window-focus', (_event, win) => {
+    try {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.focus();
+      }
+    } catch (_e) {
+      /* 忽略偶发的焦点操作异常 */
+    }
+  });
+
   registerAssetProtocol();
   const mainWindow = createMainWindow();
   scheduleGpuStartupProbeClear(mainWindow);

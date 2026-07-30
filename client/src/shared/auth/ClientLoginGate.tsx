@@ -109,15 +109,15 @@ export function ClientLoginGate() {
           <form className="client-login-form" onSubmit={handleLogin}>
             <label>
               服务器地址
-              <input value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} onClick={(e) => e.currentTarget.focus()} placeholder={DEFAULT_SERVER} />
+              <input value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} placeholder={DEFAULT_SERVER} />
             </label>
             <label>
               用户名
-              <input ref={usernameRef} autoFocus value={username} onChange={(e) => setUsername(e.target.value)} onClick={(e) => e.currentTarget.focus()} required />
+              <input ref={usernameRef} autoFocus value={username} onChange={(e) => setUsername(e.target.value)} required />
             </label>
             <label>
               密码
-              <input ref={passwordRef} type="password" value={password} onChange={(e) => setPassword(e.target.value)} onClick={(e) => e.currentTarget.focus()} required />
+              <input ref={passwordRef} type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
             </label>
             <button type="submit" className="client-login-submit" disabled={busy}>
               {busy ? '登录中…' : '登录'}
@@ -127,23 +127,23 @@ export function ClientLoginGate() {
           <form className="client-login-form" onSubmit={handleRegister}>
             <label>
               服务器地址
-              <input value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} onClick={(e) => e.currentTarget.focus()} placeholder={DEFAULT_SERVER} />
+              <input value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} placeholder={DEFAULT_SERVER} />
             </label>
             <label>
               姓名
-              <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} onClick={(e) => e.currentTarget.focus()} autoFocus required />
+              <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} autoFocus required />
             </label>
             <label>
               用户名
-              <input value={username} onChange={(e) => setUsername(e.target.value)} onClick={(e) => e.currentTarget.focus()} required />
+              <input value={username} onChange={(e) => setUsername(e.target.value)} required />
             </label>
             <label>
               部门（选填）
-              <input value={department} onChange={(e) => setDepartment(e.target.value)} onClick={(e) => e.currentTarget.focus()} />
+              <input value={department} onChange={(e) => setDepartment(e.target.value)} />
             </label>
             <label>
               密码（至少 6 位）
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onClick={(e) => e.currentTarget.focus()} required />
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
             </label>
             <button type="submit" className="client-login-submit" disabled={busy}>
               {busy ? '提交中…' : '提交注册'}
