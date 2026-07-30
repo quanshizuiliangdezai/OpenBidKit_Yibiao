@@ -114,17 +114,36 @@ async function ensureLogin() {
 
 // ---------------- 进度收集（替代 webContents.send）----------------
 // 用一个伪 webContents 对象捕获进度事件，写入内存状态表，供 /status 轮询。
-const taskStates = new Map(); // documentId -> { status, progress, message, updatedAt }
+const taskStates = new Map(); // documentId -> { status, progress, message, item_count, ... , updatedAt }
+
+// 从分析进度事件/终态结果里提取统计字段（原始分析逻辑会随事件携带这些数字）
+function pickStats(doc) {
+  if (!doc) {
+    return { item_count: 0, candidate_item_count: 0, block_count: 0, filtered_block_count: 0 };
+  }
+  return {
+    item_count: doc.item_count || doc.final_item_count || 0,
+    candidate_item_count: doc.candidate_item_count || 0,
+    block_count: doc.block_count || 0,
+    filtered_block_count: doc.filtered_block_count || 0,
+  };
+}
+
 function makeFakeWebContents(documentId) {
   return {
     isDestroyed: () => false,
     send: (channel, payload) => {
       if (channel === 'knowledge-base:event' && payload && payload.document) {
         const d = payload.document;
+        const s = pickStats(d);
         taskStates.set(String(documentId), {
           status: d.status || 'pending',
           progress: d.progress || 0,
           message: d.message || '',
+          item_count: s.item_count,
+          candidate_item_count: s.candidate_item_count,
+          block_count: s.block_count,
+          filtered_block_count: s.filtered_block_count,
           updatedAt: new Date().toISOString(),
         });
       }
@@ -192,14 +211,22 @@ async function runTask(task) {
     // 用 await 版：等整条分析管线（转 MD→切块→抽取→saveAnalysis 回写服务器）真正跑完再返回。
     const finalDoc = await kbService.analyzeExternalFileAwait(documentId, stagedPath, fileName, folderId, fakeWc, libraryType || 'team');
     const finalStatus = finalDoc && finalDoc.status;
+    const s = pickStats(finalDoc);
     if (finalStatus === 'success') {
-      taskStates.set(String(documentId), { status: 'success', progress: 100, message: '分析完成，已同步服务器', updatedAt: new Date().toISOString() });
+      taskStates.set(String(documentId), {
+        status: 'success', progress: 100, message: '分析完成，已同步服务器',
+        item_count: s.item_count, candidate_item_count: s.candidate_item_count,
+        block_count: s.block_count, filtered_block_count: s.filtered_block_count,
+        updatedAt: new Date().toISOString(),
+      });
     } else {
       // 管线内部失败（如筛选后无正文），透传真实错误状态与消息。
       taskStates.set(String(documentId), {
         status: finalStatus === 'error' ? 'error' : (finalStatus || 'error'),
         progress: finalDoc && finalDoc.progress || 0,
         message: (finalDoc && (finalDoc.message || finalDoc.error)) || '分析未成功完成',
+        item_count: s.item_count, candidate_item_count: s.candidate_item_count,
+        block_count: s.block_count, filtered_block_count: s.filtered_block_count,
         updatedAt: new Date().toISOString(),
       });
     }

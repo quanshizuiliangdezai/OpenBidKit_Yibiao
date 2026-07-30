@@ -739,7 +739,7 @@ export interface YibiaoBridge {
     listTrash: () => Promise<{ success: boolean; data?: KbTrash; error?: string; needLogin?: boolean }>;
     restoreFromTrash: (type: 'folder' | 'document', id: string | number) => Promise<KbTeamResult>;
     exportZip: (ids: Array<string | number>) => Promise<{ success: boolean; data?: { localPath: string }; error?: string; canceled?: boolean; needLogin?: boolean }>;
-    getAnalysisStatus: (documentId: string | number) => Promise<{ success: boolean; data?: { status: string; progress: number; message: string }; error?: string; needLogin?: boolean }>;
+    getAnalysisStatus: (documentId: string | number) => Promise<{ success: boolean; data?: { status: string; progress: number; message: string; item_count?: number; candidate_item_count?: number; block_count?: number; filtered_block_count?: number }; error?: string; needLogin?: boolean }>;
     retryAnalysis: (documentId: string | number) => Promise<{ success: boolean; data?: { success?: boolean; message?: string }; error?: string; needLogin?: boolean }>;
   },
   kbQa: {
@@ -777,7 +777,7 @@ export interface YibiaoBridge {
     exportZip: (ids: Array<string | number>) => Promise<{ success: boolean; data?: { localPath: string }; error?: string; canceled?: boolean }>;
     importToTeam: (documentIds: Array<string | number>, targetTeamFolderId: string | number, folderIds?: Array<string | number>) => Promise<{ success: boolean; data?: { created: Array<{ document_id: string | number; remote_id: number; file_name?: string }>; failed: Array<{ document_id: string | number; error: string }>; auto_folder?: boolean; folder_name?: string; folder_id?: string }; error?: string }>;
     importFromTeam: (documentIds: Array<string | number>, folderIds?: Array<string | number>) => Promise<{ success: boolean; data?: { synced: Array<{ id: number; ok: boolean; personal_id?: string; folder_id?: string; file_name?: string; msg: string }> }; error?: string }>;
-    getAnalysisStatus: (documentId: string | number) => Promise<{ success: boolean; data?: { status: string; progress: number; message: string }; error?: string; needLogin?: boolean }>;
+    getAnalysisStatus: (documentId: string | number) => Promise<{ success: boolean; data?: { status: string; progress: number; message: string; item_count?: number; candidate_item_count?: number; block_count?: number; filtered_block_count?: number }; error?: string; needLogin?: boolean }>;
     retryAnalysis: (documentId: string | number) => Promise<{ success: boolean; data?: { success?: boolean; message?: string }; error?: string; needLogin?: boolean }>;
   },
 }

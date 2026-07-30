@@ -451,8 +451,9 @@ function KnowledgeBasePage() {
   // 当前激活的 tab 引用：供轮询器/列表刷新判断是否为本库，避免串库覆盖
   const kbTabRef = useRef<'team' | 'personal'>(kbTab);
   useEffect(() => { kbTabRef.current = kbTab; }, [kbTab]);
-  // 正在被轮询的文档集合：列表刷新时保留其实时进度，避免被本地陈旧状态覆盖
-  const pollingDocsRef = useRef<Set<string>>(new Set());
+  // 正在被轮询的文档集合：docId -> {tab, folderId}
+  // 切页时只暂停轮询器（不清除本集合），切回后可恢复，避免进度丢失
+  const pollingDocsRef = useRef<Map<string, { tab: 'team' | 'personal'; folderId: string }>>(new Map());
 
   useEffect(() => {
     if (showCreateFolder && createFolderInputRef.current) {
@@ -653,7 +654,7 @@ function KnowledgeBasePage() {
     trackPageView(viewer ? `knowledge-base/viewer/${viewer.mode}` : `knowledge-base/${kbTab === 'team' ? 'team' : 'personal'}`);
   }, [viewer?.mode, kbTab]);
 
-  // 切换 tab 时重新加载数据
+  // 切换 tab 时重新加载数据，并恢复当前 tab 下被暂停的轮询
   useEffect(() => {
     if (authStatus?.loggedIn) {
       if (kbTab === 'team') {
@@ -661,6 +662,16 @@ function KnowledgeBasePage() {
       } else {
         void loadPersonalTree();
       }
+      // 切回本 tab 时，恢复之前因切页而暂停的轮询器
+      pollingDocsRef.current.forEach((meta, docId) => {
+        if (meta.tab === kbTab && !analysisPollersRef.current.has(docId)) {
+          if (kbTab === 'team') {
+            startTeamAnalysisPolling(docId, meta.folderId);
+          } else {
+            startPersonalAnalysisPolling(docId, meta.folderId);
+          }
+        }
+      });
     }
   }, [kbTab]);
 
@@ -1104,28 +1115,48 @@ function KnowledgeBasePage() {
     const docId = String(documentId);
     // 已有轮询器则不重复启动
     if (analysisPollersRef.current.has(docId)) return;
-    pollingDocsRef.current.add(docId);
+    pollingDocsRef.current.set(docId, { tab: 'team', folderId: String(folderId || '') });
 
     const POLL_INTERVAL = 3000;
     const MAX_ATTEMPTS = 200; // ~10 分钟兜底，防大文件冷启动挂死
     let attempts = 0;
 
-    const stop = () => {
+    // 暂停：切页等非终态场景只清 interval，保留 pollingDocsRef 以便切回恢复
+    const pause = () => {
       const handle = analysisPollersRef.current.get(docId);
       if (handle !== undefined) {
         window.clearInterval(handle);
         analysisPollersRef.current.delete(docId);
       }
+    };
+
+    // 停止：终态/出错/超时时彻底清理
+    const stop = () => {
+      pause();
       pollingDocsRef.current.delete(docId);
     };
 
-    // 把服务器轮询到的实时状态/进度写入 index，让进度条实时可见
-    const applyLive = (status: KnowledgeDocument['status'], progress?: number, message?: string) => {
+    // 把服务器轮询到的实时状态/进度/统计写入 index，让进度条与统计实时可见（不整树刷新，避免闪烁）
+    const applyLive = (
+      status: KnowledgeDocument['status'],
+      progress?: number,
+      message?: string,
+      stats?: { item_count?: number; candidate_item_count?: number; block_count?: number; filtered_block_count?: number },
+    ) => {
       setIndex((prev) => ({
         ...prev,
         documents: prev.documents.map((item) =>
           item.id === docId
-            ? { ...item, status, progress: progress ?? item.progress, message: message ?? item.message }
+            ? {
+                ...item,
+                status,
+                progress: progress ?? item.progress,
+                message: message ?? item.message,
+                item_count: stats?.item_count ?? item.item_count,
+                candidate_item_count: stats?.candidate_item_count ?? item.candidate_item_count,
+                block_count: stats?.block_count ?? item.block_count,
+                filtered_block_count: stats?.filtered_block_count ?? item.filtered_block_count,
+              }
             : item
         ),
       }));
@@ -1133,9 +1164,9 @@ function KnowledgeBasePage() {
 
     const tick = async () => {
       attempts += 1;
-      // 已切换到其他库：停止本库轮询，避免串库写 index
+      // 已切换到其他库：暂停本库轮询，避免串库写 index；保留 pollingDocsRef 切回恢复
       if (kbTabRef.current !== 'team') {
-        stop();
+        pause();
         return;
       }
       try {
@@ -1149,8 +1180,14 @@ function KnowledgeBasePage() {
         const status = (res.data?.status || 'idle') as KnowledgeDocument['status'];
         const progress = res.data?.progress;
         const message = res.data?.message;
+        const stats = {
+          item_count: res.data?.item_count,
+          candidate_item_count: res.data?.candidate_item_count,
+          block_count: res.data?.block_count,
+          filtered_block_count: res.data?.filtered_block_count,
+        };
         if (status === 'success') {
-          applyLive('success', 100, message);
+          applyLive('success', 100, message, stats);
           stop();
           // 从服务器水合共享分析到本地库，然后刷新树显示最终状态
           try {
@@ -1160,16 +1197,13 @@ function KnowledgeBasePage() {
           }
           await loadTeamTree();
         } else if (status === 'error') {
-          applyLive('error', progress, message);
+          applyLive('error', progress, message, stats);
           stop();
           await loadTeamTree();
           showToast('服务器分析该文档失败，可在文档菜单重试', 'error');
         } else {
-          // pending / processing：实时写入进度，并周期性刷新树
-          applyLive(status, progress, message);
-          if (attempts % 2 === 0) {
-            void loadTeamTree();
-          }
+          // pending / processing：实时写入进度与统计（仅更新该文档，不整树刷新，避免闪烁）
+          applyLive(status, progress, message, stats);
           if (attempts >= MAX_ATTEMPTS) {
             stop();
             await loadTeamTree();
@@ -1191,28 +1225,46 @@ function KnowledgeBasePage() {
   const startPersonalAnalysisPolling = (documentId: string, folderId: string) => {
     const docId = String(documentId);
     if (analysisPollersRef.current.has(docId)) return;
-    pollingDocsRef.current.add(docId);
+    pollingDocsRef.current.set(docId, { tab: 'personal', folderId: String(folderId || '') });
 
     const POLL_INTERVAL = 3000;
     const MAX_ATTEMPTS = 200; // ~10 分钟兜底
     let attempts = 0;
 
-    const stop = () => {
+    const pause = () => {
       const handle = analysisPollersRef.current.get(docId);
       if (handle !== undefined) {
         window.clearInterval(handle);
         analysisPollersRef.current.delete(docId);
       }
+    };
+
+    const stop = () => {
+      pause();
       pollingDocsRef.current.delete(docId);
     };
 
-    // 把服务器轮询到的实时状态/进度写入 index，让进度条实时可见
-    const applyLive = (status: KnowledgeDocument['status'], progress?: number, message?: string) => {
+    // 把服务器轮询到的实时状态/进度/统计写入 index，让进度条与统计实时可见（不整树刷新，避免闪烁）
+    const applyLive = (
+      status: KnowledgeDocument['status'],
+      progress?: number,
+      message?: string,
+      stats?: { item_count?: number; candidate_item_count?: number; block_count?: number; filtered_block_count?: number },
+    ) => {
       setIndex((prev) => ({
         ...prev,
         documents: prev.documents.map((item) =>
           item.id === docId
-            ? { ...item, status, progress: progress ?? item.progress, message: message ?? item.message }
+            ? {
+                ...item,
+                status,
+                progress: progress ?? item.progress,
+                message: message ?? item.message,
+                item_count: stats?.item_count ?? item.item_count,
+                candidate_item_count: stats?.candidate_item_count ?? item.candidate_item_count,
+                block_count: stats?.block_count ?? item.block_count,
+                filtered_block_count: stats?.filtered_block_count ?? item.filtered_block_count,
+              }
             : item
         ),
       }));
@@ -1220,9 +1272,9 @@ function KnowledgeBasePage() {
 
     const tick = async () => {
       attempts += 1;
-      // 已切换到其他库：停止本库轮询，避免串库写 index
+      // 已切换到其他库：暂停本库轮询，避免串库写 index；保留 pollingDocsRef 切回恢复
       if (kbTabRef.current !== 'personal') {
-        stop();
+        pause();
         return;
       }
       try {
@@ -1235,8 +1287,14 @@ function KnowledgeBasePage() {
         const status = (res.data?.status || 'idle') as KnowledgeDocument['status'];
         const progress = res.data?.progress;
         const message = res.data?.message;
+        const stats = {
+          item_count: res.data?.item_count,
+          candidate_item_count: res.data?.candidate_item_count,
+          block_count: res.data?.block_count,
+          filtered_block_count: res.data?.filtered_block_count,
+        };
         if (status === 'success') {
-          applyLive('success', 100, message);
+          applyLive('success', 100, message, stats);
           stop();
           try {
             await window.yibiao?.knowledgeBase.hydratePersonalAnalysis(docId, folderId ?? '');
@@ -1245,16 +1303,13 @@ function KnowledgeBasePage() {
           }
           await loadPersonalTree();
         } else if (status === 'error') {
-          applyLive('error', progress, message);
+          applyLive('error', progress, message, stats);
           stop();
           await loadPersonalTree();
           showToast('服务器分析该文档失败，可在文档菜单重试', 'error');
         } else {
-          // pending / processing / unknown：实时写入进度，并周期性刷新树
-          applyLive(status, progress, message);
-          if (attempts % 2 === 0) {
-            void loadPersonalTree();
-          }
+          // pending / processing / unknown：实时写入进度与统计（仅更新该文档，不整树刷新，避免闪烁）
+          applyLive(status, progress, message, stats);
           if (attempts >= MAX_ATTEMPTS) {
             stop();
             await loadPersonalTree();
