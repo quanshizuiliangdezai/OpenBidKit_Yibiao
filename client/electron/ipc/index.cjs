@@ -313,6 +313,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerConfigIpc({
     configStore,
     aiService,
+    kbAuthService,
     onConfigChanged(nextConfig, previousConfig) {
       agentService.handleConfigChanged?.(nextConfig, previousConfig);
     },

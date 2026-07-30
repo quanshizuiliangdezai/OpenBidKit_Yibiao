@@ -43,6 +43,25 @@ if 'YIBIAO_SYNC_TOKEN' not in os.environ:
 # 主库（master.sqlite）写操作并发锁（防止多线程同时写导致 database is locked）
 _MASTER_LOCK = threading.RLock()
 
+# 分析 Worker（独立 Node 进程）地址；上传文档后触发服务器侧分析。
+WORKER_URL = os.environ.get('KB_WORKER_URL', 'http://127.0.0.1:15006')
+
+
+def _trigger_worker_analysis(document_id, library_type='team'):
+    """上传文档后异步触发分析 Worker。fire-and-forget，失败仅记日志不影响上传返回。"""
+    try:
+        import urllib.request
+        import urllib.error
+        payload = json.dumps({'documentId': document_id, 'libraryType': library_type}).encode('utf-8')
+        req = urllib.request.Request(
+            WORKER_URL + '/analyze', data=payload,
+            headers={'Content-Type': 'application/json'}, method='POST')
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            log('[worker] 已触发分析 doc=%s -> %s' % (document_id, resp.status))
+    except Exception as e:
+        log('[worker] 触发分析失败 doc=%s: %s' % (document_id, e))
+
+
 # kb_db 配置（import 后覆盖模块级变量，再 init）
 kb_db.DB_PATH = os.environ.get('KB_DB', '/toubiao/yibiao-kb-server/kb.sqlite')
 kb_db.KB_DATA_DIR = os.environ.get('KB_DATA_DIR', '/toubiao/yibiao-kb-server/knowledge-base')
@@ -848,7 +867,78 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
                 role=employee.get('role'), action='doc', target_type='document', target_id=doc.get('id'),
                 detail='上传文档: %s (%.1fKB)' % (title, (len(f['data']) / 1024)), ip=_client_ip(self))
+            # 触发服务器侧分析 Worker（独立 Node 进程）。
+            # _trigger_worker_analysis 是模块级函数（不是类方法），且用后台线程发起，
+            # 避免同步 urlopen 拖慢上传响应，也避免触发失败影响上传结果。
+            threading.Thread(
+                target=_trigger_worker_analysis,
+                args=(doc.get('id'), 'team'),
+                daemon=True,
+            ).start()
             return self._send(200, {'success': True, 'data': {k: doc[k] for k in ('id', 'folder_id', 'owner_id', 'title', 'file_name', 'file_size', 'mime_type', 'created_at')}})
+
+        # ==================== 全局模型配置（管理员设置，全员生效）====================
+        if path == '/api/admin/model-config':
+            admin = self._is_admin()
+            if not admin:
+                return self._send(403, {'error': '需要管理员权限'})
+            if method == 'GET':
+                cfg = kb_db.get_model_config()
+                # api_key 不回传给前端，避免泄露；仅返回是否已配置
+                return self._send(200, {
+                    'success': True,
+                    'data': {
+                        'base_url': cfg['base_url'],
+                        'analysis_model': cfg['analysis_model'],
+                        'qa_model': cfg['qa_model'],
+                        'embedding_model': cfg['embedding_model'],
+                        'has_api_key': bool(cfg['api_key']),
+                        'updated_at': cfg['updated_at'],
+                    },
+                })
+            # POST：保存配置
+            base_url = (data.get('base_url') or '').strip()
+            api_key = data.get('api_key')  # 允许为空（表示清除）；前端传 null/空串即清除
+            analysis_model = (data.get('analysis_model') or '').strip() or 'sensenova-6.7-flash-lite'
+            qa_model = (data.get('qa_model') or '').strip() or 'sensenova-6.7-flash-lite'
+            embedding_model = (data.get('embedding_model') or '').strip() or None
+            if not base_url:
+                return self._send(400, {'error': 'base_url 不能为空'})
+            # api_key 为空串或 null 时清除；否则更新。前端若传 '__UNCHANGED__' 表示保留原值
+            if api_key == '__UNCHANGED__':
+                api_key = kb_db.get_model_config().get('api_key')
+            elif api_key is not None:
+                api_key = api_key.strip() or None
+            kb_db.save_model_config(base_url, api_key, analysis_model, qa_model, embedding_model)
+            audit_event(
+                account_id=admin['id'], account_name=admin.get('display_name') or admin.get('username'),
+                role='admin', action='admin', target_type='model_config', target_id='1',
+                detail='更新全局模型配置', ip=_client_ip(self))
+            return self._send(200, {'success': True, 'message': '模型配置已保存'})
+
+        # ==================== 代理 sub2api 模型列表（服务端持 key）====================
+        if path == '/api/models':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            cfg = kb_db.get_model_config()
+            if not cfg.get('api_key'):
+                return self._send(200, {'success': True, 'models': [], 'message': '服务端尚未配置 API Key'})
+            try:
+                import urllib.request
+                req = urllib.request.Request(cfg['base_url'].rstrip('/') + '/models',
+                                             headers={'Authorization': 'Bearer ' + cfg['api_key']})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    body = json.loads(resp.read().decode('utf-8'))
+                models = []
+                raw = body.get('data') if isinstance(body, dict) else None
+                if isinstance(raw, list):
+                    for m in raw:
+                        if isinstance(m, dict) and m.get('id'):
+                            models.append(m['id'])
+                return self._send(200, {'success': True, 'models': models})
+            except Exception as e:
+                return self._send(200, {'success': False, 'models': [], 'message': '拉取模型列表失败: %s' % str(e)})
 
         # ==================== 团队库分析共享：写回分析结果 ====================
         m = re.match(r'^/api/documents/(\d+)/analysis$', path)
@@ -878,6 +968,31 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 role=employee.get('role'), action='doc', target_type='document', target_id=m.group(1),
                 detail='团队库分析写回（全员共享）', ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '分析已保存，全员可共享'})
+
+        # ==================== 团队库分析重试：重新触发服务器侧 Worker 分析 ====================
+        m = re.match(r'^/api/documents/(\d+)/analysis/retry$', path)
+        if m:
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            doc = kb_db.get_document(m.group(1))
+            if not doc:
+                return self._send(404, {'error': '文档不存在'})
+            # 清除旧的共享分析结果，让重新分析从干净状态开始
+            try:
+                kb_db.delete_team_analysis(m.group(1))
+            except Exception:
+                pass
+            threading.Thread(
+                target=_trigger_worker_analysis,
+                args=(m.group(1), 'team'),
+                daemon=True,
+            ).start()
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee.get('username'),
+                role=employee.get('role'), action='doc', target_type='document', target_id=m.group(1),
+                detail='团队库分析重试', ip=_client_ip(self))
+            return self._send(200, {'success': True, 'message': '已重新触发分析'})
 
         # ==================== 个人库写接口（需登录会话）====================
         if path == '/api/personal/folders':
@@ -2173,6 +2288,46 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             return self._serve_html('kb_register.html')
         if path == '/api/health':
             return self._send(200, {'status': 'ok'})
+        # ==================== 全局模型配置（GET，管理员）====================
+        if path == '/api/admin/model-config':
+            admin = self._is_admin()
+            if not admin:
+                return self._send(403, {'error': '需要管理员权限'})
+            cfg = kb_db.get_model_config()
+            return self._send(200, {
+                'success': True,
+                'data': {
+                    'base_url': cfg['base_url'],
+                    'analysis_model': cfg['analysis_model'],
+                    'qa_model': cfg['qa_model'],
+                    'embedding_model': cfg['embedding_model'],
+                    'has_api_key': bool(cfg['api_key']),
+                    'updated_at': cfg['updated_at'],
+                },
+            })
+        # ==================== 代理 sub2api 模型列表（GET）====================
+        if path == '/api/models':
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            cfg = kb_db.get_model_config()
+            if not cfg.get('api_key'):
+                return self._send(200, {'success': True, 'models': [], 'message': '服务端尚未配置 API Key'})
+            try:
+                import urllib.request
+                req = urllib.request.Request(cfg['base_url'].rstrip('/') + '/models',
+                                             headers={'Authorization': 'Bearer ' + cfg['api_key']})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    body = json.loads(resp.read().decode('utf-8'))
+                models = []
+                raw = body.get('data') if isinstance(body, dict) else None
+                if isinstance(raw, list):
+                    for m in raw:
+                        if isinstance(m, dict) and m.get('id'):
+                            models.append(m['id'])
+                return self._send(200, {'success': True, 'models': models})
+            except Exception as e:
+                return self._send(200, {'success': False, 'models': [], 'message': '拉取模型列表失败: %s' % str(e)})
         if path == '/api/me':
             e = self._auth()
             if not e:
@@ -2234,6 +2389,25 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 return self._send(404, {'error': '文件已丢失'})
             self._send_file(full, doc['file_name'], doc['mime_type'])
             return
+        # ==================== 分析进度（代理 Worker 状态，供客户端轮询）====================
+        m = re.match(r'^/api/documents/(\d+)/analysis/status$', path)
+        if m:
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            try:
+                import urllib.request
+                req = urllib.request.Request(WORKER_URL + '/status/' + m.group(1))
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    st = json.loads(resp.read().decode('utf-8'))
+                return self._send(200, st)
+            except Exception as e:
+                # Worker 不可达时回退：直接看服务器是否已有分析结果
+                analysis = kb_db.get_team_analysis(m.group(1))
+                if analysis:
+                    return self._send(200, {'documentId': m.group(1), 'status': 'success', 'progress': 100, 'message': '分析完成'})
+                return self._send(200, {'documentId': m.group(1), 'status': 'unknown', 'progress': 0, 'message': 'Worker 不可达: %s' % e})
+
         # ==================== 团队库分析共享：读取分析结果 ====================
         m = re.match(r'^/api/documents/(\d+)/analysis$', path)
         if m:

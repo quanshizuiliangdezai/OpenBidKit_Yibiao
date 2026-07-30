@@ -436,6 +436,15 @@ function KnowledgeBasePage() {
     });
   };
   const createFolderInputRef = useRef<HTMLInputElement>(null);
+  // 服务器侧分析轮询器：docId -> setInterval 句柄。卸载时统一清理，避免泄漏。
+  const analysisPollersRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    const pollers = analysisPollersRef.current;
+    return () => {
+      pollers.forEach((handle) => window.clearInterval(handle));
+      pollers.clear();
+    };
+  }, []);
   useEffect(() => {
     if (showCreateFolder && createFolderInputRef.current) {
       const id = requestAnimationFrame(() => createFolderInputRef.current?.focus());
@@ -967,42 +976,21 @@ function KnowledgeBasePage() {
       await loadTeamTree();
       if (targetFolderId) setActiveFolderId(targetFolderId);
       await loadTeamTree();
-      // 为已同步到团队的文档启动本地分析（与团队库上传、团队→个人同步保持一致）
+      // 服务器侧分析：同步到团队的文档由服务器 Worker 自动分析，客户端仅轮询状态。
       const analyzeErrors: string[] = [];
       if (targetFolderId) {
         for (const item of result.data?.created || []) {
-          if (!item.remote_id || !item.file_name) {
+          if (!item.remote_id) {
             analyzeErrors.push(`文档「${item.file_name || item.document_id}」缺少同步信息，跳过`);
             continue;
           }
-          try {
-            const downloadResult = await window.yibiao?.kbTeam.downloadDocument(
-              String(item.remote_id),
-              item.file_name,
-            );
-            if (downloadResult?.success && downloadResult.data?.localPath) {
-              await window.yibiao?.knowledgeBase.analyzeExternalFile(
-                String(item.remote_id),
-                downloadResult.data.localPath,
-                item.file_name,
-                targetFolderId,
-                'team',
-              );
-            } else {
-              analyzeErrors.push(`文档「${item.file_name}」下载失败，无法分析`);
-            }
-          } catch (analyzeError) {
-            analyzeErrors.push(
-              `文档「${item.file_name}」启动分析失败：${analyzeError instanceof Error ? analyzeError.message : String(analyzeError)}`,
-            );
-          }
+          startTeamAnalysisPolling(String(item.remote_id), targetFolderId);
         }
       }
-      // 分析是异步过程，稍后刷新两次以显示分析进度与结果
-      window.setTimeout(() => { void loadTeamTree(); }, 4000);
-      window.setTimeout(() => { void loadTeamTree(); }, 12000);
+      // 立即刷新，让新文档以「分析中」出现（后续状态由轮询器驱动刷新）
+      window.setTimeout(() => { void loadTeamTree(); }, 2000);
       if (analyzeErrors.length) {
-        showToast(`已同步 ${created} 个文档，但 ${analyzeErrors.length} 个未能自动分析：${analyzeErrors[0]}`, 'error');
+        showToast(`已同步 ${created} 个文档，但 ${analyzeErrors.length} 个缺少同步信息`, 'error');
       }
     } catch (error) {
       showToast(error instanceof Error ? error.message : '同步到团队失败', 'error');
@@ -1091,6 +1079,73 @@ function KnowledgeBasePage() {
     }
   };
 
+  /**
+   * 启动服务器侧团队库分析轮询：上传后由服务器 Worker 分析，客户端轮询 status，
+   * 分析完成后从服务器水合共享结果到本地库并刷新树。
+   * 不再依赖本地 LibreOffice/AI 分析管道。
+   */
+  const startTeamAnalysisPolling = (documentId: string, folderId: string) => {
+    const docId = String(documentId);
+    // 已有轮询器则不重复启动
+    if (analysisPollersRef.current.has(docId)) return;
+
+    const POLL_INTERVAL = 3000;
+    const MAX_ATTEMPTS = 200; // ~10 分钟兜底，防大文件冷启动挂死
+    let attempts = 0;
+
+    const stop = () => {
+      const handle = analysisPollersRef.current.get(docId);
+      if (handle !== undefined) {
+        window.clearInterval(handle);
+        analysisPollersRef.current.delete(docId);
+      }
+    };
+
+    const tick = async () => {
+      attempts += 1;
+      try {
+        const res = await window.yibiao?.kbTeam.getAnalysisStatus(docId);
+        if (!res?.success) {
+          // needLogin / 网络错误：停止轮询，交给列表刷新兜底
+          if (res?.needLogin) stop();
+          if (attempts >= MAX_ATTEMPTS) stop();
+          return;
+        }
+        const status = res.data?.status || 'idle';
+        if (status === 'success') {
+          stop();
+          // 从服务器水合共享分析到本地库，然后刷新树显示最终状态
+          try {
+            await window.yibiao?.knowledgeBase.hydrateTeamAnalysis(docId, folderId ?? '');
+          } catch {
+            /* 水合失败也刷新，loadTeamTree 内部会再次尝试 hydrate */
+          }
+          await loadTeamTree();
+        } else if (status === 'error') {
+          stop();
+          await loadTeamTree();
+          showToast('服务器分析该文档失败，可在文档菜单重试', 'error');
+        } else {
+          // pending / processing：周期性刷新树，让进度可见
+          if (attempts % 2 === 0) {
+            void loadTeamTree();
+          }
+          if (attempts >= MAX_ATTEMPTS) {
+            stop();
+            await loadTeamTree();
+          }
+        }
+      } catch {
+        if (attempts >= MAX_ATTEMPTS) stop();
+      }
+    };
+
+    const handle = window.setInterval(() => { void tick(); }, POLL_INTERVAL);
+    analysisPollersRef.current.set(docId, handle);
+    // 立即触发一次，缩短首屏等待
+    void tick();
+  };
+
   const uploadDocuments = async (targetFolder = activeFolder) => {
     if (!targetFolder) {
       showToast('请先创建文件夹', 'info');
@@ -1145,26 +1200,15 @@ function KnowledgeBasePage() {
         throw new Error(result?.error || '上传文档失败');
       }
       if (result.uploaded?.length) {
-        // 为每个上传成功的文档下载并启动本地分析
+        // 服务器侧分析：上传后由服务器 Worker 自动分析，客户端只需轮询状态并水合结果。
+        // 不再下载文件到本地做 LibreOffice/AI 分析。
         for (const doc of result.uploaded) {
-          try {
-            const downloadResult = await window.yibiao?.kbTeam.downloadDocument(doc.id, String(doc.file_name || doc.title || doc.name || doc.original_name));
-            if (downloadResult?.success && downloadResult.data?.localPath) {
-              await window.yibiao?.knowledgeBase.analyzeExternalFile(
-                String(doc.id),
-                downloadResult.data.localPath,
-                String(doc.file_name || doc.title || doc.name || doc.original_name || 'document'),
-                String(targetFolder.id),
-                'team',
-              );
-            }
-          } catch (analyzeError) {
-            console.warn(`文档 ${doc.id} 启动分析失败`, analyzeError);
-          }
+          if (!doc?.id) continue;
+          startTeamAnalysisPolling(String(doc.id), String(targetFolder.id));
         }
-        // 刷新列表
+        // 先刷新一次列表让新文档以「分析中」状态出现
         await loadTeamTree();
-        showToast(`已上传 ${result.uploaded.length} 个文档${result.errors?.length ? `，${result.errors.length} 个失败` : ''}`, 'success');
+        showToast(`已上传 ${result.uploaded.length} 个文档，服务器分析中${result.errors?.length ? `，${result.errors.length} 个失败` : ''}`, 'success');
       } else if (result.errors?.length) {
         showToast(`上传失败：${result.errors.map((e) => e.file).join('、')}`, 'error');
       }
@@ -1555,11 +1599,21 @@ function KnowledgeBasePage() {
   const retryDocument = async (document: KnowledgeDocument) => {
     setRetryingDocumentIds((prev) => new Set(prev).add(document.id));
     try {
-      // 从服务器重新下载文件并重新分析
-      const downloadResult =
-        kbTab === 'personal'
-          ? await window.yibiao?.kbPersonal.downloadDocument(document.id, document.file_name)
-          : await window.yibiao?.kbTeam.downloadDocument(document.id, document.file_name);
+      // 团队库：服务器侧重试。触发 Worker 重新分析并本地清旧记录，然后轮询状态。
+      if (kbTab === 'team') {
+        const result = await window.yibiao?.kbTeam.retryAnalysis(document.id);
+        if (!result?.success) {
+          throw new Error(result?.error || '重试分析失败');
+        }
+        // 清除本地旧分析缓存，让 hydrate 拉回新结果
+        await window.yibiao?.knowledgeBase.deleteLocalAnalysis(document.id);
+        startTeamAnalysisPolling(String(document.id), String(document.folder_id));
+        await loadTeamTree();
+        showToast('已重新触发服务器分析', 'success');
+        return;
+      }
+      // 个人库：本地重试（保留本地分析管道）
+      const downloadResult = await window.yibiao?.kbPersonal.downloadDocument(document.id, document.file_name);
       if (!downloadResult?.success || !downloadResult.data?.localPath) {
         throw new Error(downloadResult?.error || '下载文档失败');
       }

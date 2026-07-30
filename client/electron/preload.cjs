@@ -46,6 +46,9 @@ const bridge = {
     listModels: (config) => ipcRenderer.invoke('config:list-models', config),
     getModelInfo: (modelName) => ipcRenderer.invoke('config:get-model-info', modelName),
     openConfigFolder: () => ipcRenderer.invoke('config:open-config-folder'),
+    loadGlobal: () => ipcRenderer.invoke('config:load-global'),
+    saveGlobal: (cfg) => ipcRenderer.invoke('config:save-global', cfg),
+    listModelsGlobal: () => ipcRenderer.invoke('config:list-models-global'),
   },
   license: {
     getStatus: () => ipcRenderer.invoke('license:get-status'),
@@ -237,6 +240,8 @@ const bridge = {
     listTrash: () => ipcRenderer.invoke('kb-team:list-trash'),
     restoreFromTrash: (type, id) => ipcRenderer.invoke('kb-team:restore-from-trash', type, id),
     exportZip: (ids) => ipcRenderer.invoke('kb-team:export-zip', ids),
+    getAnalysisStatus: (documentId) => ipcRenderer.invoke('kb-team:get-analysis-status', documentId),
+    retryAnalysis: (documentId) => ipcRenderer.invoke('kb-team:retry-analysis', documentId),
   },
   kbPersonal: {
     getTree: () => ipcRenderer.invoke('kb-personal:get-tree'),

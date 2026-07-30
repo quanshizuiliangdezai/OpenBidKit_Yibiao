@@ -109,6 +109,32 @@ function registerKbTeamIpc({ kbTeamService, kbAuthService }) {
     }
   });
 
+  // 服务器侧分析实时状态轮询（上传后前端轮询直到 success/error）
+  ipcMain.handle('kb-team:get-analysis-status', async (_event, documentId) => {
+    try {
+      if (!kbAuthService.isLoggedIn()) {
+        return { success: false, error: '未登录团队库', needLogin: true };
+      }
+      const data = await kbTeamService.getAnalysisStatus(documentId);
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, error: error?.message || '获取分析状态失败' };
+    }
+  });
+
+  // 团队库分析重试：重新触发服务器侧 Worker 分析
+  ipcMain.handle('kb-team:retry-analysis', async (_event, documentId) => {
+    try {
+      if (!kbAuthService.isLoggedIn()) {
+        return { success: false, error: '未登录团队库', needLogin: true };
+      }
+      const data = await kbTeamService.retryAnalysis(documentId);
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, error: error?.message || '重试分析失败' };
+    }
+  });
+
   // C1 重命名文件夹
   ipcMain.handle('kb-team:rename-folder', async (_event, folderId, name) => {
     try {

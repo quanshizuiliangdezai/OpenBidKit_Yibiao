@@ -531,6 +531,22 @@ export interface YibiaoBridge {
     listModels: (config?: ClientConfig) => Promise<ModelListResult>;
     getModelInfo: (modelName: string) => Promise<ModelInfoResult>;
     openConfigFolder: () => Promise<{ success: boolean; path: string }>;
+    // 全局模型配置（服务端托管，管理员设置，全员生效）
+    loadGlobal: () => Promise<{
+      success?: boolean;
+      status?: number;
+      error?: string;
+      data?: {
+        base_url?: string;
+        analysis_model?: string;
+        qa_model?: string;
+        embedding_model?: string;
+        has_api_key?: boolean;
+        updated_at?: string | null;
+      };
+    }>;
+    saveGlobal: (cfg: { base_url?: string; api_key?: string; analysis_model?: string; qa_model?: string; embedding_model?: string | null }) => Promise<{ success?: boolean; status?: number; error?: string; [key: string]: unknown }>;
+    listModelsGlobal: () => Promise<{ success: boolean; models: string[]; error?: string; message?: string }>;
   };
   license: {
     getStatus: () => Promise<LicenseRuntimeStatus>;
@@ -716,6 +732,8 @@ export interface YibiaoBridge {
     listTrash: () => Promise<{ success: boolean; data?: KbTrash; error?: string; needLogin?: boolean }>;
     restoreFromTrash: (type: 'folder' | 'document', id: string | number) => Promise<KbTeamResult>;
     exportZip: (ids: Array<string | number>) => Promise<{ success: boolean; data?: { localPath: string }; error?: string; canceled?: boolean; needLogin?: boolean }>;
+    getAnalysisStatus: (documentId: string | number) => Promise<{ success: boolean; data?: { status: string; progress: number; message: string }; error?: string; needLogin?: boolean }>;
+    retryAnalysis: (documentId: string | number) => Promise<{ success: boolean; data?: { success?: boolean; message?: string }; error?: string; needLogin?: boolean }>;
   },
   kbQa: {
     retrieveContext: (question: string, options?: KbQaRetrieveOptions) => Promise<{ success: boolean; data?: KbQaDocument[]; warnings?: string[]; error?: string }>;

@@ -136,6 +136,15 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_operation_log_created_at ON operation_log(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_operation_log_account ON operation_log(account_id);
+        CREATE TABLE IF NOT EXISTS model_config (
+            id              INTEGER PRIMARY KEY CHECK (id = 1),
+            analysis_model  TEXT NOT NULL DEFAULT 'sensenova-6.7-flash-lite',
+            qa_model        TEXT NOT NULL DEFAULT 'sensenova-6.7-flash-lite',
+            embedding_model TEXT,
+            base_url        TEXT NOT NULL DEFAULT 'http://127.0.0.1:15005/v1',
+            api_key         TEXT,
+            updated_at      TEXT NOT NULL
+        );
         ''')
     conn.close()
     # 一次性迁移：旧库 owner_id 为 NOT NULL 且无 ON DELETE 规则，删员工会被外键挡住。
@@ -1382,6 +1391,68 @@ def delete_team_analysis(document_id):
         conn = _conn()
         try:
             conn.execute("DELETE FROM kb_analysis WHERE document_id=?", (int(document_id),))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+# ---------- 全局模型配置（管理员在设置页配置，全员统一生效）----------
+
+def _ensure_model_config_row():
+    """确保 id=1 的配置行存在（首次访问时插入默认）。"""
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT id FROM model_config WHERE id=1").fetchone()
+        if not row:
+            now = datetime.datetime.now().isoformat()
+            conn.execute(
+                "INSERT INTO model_config (id, analysis_model, qa_model, embedding_model, base_url, api_key, updated_at) "
+                "VALUES (1, 'sensenova-6.7-flash-lite', 'sensenova-6.7-flash-lite', NULL, "
+                "'http://127.0.0.1:15005/v1', NULL, ?)",
+                (now,))
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def get_model_config():
+    """返回全局模型配置 dict（base_url/api_key/analysis_model/qa_model/embedding_model）。"""
+    _ensure_model_config_row()
+    with _lock:
+        conn = _conn()
+        try:
+            row = conn.execute(
+                "SELECT base_url, api_key, analysis_model, qa_model, embedding_model, updated_at "
+                "FROM model_config WHERE id=1").fetchone()
+        finally:
+            conn.close()
+    if not row:
+        return {
+            'base_url': 'http://127.0.0.1:15005/v1', 'api_key': None,
+            'analysis_model': 'sensenova-6.7-flash-lite', 'qa_model': 'sensenova-6.7-flash-lite',
+            'embedding_model': None, 'updated_at': None,
+        }
+    return {
+        'base_url': row['base_url'],
+        'api_key': row['api_key'],
+        'analysis_model': row['analysis_model'],
+        'qa_model': row['qa_model'],
+        'embedding_model': row['embedding_model'],
+        'updated_at': row['updated_at'],
+    }
+
+
+def save_model_config(base_url, api_key, analysis_model, qa_model, embedding_model):
+    """更新全局模型配置（upsert id=1）。"""
+    _ensure_model_config_row()
+    with _lock:
+        conn = _conn()
+        try:
+            conn.execute(
+                "UPDATE model_config SET base_url=?, api_key=?, analysis_model=?, qa_model=?, "
+                "embedding_model=?, updated_at=? WHERE id=1",
+                (base_url, api_key, analysis_model, qa_model, embedding_model,
+                 datetime.datetime.now().isoformat()))
             conn.commit()
         finally:
             conn.close()

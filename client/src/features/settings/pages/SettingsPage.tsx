@@ -1,5 +1,6 @@
 ﻿import { useEffect, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
+import { useAuth } from '../../../shared/auth/AuthContext';
 import { DetailHelpLink, FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
@@ -586,9 +587,98 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [agentSelfCheckResult, setAgentSelfCheckResult] = useState<AgentSelfCheckResult | null>(null);
   const [exportingAgentSelfCheckReport, setExportingAgentSelfCheckReport] = useState(false);
   const { showToast } = useToast();
+  const { isAdmin } = useAuth();
+
+  // ---------- 全局模型配置（服务端托管，仅管理员可见）----------
+  const [globalModelConfig, setGlobalModelConfig] = useState<{
+    base_url: string;
+    analysis_model: string;
+    qa_model: string;
+    embedding_model: string;
+    has_api_key: boolean;
+    updated_at: string | null;
+  } | null>(null);
+  const [globalApiKey, setGlobalApiKey] = useState(''); // 仅在输入时暂存；保存时传 '__UNCHANGED__' 表示不改
+  const [globalModelOptions, setGlobalModelOptions] = useState<string[]>([]);
+  const [loadingGlobalModels, setLoadingGlobalModels] = useState(false);
+  const [savingGlobalConfig, setSavingGlobalConfig] = useState(false);
+
+  const loadGlobalModelConfig = async () => {
+    if (!isAdmin) {
+      return;
+    }
+    try {
+      const res = await window.yibiao?.config.loadGlobal();
+      if (res?.success && res.data) {
+        setGlobalModelConfig({
+          base_url: res.data.base_url || 'http://127.0.0.1:15005/v1',
+          analysis_model: res.data.analysis_model || 'sensenova-6.7-flash-lite',
+          qa_model: res.data.qa_model || 'sensenova-6.7-flash-lite',
+          embedding_model: res.data.embedding_model || '',
+          has_api_key: Boolean(res.data.has_api_key),
+          updated_at: res.data.updated_at || null,
+        });
+        setGlobalApiKey('');
+      } else if (res && !res.success) {
+        showToast(res.error || '读取全局模型配置失败', 'error');
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '读取全局模型配置失败', 'error');
+    }
+  };
+
+  const fetchGlobalModels = async () => {
+    if (!isAdmin) {
+      return;
+    }
+    setLoadingGlobalModels(true);
+    try {
+      const res = await window.yibiao?.config.listModelsGlobal();
+      if (res?.success) {
+        setGlobalModelOptions(Array.isArray(res.models) ? res.models : []);
+        showToast(`获取到 ${res.models?.length || 0} 个可用模型`, 'info');
+      } else if (res && !res.success) {
+        showToast(res.error || res.message || '获取模型列表失败', 'error');
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '获取模型列表失败', 'error');
+    } finally {
+      setLoadingGlobalModels(false);
+    }
+  };
+
+  const saveGlobalModelConfig = async () => {
+    if (!isAdmin || !globalModelConfig) {
+      return;
+    }
+    setSavingGlobalConfig(true);
+    try {
+      const res = await window.yibiao?.config.saveGlobal({
+        base_url: globalModelConfig.base_url.trim(),
+        api_key: globalApiKey.trim() ? globalApiKey.trim() : '__UNCHANGED__',
+        analysis_model: globalModelConfig.analysis_model.trim() || 'sensenova-6.7-flash-lite',
+        qa_model: globalModelConfig.qa_model.trim() || 'sensenova-6.7-flash-lite',
+        embedding_model: globalModelConfig.embedding_model.trim() || null,
+      });
+      if (res?.success) {
+        showToast('全局模型配置已保存，全员立即生效', 'success');
+        setGlobalApiKey('');
+        await loadGlobalModelConfig();
+      } else {
+        showToast(res?.error || '保存失败', 'error');
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '保存失败', 'error');
+    } finally {
+      setSavingGlobalConfig(false);
+    }
+  };
 
   useEffect(() => {
     void loadTextConfig();
+    if (isAdmin) {
+      void loadGlobalModelConfig();
+    }
     void window.yibiao?.agent.listRuntimes()
       .then((runtimes) => setAgentRuntimes(runtimes || []))
       .catch(() => setAgentRuntimes([]));

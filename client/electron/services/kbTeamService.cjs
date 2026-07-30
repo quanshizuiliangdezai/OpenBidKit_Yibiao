@@ -327,6 +327,32 @@ function createKbTeamService({ kbAuthService, app }) {
     return data?.data || null;
   }
 
+  /** 重新触发服务器侧 Worker 分析（团队库文档重试）。
+   * 服务端契约：POST /api/documents/<id>/analysis/retry → {success, message} */
+  async function retryAnalysis(documentId) {
+    const { ok, status, data } = await api(`/api/documents/${documentId}/analysis/retry`, { method: 'POST' });
+    if (!ok) throw new Error(data?.error || `重试分析失败（${status}）`);
+    return data || { success: true };
+  }
+
+  /** 读取服务器侧 Worker 实时分析状态（用于上传后轮询）。
+   * 服务端契约：GET /api/documents/<id>/analysis/status → {status, progress, message}
+   *  - status: 'pending' | 'processing' | 'success' | 'error' | 'idle'
+   *  - progress: 0-100
+   *  - message: 当前阶段描述
+   * 404（无状态记录）视为 idle，让调用方继续轮询或回退。 */
+  async function getAnalysisStatus(documentId) {
+    const { ok, status, data } = await api(`/api/documents/${documentId}/analysis/status`);
+    if (status === 404) return { status: 'idle', progress: 0, message: '' };
+    if (!ok) throw new Error(data?.error || `读取分析状态失败（${status}）`);
+    const payload = data?.data || data || {};
+    return {
+      status: payload.status || 'idle',
+      progress: typeof payload.progress === 'number' ? payload.progress : 0,
+      message: payload.message || '',
+    };
+  }
+
   // ---- 文档版本历史（优化④）----
 
   async function getDocumentVersions(documentId) {
@@ -356,6 +382,8 @@ function createKbTeamService({ kbAuthService, app }) {
     exportZip,
     saveAnalysis,
     getAnalysis,
+    getAnalysisStatus,
+    retryAnalysis,
   };
 }
 
