@@ -1027,14 +1027,34 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             payload = data.get('payload')
             if payload is None:
                 return self._send(400, {'error': '缺少 payload'})
+            # 即使客户端没传顶层 item_count/block_count，也从 payload 提取出来
+            # （Worker 只传 {status, payload} 时由服务端兜底解析）
+            item_count = data.get('item_count')
+            block_count = data.get('block_count')
+            filtered_block_count = data.get('filtered_block_count')
+            candidate_item_count = data.get('candidate_item_count')
+            if item_count is None or block_count is None:
+                try:
+                    payload_obj = json.loads(payload) if isinstance(payload, str) else payload
+                    if isinstance(payload_obj, dict):
+                        if item_count is None and isinstance(payload_obj.get('final_items'), list):
+                            item_count = len(payload_obj['final_items'])
+                        if block_count is None and isinstance(payload_obj.get('blocks'), list):
+                            block_count = len(payload_obj['blocks'])
+                        if filtered_block_count is None and isinstance(payload_obj.get('filtered_blocks'), list):
+                            filtered_block_count = len(payload_obj['filtered_blocks'])
+                        if candidate_item_count is None and isinstance(payload_obj.get('candidate_items'), list):
+                            candidate_item_count = len(payload_obj['candidate_items'])
+                except (TypeError, ValueError):
+                    pass
             if not isinstance(payload, str):
                 payload = json.dumps(payload, ensure_ascii=False)
             kb_db.save_team_analysis(
                 m.group(1),
                 data.get('status') or 'success',
                 payload,
-                item_count=data.get('item_count'),
-                block_count=data.get('block_count'),
+                item_count=item_count,
+                block_count=block_count,
                 analyzer_id=employee['id'],
                 analyzer_name=employee.get('display_name') or employee.get('username'),
             )

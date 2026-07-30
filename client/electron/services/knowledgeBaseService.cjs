@@ -2501,6 +2501,13 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
           });
         }
         knowledgeBaseStore.hydrateFromServerPayload(documentId, analysis.payload);
+        // 从服务端响应顶层统计写入本地 knowledge_documents（payload 本身不含顶层计数）
+        try {
+          knowledgeBaseStore.updateDocument(documentId, {
+            item_count: Number(analysis.item_count || 0),
+            block_count: Number(analysis.block_count || 0),
+          });
+        } catch { /* 顶层统计更新失败不影响主流程 */ }
         return getLocalDocumentStatus(documentId);
       } catch (err) {
         debugLog(documentId, 'hydrate:failed', { message: err?.message || String(err) });
