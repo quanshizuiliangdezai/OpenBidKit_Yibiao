@@ -274,7 +274,33 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname.startsWith('/status/')) {
       const id = url.pathname.split('/status/')[1];
-      const st = taskStates.get(id) || { status: 'unknown', progress: 0, message: '无任务记录' };
+      // 1. 内存里有就直接返回（实时/进行中）
+      let st = taskStates.get(id);
+      // 2. 内存没有 → 回查 kb.sqlite 已有分析结果（Worker 重启后老文档也能显示真实状态）
+      if (!st) {
+        try {
+          const db = new Database(KB_DB, { readonly: true, fileMustExist: false });
+          const row = db.prepare(
+            'SELECT status, item_count, candidate_item_count, block_count, filtered_block_count, updated_at '
+            + 'FROM kb_analysis WHERE document_id=?'
+          ).get(parseInt(id, 10));
+          db.close();
+          if (row && row.status) {
+            st = {
+              status: row.status,
+              progress: row.status === 'success' ? 100 : 0,
+              message: row.status === 'success' ? '分析完成，已同步服务器' : '历史任务记录',
+              item_count: row.item_count || 0,
+              candidate_item_count: row.candidate_item_count || 0,
+              block_count: row.block_count || 0,
+              filtered_block_count: row.filtered_block_count || 0,
+              updatedAt: row.updated_at || new Date().toISOString(),
+            };
+          }
+        } catch (e) { /* kb.sqlite 不可读时忽略 */ }
+      }
+      // 3. 都没有：未分析过
+      if (!st) st = { status: 'pending', progress: 0, message: '尚未分析' };
       return send(200, { documentId: id, ...st });
     }
     if (req.method === 'GET' && url.pathname === '/health') {
