@@ -89,6 +89,7 @@ function adaptPersonalDocument(
 
 const statusLabels: Record<KnowledgeDocument['status'], string> = {
   pending: '等待处理',
+  queued: '排队中',
   copying: '复制文件',
   converting: '转换 Markdown',
   extracting: '提取条目',
@@ -97,8 +98,10 @@ const statusLabels: Record<KnowledgeDocument['status'], string> = {
   recovering: '补漏中',
   analyzing: 'AI 整理中',
   saving: '保存结果',
+  processing: '服务器分析中',
   success: '完成',
   error: '失败',
+  unknown: '未知',
 };
 
 // 回收站 24h 倒计时显示
@@ -445,10 +448,26 @@ function KnowledgeBasePage() {
       pollers.clear();
     };
   }, []);
+  // 当前激活的 tab 引用：供轮询器/列表刷新判断是否为本库，避免串库覆盖
+  const kbTabRef = useRef<'team' | 'personal'>(kbTab);
+  useEffect(() => { kbTabRef.current = kbTab; }, [kbTab]);
+  // 正在被轮询的文档集合：列表刷新时保留其实时进度，避免被本地陈旧状态覆盖
+  const pollingDocsRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     if (showCreateFolder && createFolderInputRef.current) {
-      const id = requestAnimationFrame(() => createFolderInputRef.current?.focus());
-      return () => cancelAnimationFrame(id);
+      // 先把操作系统焦点拉回主窗口（中文输入法需要窗口级焦点，否则输不进字）
+      void window.yibiao?.focusMainWindow?.();
+      // 延迟到下一帧布局完成后再聚焦输入框，规避 rAF 抢焦点与重渲染丢焦点
+      const timer = window.setTimeout(() => {
+        try {
+          createFolderInputRef.current?.focus();
+          createFolderInputRef.current?.select?.();
+        } catch {
+          /* 忽略聚焦异常 */
+        }
+      }, 60);
+      return () => window.clearTimeout(timer);
     }
   }, [showCreateFolder]);
   // 父子关系映射（用于折叠判断与折叠箭头）
@@ -777,6 +796,8 @@ function KnowledgeBasePage() {
 
   // 从服务器获取文件夹+文档列表，合并本地分析状态
   const loadTeamTree = async () => {
+    // 非团队库激活时直接返回，不写入 index，避免覆盖个人库内容（串库 bug）
+    if (kbTabRef.current !== 'team') return;
     try {
       setListLoading(true);
       const result = await window.yibiao?.kbTeam.getTree();
@@ -809,7 +830,19 @@ function KnowledgeBasePage() {
         }),
       );
       const folders = serverFolders.map(adaptServerFolder);
-      setIndex({ folders, documents });
+      // 保留正在轮询文档的实时进度，避免被本地陈旧状态覆盖
+      setIndex((prev) => ({
+        folders,
+        documents: documents.map((doc) => {
+          if (pollingDocsRef.current.has(String(doc.id))) {
+            const prevDoc = prev.documents.find((d) => d.id === doc.id);
+            if (prevDoc && prevDoc.status !== 'success' && (prevDoc.progress || prevDoc.status)) {
+              return { ...doc, status: prevDoc.status, progress: prevDoc.progress, message: prevDoc.message };
+            }
+          }
+          return doc;
+        }),
+      }));
       setActiveFolderId((currentId) => (
         folders.some((folder) => folder.id === currentId) ? currentId : folders[0]?.id || ''
       ));
@@ -822,6 +855,8 @@ function KnowledgeBasePage() {
 
   // 从服务器获取个人库文件夹+文档列表（master.sqlite，已有分析状态）
   const loadPersonalTree = async () => {
+    // 非个人库激活时直接返回，不写入 index，避免覆盖团队库内容（串库 bug）
+    if (kbTabRef.current !== 'personal') return;
     try {
       setListLoading(true);
       const result = await window.yibiao?.kbPersonal.getTree();
@@ -843,7 +878,19 @@ function KnowledgeBasePage() {
           return adaptPersonalDocument(doc, localStatus);
         }),
       );
-      setIndex({ folders, documents });
+      // 保留正在轮询文档的实时进度，避免被本地陈旧状态覆盖
+      setIndex((prev) => ({
+        folders,
+        documents: documents.map((doc) => {
+          if (pollingDocsRef.current.has(String(doc.id))) {
+            const prevDoc = prev.documents.find((d) => d.id === doc.id);
+            if (prevDoc && prevDoc.status !== 'success' && (prevDoc.progress || prevDoc.status)) {
+              return { ...doc, status: prevDoc.status, progress: prevDoc.progress, message: prevDoc.message };
+            }
+          }
+          return doc;
+        }),
+      }));
       setActiveFolderId((currentId) => (
         folders.some((folder: KnowledgeFolder) => folder.id === currentId) ? currentId : folders[0]?.id || ''
       ));
@@ -1057,6 +1104,7 @@ function KnowledgeBasePage() {
     const docId = String(documentId);
     // 已有轮询器则不重复启动
     if (analysisPollersRef.current.has(docId)) return;
+    pollingDocsRef.current.add(docId);
 
     const POLL_INTERVAL = 3000;
     const MAX_ATTEMPTS = 200; // ~10 分钟兜底，防大文件冷启动挂死
@@ -1068,10 +1116,28 @@ function KnowledgeBasePage() {
         window.clearInterval(handle);
         analysisPollersRef.current.delete(docId);
       }
+      pollingDocsRef.current.delete(docId);
+    };
+
+    // 把服务器轮询到的实时状态/进度写入 index，让进度条实时可见
+    const applyLive = (status: KnowledgeDocument['status'], progress?: number, message?: string) => {
+      setIndex((prev) => ({
+        ...prev,
+        documents: prev.documents.map((item) =>
+          item.id === docId
+            ? { ...item, status, progress: progress ?? item.progress, message: message ?? item.message }
+            : item
+        ),
+      }));
     };
 
     const tick = async () => {
       attempts += 1;
+      // 已切换到其他库：停止本库轮询，避免串库写 index
+      if (kbTabRef.current !== 'team') {
+        stop();
+        return;
+      }
       try {
         const res = await window.yibiao?.kbTeam.getAnalysisStatus(docId);
         if (!res?.success) {
@@ -1080,8 +1146,11 @@ function KnowledgeBasePage() {
           if (attempts >= MAX_ATTEMPTS) stop();
           return;
         }
-        const status = res.data?.status || 'idle';
+        const status = (res.data?.status || 'idle') as KnowledgeDocument['status'];
+        const progress = res.data?.progress;
+        const message = res.data?.message;
         if (status === 'success') {
+          applyLive('success', 100, message);
           stop();
           // 从服务器水合共享分析到本地库，然后刷新树显示最终状态
           try {
@@ -1091,11 +1160,13 @@ function KnowledgeBasePage() {
           }
           await loadTeamTree();
         } else if (status === 'error') {
+          applyLive('error', progress, message);
           stop();
           await loadTeamTree();
           showToast('服务器分析该文档失败，可在文档菜单重试', 'error');
         } else {
-          // pending / processing：周期性刷新树，让进度可见
+          // pending / processing：实时写入进度，并周期性刷新树
+          applyLive(status, progress, message);
           if (attempts % 2 === 0) {
             void loadTeamTree();
           }
@@ -1120,6 +1191,7 @@ function KnowledgeBasePage() {
   const startPersonalAnalysisPolling = (documentId: string, folderId: string) => {
     const docId = String(documentId);
     if (analysisPollersRef.current.has(docId)) return;
+    pollingDocsRef.current.add(docId);
 
     const POLL_INTERVAL = 3000;
     const MAX_ATTEMPTS = 200; // ~10 分钟兜底
@@ -1131,10 +1203,28 @@ function KnowledgeBasePage() {
         window.clearInterval(handle);
         analysisPollersRef.current.delete(docId);
       }
+      pollingDocsRef.current.delete(docId);
+    };
+
+    // 把服务器轮询到的实时状态/进度写入 index，让进度条实时可见
+    const applyLive = (status: KnowledgeDocument['status'], progress?: number, message?: string) => {
+      setIndex((prev) => ({
+        ...prev,
+        documents: prev.documents.map((item) =>
+          item.id === docId
+            ? { ...item, status, progress: progress ?? item.progress, message: message ?? item.message }
+            : item
+        ),
+      }));
     };
 
     const tick = async () => {
       attempts += 1;
+      // 已切换到其他库：停止本库轮询，避免串库写 index
+      if (kbTabRef.current !== 'personal') {
+        stop();
+        return;
+      }
       try {
         const res = await window.yibiao?.kbPersonal.getAnalysisStatus(docId);
         if (!res?.success) {
@@ -1142,8 +1232,11 @@ function KnowledgeBasePage() {
           if (attempts >= MAX_ATTEMPTS) stop();
           return;
         }
-        const status = res.data?.status || 'idle';
+        const status = (res.data?.status || 'idle') as KnowledgeDocument['status'];
+        const progress = res.data?.progress;
+        const message = res.data?.message;
         if (status === 'success') {
+          applyLive('success', 100, message);
           stop();
           try {
             await window.yibiao?.knowledgeBase.hydratePersonalAnalysis(docId, folderId ?? '');
@@ -1152,11 +1245,13 @@ function KnowledgeBasePage() {
           }
           await loadPersonalTree();
         } else if (status === 'error') {
+          applyLive('error', progress, message);
           stop();
           await loadPersonalTree();
           showToast('服务器分析该文档失败，可在文档菜单重试', 'error');
         } else {
-          // pending / processing / unknown：周期性刷新树，让进度可见
+          // pending / processing / unknown：实时写入进度，并周期性刷新树
+          applyLive(status, progress, message);
           if (attempts % 2 === 0) {
             void loadPersonalTree();
           }
@@ -1919,6 +2014,7 @@ function KnowledgeBasePage() {
             ref={createFolderInputRef}
             value={newFolderName}
             onChange={(event) => setNewFolderName(event.target.value)}
+            onClick={(event) => event.currentTarget.focus()}
             placeholder="输入文件夹名称"
           />
           {newFolderParentId ? (

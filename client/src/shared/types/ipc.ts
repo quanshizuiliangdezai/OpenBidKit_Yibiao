@@ -505,6 +505,8 @@ export interface YibiaoBridge {
   appName: string;
   platform: string;
   getVersion: () => Promise<string>;
+  // 把操作系统焦点拉回主窗口（中文输入法需要窗口级焦点才能输入）
+  focusMainWindow: () => Promise<void>;
   getGpuHardwareAccelerationStatus: () => Promise<GpuHardwareAccelerationStatus>;
   saveGpuHardwareAccelerationPreference: (enabled: boolean) => Promise<ConfigSaveResult & { enabled: boolean; configured: boolean; restartRequired: boolean }>;
   startGpuHardwareAccelerationTrial: () => Promise<{ success: boolean }>;

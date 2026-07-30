@@ -4,6 +4,7 @@ const bridge = {
   appName: '易标投标工具箱',
   platform: process.platform,
   getVersion: () => ipcRenderer.invoke('app:get-version'),
+  focusMainWindow: () => ipcRenderer.invoke('app:focus-main-window'),
   getGpuHardwareAccelerationStatus: () => ipcRenderer.invoke('app:get-gpu-hardware-acceleration-status'),
   saveGpuHardwareAccelerationPreference: (enabled) => ipcRenderer.invoke('app:save-gpu-hardware-acceleration-preference', enabled),
   startGpuHardwareAccelerationTrial: () => ipcRenderer.invoke('app:start-gpu-hardware-acceleration-trial'),

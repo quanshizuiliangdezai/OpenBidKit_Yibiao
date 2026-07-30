@@ -385,6 +385,15 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   }
 
   ipcMain.handle('app:get-version', () => app.getVersion());
+  // 渲染进程请求把操作系统焦点拉回主窗口（新建文件夹输入框需要窗口级焦点才能输入中文）
+  ipcMain.handle('app:focus-main-window', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (!mainWindow.isVisible()) mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.focus();
+    }
+  });
   ipcMain.handle('required-online-services:get-status', () => getRequiredOnlineServiceStatus());
 
   ipcMain.handle('app:get-gpu-hardware-acceleration-status', () => {
