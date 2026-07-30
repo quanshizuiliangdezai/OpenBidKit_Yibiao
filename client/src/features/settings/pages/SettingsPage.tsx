@@ -1990,6 +1990,126 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
               </select>
             </label>
           </div>
+
+          {isAdmin && (
+            <>
+              <div className="settings-group-title">全局模型配置（服务端托管 · 仅管理员）</div>
+              <div className="settings-list">
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>说明</strong>
+                    <span>此配置由服务端集中托管，保存后对全体成员的服务器侧知识库分析与问答立即生效，与上方本机文本模型互不影响。</span>
+                  </div>
+                </div>
+                {globalModelConfig ? (
+                  <>
+                    <label className="settings-row">
+                      <div className="settings-row-copy">
+                        <strong>Base URL</strong>
+                        <span>服务端 AI 网关地址（sub2api），默认 http://127.0.0.1:15005/v1</span>
+                      </div>
+                      <input
+                        type="text"
+                        value={globalModelConfig.base_url}
+                        placeholder="http://127.0.0.1:15005/v1"
+                        onChange={(event) => setGlobalModelConfig((prev) => (prev ? { ...prev, base_url: event.target.value } : prev))}
+                      />
+                    </label>
+                    <label className="settings-row">
+                      <div className="settings-row-copy">
+                        <strong>API Key</strong>
+                        <span>{globalModelConfig.has_api_key ? '已配置（留空则保留原值，不会覆盖）' : '尚未配置，请填写服务端网关 Key'}</span>
+                      </div>
+                      <input
+                        type="password"
+                        value={globalApiKey}
+                        placeholder={globalModelConfig.has_api_key ? '••••••（留空不修改）' : '请输入服务端 API Key'}
+                        onChange={(event) => setGlobalApiKey(event.target.value)}
+                      />
+                    </label>
+                    <label className="settings-row">
+                      <div className="settings-row-copy">
+                        <strong>分析模型</strong>
+                        <span>服务器侧文档分析使用的模型</span>
+                      </div>
+                      <div className="settings-control-with-action">
+                        {globalModelOptions.length > 0 ? (
+                          <select
+                            value={globalModelConfig.analysis_model}
+                            onChange={(event) => setGlobalModelConfig((prev) => (prev ? { ...prev, analysis_model: event.target.value } : prev))}
+                          >
+                            {globalModelOptions.map((m) => (<option value={m} key={`ga-${m}`}>{m}</option>))}
+                          </select>
+                        ) : (
+                          <input
+                            type="text"
+                            value={globalModelConfig.analysis_model}
+                            placeholder="sensenova-6.7-flash-lite"
+                            onChange={(event) => setGlobalModelConfig((prev) => (prev ? { ...prev, analysis_model: event.target.value } : prev))}
+                          />
+                        )}
+                      </div>
+                    </label>
+                    <label className="settings-row">
+                      <div className="settings-row-copy">
+                        <strong>问答模型</strong>
+                        <span>知识库问答（RAG）使用的模型</span>
+                      </div>
+                      <div className="settings-control-with-action">
+                        {globalModelOptions.length > 0 ? (
+                          <select
+                            value={globalModelConfig.qa_model}
+                            onChange={(event) => setGlobalModelConfig((prev) => (prev ? { ...prev, qa_model: event.target.value } : prev))}
+                          >
+                            {globalModelOptions.map((m) => (<option value={m} key={`gq-${m}`}>{m}</option>))}
+                          </select>
+                        ) : (
+                          <input
+                            type="text"
+                            value={globalModelConfig.qa_model}
+                            placeholder="sensenova-6.7-flash-lite"
+                            onChange={(event) => setGlobalModelConfig((prev) => (prev ? { ...prev, qa_model: event.target.value } : prev))}
+                          />
+                        )}
+                      </div>
+                    </label>
+                    <label className="settings-row">
+                      <div className="settings-row-copy">
+                        <strong>语义检索模型</strong>
+                        <span>embedding 模型名，留空则问答回退关键词检索</span>
+                      </div>
+                      <input
+                        type="text"
+                        value={globalModelConfig.embedding_model}
+                        placeholder="留空 = 不启用语义检索"
+                        onChange={(event) => setGlobalModelConfig((prev) => (prev ? { ...prev, embedding_model: event.target.value } : prev))}
+                      />
+                    </label>
+                    <div className="settings-row">
+                      <div className="settings-row-copy">
+                        <strong>操作</strong>
+                        <span>{globalModelConfig.updated_at ? `上次更新：${globalModelConfig.updated_at}` : '尚未保存过'}</span>
+                      </div>
+                      <div className="settings-control-with-action" style={{ display: 'flex', gap: 8 }}>
+                        <button type="button" onClick={() => { void fetchGlobalModels(); }} disabled={loadingGlobalModels}>
+                          {loadingGlobalModels ? '拉取中…' : '拉取模型列表'}
+                        </button>
+                        <button type="button" onClick={() => { void saveGlobalModelConfig(); }} disabled={savingGlobalConfig}>
+                          {savingGlobalConfig ? '保存中…' : '保存全局配置'}
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="settings-row">
+                    <div className="settings-row-copy">
+                      <span>正在读取全局模型配置…（如长时间无响应，请确认已登录团队库且具备管理员权限）</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </section>
       )}
 
