@@ -129,13 +129,36 @@ function pickStats(doc) {
   };
 }
 
-function makeFakeWebContents(documentId) {
+// 实时从数据库读真实候选条目数（覆盖事件 document 上未及时更新的 candidate_item_count）。
+// 原因：kbService 在「提取/补充」阶段的多次 updateDocument 不带 candidate_item_count，
+// 而 saveCandidateItems 内部 updateDocument 又不传 webContents，导致 taskStates 长期为 0。
+function readRealCandidateCount(documentId, libraryType) {
+  try {
+    const dbPath = (libraryType === 'personal') ? MASTER_DB : KB_DB;
+    const db = new Database(dbPath, { readonly: true, fileMustExist: false });
+    const idCol = (libraryType === 'personal') ? 'document_id' : 'document_id';
+    const row = db.prepare(
+      'SELECT COUNT(*) AS cnt FROM knowledge_candidate_items WHERE ' + idCol + '=?'
+    ).get(String(documentId));
+    db.close();
+    return row ? Number(row.cnt || 0) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function makeFakeWebContents(documentId, libraryType) {
   return {
     isDestroyed: () => false,
     send: (channel, payload) => {
       if (channel === 'knowledge-base:event' && payload && payload.document) {
         const d = payload.document;
         const s = pickStats(d);
+        // 提取/补充阶段实时回查候选条目真实数
+        if (d.status === 'extracting' || d.status === 'analyzing' || d.status === 'matching' || d.status === 'recovering') {
+          const real = readRealCandidateCount(documentId, libraryType);
+          if (real > s.candidate_item_count) s.candidate_item_count = real;
+        }
         taskStates.set(String(documentId), {
           status: d.status || 'pending',
           progress: d.progress || 0,
@@ -188,7 +211,7 @@ function resolveDocumentFile(documentId, libraryType, meta) {
 
 async function runTask(task) {
   const { documentId, libraryType } = task;
-  const fakeWc = makeFakeWebContents(documentId);
+  const fakeWc = makeFakeWebContents(documentId, libraryType || 'team');
   taskStates.set(String(documentId), { status: 'pending', progress: 0, message: '排队中', updatedAt: new Date().toISOString() });
   try {
     // 先取元数据：个人库文件定位依赖 folder_id + file_name，必须先查 meta。
