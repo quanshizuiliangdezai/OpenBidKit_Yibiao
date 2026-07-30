@@ -2091,10 +2091,10 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                         <span>{globalModelConfig.updated_at ? `上次更新：${globalModelConfig.updated_at}` : '尚未保存过'}</span>
                       </div>
                       <div className="settings-control-with-action" style={{ display: 'flex', gap: 8 }}>
-                        <button type="button" onClick={() => { void fetchGlobalModels(); }} disabled={loadingGlobalModels}>
+                        <button type="button" className="inline-action" onClick={() => { void fetchGlobalModels(); }} disabled={loadingGlobalModels}>
                           {loadingGlobalModels ? '拉取中…' : '拉取模型列表'}
                         </button>
-                        <button type="button" onClick={() => { void saveGlobalModelConfig(); }} disabled={savingGlobalConfig}>
+                        <button type="button" className="inline-action" onClick={() => { void saveGlobalModelConfig(); }} disabled={savingGlobalConfig}>
                           {savingGlobalConfig ? '保存中…' : '保存全局配置'}
                         </button>
                       </div>

@@ -971,20 +971,6 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             admin = self._is_admin()
             if not admin:
                 return self._send(403, {'error': '需要管理员权限'})
-            if method == 'GET':
-                cfg = kb_db.get_model_config()
-                # api_key 不回传给前端，避免泄露；仅返回是否已配置
-                return self._send(200, {
-                    'success': True,
-                    'data': {
-                        'base_url': cfg['base_url'],
-                        'analysis_model': cfg['analysis_model'],
-                        'qa_model': cfg['qa_model'],
-                        'embedding_model': cfg['embedding_model'],
-                        'has_api_key': bool(cfg['api_key']),
-                        'updated_at': cfg['updated_at'],
-                    },
-                })
             # POST：保存配置
             base_url = (data.get('base_url') or '').strip()
             api_key = data.get('api_key')  # 允许为空（表示清除）；前端传 null/空串即清除
