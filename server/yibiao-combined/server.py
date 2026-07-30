@@ -2358,10 +2358,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         return True, new_doc_id, folder_id, fname, '同步成功'
 
     def _import_personal_doc_to_team(self, master_doc_id, team_folder_id, employee):
-        """个人库（master.sqlite）文档 → 团队库（kb.sqlite），只能导入自己的文档。返回 (团队文档id, 文件名, 错误)。"""
+        """个人库（master.sqlite）文档 → 团队库（kb.sqlite），只能导入自己的文档。返回 (团队文档id, 文件名, 错误, analysis_synced)。"""
         conn = _master_db_conn()
         if conn is None:
-            return None, None, '个人库不可用'
+            return None, None, '个人库不可用', False
         try:
             self._ensure_owner_cols(conn)
             row = conn.execute(
@@ -2370,10 +2370,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         finally:
             conn.close()
         if not row:
-            return None, None, '个人库文档不存在'
+            return None, None, '个人库文档不存在', False
         doc_id, folder_id, file_name, owner_id = row
         if employee and employee.get('role') != 'admin' and owner_id is not None and owner_id != employee['id']:
-            return None, file_name, '只能导入自己个人库中的文档'
+            return None, file_name, '只能导入自己个人库中的文档', False
         base = self._personal_doc_dir(folder_id, doc_id)
         fp = None
         if os.path.isdir(base):
@@ -2388,7 +2388,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             if fp is None and cands:
                 fp = cands[0]
         if fp is None or not os.path.isfile(fp):
-            return None, file_name, '个人库物理文件缺失'
+            return None, file_name, '个人库物理文件缺失', False
         with open(fp, 'rb') as fh:
             data = fh.read()
         import mimetypes

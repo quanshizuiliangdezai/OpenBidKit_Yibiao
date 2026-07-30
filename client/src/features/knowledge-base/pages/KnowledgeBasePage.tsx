@@ -1056,7 +1056,7 @@ function KnowledgeBasePage() {
       await loadTeamTree();
       if (targetFolderId) setActiveFolderId(targetFolderId);
       await loadTeamTree();
-      // 服务器侧分析：同步到团队的文档若个人库已有分析结果则直接复制（不需要重跑 Worker���，
+      // 服务器侧分析：同步到团队的文档若个人库已有分析结果则直接复制（不需要重跑 Worker），
       // 否则启动轮询器等待服务器 Worker 自动分析。
       const analyzeErrors: string[] = [];
       let syncedAnalysisCount = 0;
