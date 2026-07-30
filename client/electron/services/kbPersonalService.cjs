@@ -313,6 +313,59 @@ function createKbPersonalService({ app, kbAuthService }) {
     return data;
   }
 
+  // ---- 个人库文档分析（服务器侧 Worker 分析 + 客户端轮询；owner 隔离随文档同步）----
+
+  /** 查询个人库文档分析状态。服务端 status 端点总是 200（不返 404），
+   * Worker 不可达时返回 status:'unknown'，前端按未完成处理继续轮询。 */
+  async function getAnalysisStatus(documentId) {
+    const res = await fetch(
+      `${baseUrl()}/api/personal/documents/${encodeURIComponent(documentId)}/analysis/status`,
+      { headers: authHeaders() });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error || `查询分析状态失败（${res.status}）`);
+    const p = data || {};
+    return {
+      status: p.status || 'idle',
+      progress: typeof p.progress === 'number' ? p.progress : 0,
+      message: p.message || '',
+    };
+  }
+
+  /** 重新触发个人库文档服务器侧分析。 */
+  async function retryAnalysis(documentId) {
+    const res = await fetch(
+      `${baseUrl()}/api/personal/documents/${encodeURIComponent(documentId)}/analysis/retry`,
+      { method: 'POST', headers: authHeaders() });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error || `重试分析失败（${res.status}）`);
+    return data || { success: true };
+  }
+
+  /** 读取个人库文档分析结果；无结果返回 null（HTTP 404）。 */
+  async function getAnalysis(documentId) {
+    const res = await fetch(
+      `${baseUrl()}/api/personal/documents/${encodeURIComponent(documentId)}/analysis`,
+      { headers: authHeaders() });
+    if (res.status === 404) return null;
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error || `读取分析结果失败（${res.status}）`);
+    return data?.data || null;
+  }
+
+  /** 写回个人库文档分析结果（供水合/回写复用）。 */
+  async function saveAnalysis(documentId, payload) {
+    const res = await fetch(
+      `${baseUrl()}/api/personal/documents/${encodeURIComponent(documentId)}/analysis`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ status: 'success', payload }),
+      });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error || `保存分析结果失败（${res.status}）`);
+    return data?.data || data || { success: true };
+  }
+
   return {
     listFolders,
     listDocuments,
@@ -332,6 +385,10 @@ function createKbPersonalService({ app, kbAuthService }) {
     exportZip,
     importToTeam,
     importFromTeam,
+    getAnalysisStatus,
+    retryAnalysis,
+    getAnalysis,
+    saveAnalysis,
   };
 }
 

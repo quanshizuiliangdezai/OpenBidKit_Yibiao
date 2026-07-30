@@ -1028,49 +1028,18 @@ function KnowledgeBasePage() {
 
       showToast(`已同步 ${synced} 个文档到个人知识库（位于“团队库导入”文件夹）`, 'success');
 
-      // 为已同步文档在本地启动分析（复用与上传相同的分析管道）；错误不再静默吞掉
-      const analyzeErrors: string[] = [];
-      if (targetFolderId) {
-        for (const item of syncedItems) {
-          if (!item.personal_id || !item.file_name) {
-            analyzeErrors.push(`文档「${item.file_name || item.id}」缺少同步信息，跳过`);
-            continue;
-          }
-          try {
-            const downloadResult = await window.yibiao?.kbPersonal.downloadDocument(
-              String(item.personal_id),
-              item.file_name,
-            );
-            if (downloadResult?.success && downloadResult.data?.localPath) {
-              await window.yibiao?.knowledgeBase.analyzeExternalFile(
-                String(item.personal_id),
-                downloadResult.data.localPath,
-                item.file_name,
-                targetFolderId,
-                'personal',
-              );
-            } else {
-              analyzeErrors.push(`文档「${item.file_name}」下载失败，无法分析`);
-            }
-          } catch (analyzeError) {
-            analyzeErrors.push(
-              `文档「${item.file_name}」启动分析失败：${analyzeError instanceof Error ? analyzeError.message : String(analyzeError)}`,
-            );
-          }
-        }
-      }
-
       // 同步后自动切到个人库并选中“团队库导入”文件夹，避免用户以为没同步
       setKbTab('personal');
       await loadPersonalTree();
       if (targetFolderId) setActiveFolderId(targetFolderId);
       await loadPersonalTree();
-      // 分析是异步过程，稍后刷新两次以显示分析进度与结果
-      window.setTimeout(() => { void loadPersonalTree(); }, 4000);
-      window.setTimeout(() => { void loadPersonalTree(); }, 12000);
 
-      if (analyzeErrors.length) {
-        showToast(`已同步 ${synced} 个文档，但 ${analyzeErrors.length} 个未能自动分析：${analyzeErrors[0]}`, 'error');
+      // 分析走服务器：同步时服务端已把团队库现有分析结果复制到个人库；
+      // 对每篇启动个人库轮询，已分析的首轮即水合，未分析的走兜底超时自动停止。
+      for (const item of syncedItems) {
+        if (item.personal_id) {
+          startPersonalAnalysisPolling(String(item.personal_id), String(item.folder_id || targetFolderId || ''));
+        }
       }
     } catch (error) {
       showToast(error instanceof Error ? error.message : '同步到个人失败', 'error');
@@ -1146,6 +1115,66 @@ function KnowledgeBasePage() {
     void tick();
   };
 
+  // 个人库分析轮询：镜像团队库逻辑，走个人库端点。
+  // 个人库 status 端点不返 404，Worker 不可达时返回 'unknown'，落入 else 分支继续轮询直至兜底。
+  const startPersonalAnalysisPolling = (documentId: string, folderId: string) => {
+    const docId = String(documentId);
+    if (analysisPollersRef.current.has(docId)) return;
+
+    const POLL_INTERVAL = 3000;
+    const MAX_ATTEMPTS = 200; // ~10 分钟兜底
+    let attempts = 0;
+
+    const stop = () => {
+      const handle = analysisPollersRef.current.get(docId);
+      if (handle !== undefined) {
+        window.clearInterval(handle);
+        analysisPollersRef.current.delete(docId);
+      }
+    };
+
+    const tick = async () => {
+      attempts += 1;
+      try {
+        const res = await window.yibiao?.kbPersonal.getAnalysisStatus(docId);
+        if (!res?.success) {
+          if (res?.needLogin) stop();
+          if (attempts >= MAX_ATTEMPTS) stop();
+          return;
+        }
+        const status = res.data?.status || 'idle';
+        if (status === 'success') {
+          stop();
+          try {
+            await window.yibiao?.knowledgeBase.hydratePersonalAnalysis(docId, folderId ?? '');
+          } catch {
+            /* 水合失败也刷新 */
+          }
+          await loadPersonalTree();
+        } else if (status === 'error') {
+          stop();
+          await loadPersonalTree();
+          showToast('服务器分析该文档失败，可在文档菜单重试', 'error');
+        } else {
+          // pending / processing / unknown：周期性刷新树，让进度可见
+          if (attempts % 2 === 0) {
+            void loadPersonalTree();
+          }
+          if (attempts >= MAX_ATTEMPTS) {
+            stop();
+            await loadPersonalTree();
+          }
+        }
+      } catch {
+        if (attempts >= MAX_ATTEMPTS) stop();
+      }
+    };
+
+    const handle = window.setInterval(() => { void tick(); }, POLL_INTERVAL);
+    analysisPollersRef.current.set(docId, handle);
+    void tick();
+  };
+
   const uploadDocuments = async (targetFolder = activeFolder) => {
     if (!targetFolder) {
       showToast('请先创建文件夹', 'info');
@@ -1153,42 +1182,24 @@ function KnowledgeBasePage() {
     }
     try {
       setLoading(true);
-      // 个人库：批量上传，服务器已带分析状态，无需本地分析
+      // 个人库：批量上传，服务器已自动触发 Worker 分析，客户端只轮询状态并水合结果。
       if (kbTab === 'personal') {
         const result = await window.yibiao?.kbPersonal.uploadDocument(targetFolder.id);
         if (!result?.success) {
           if (result?.data?.canceled) return;
           throw new Error(result?.error || '上传文档失败');
         }
-        const uploadedCount = result.data?.uploaded?.length || 0;
+        const uploaded = result.data?.uploaded || [];
+        const uploadedCount = uploaded.length || 0;
         const failedCount = result.data?.failed?.length || 0;
         if (uploadedCount) {
-          // 个人库上传后同样启动本地分析（服务端只存文件，分析在本地完成）
-          for (const entry of result.data?.uploaded || []) {
+          for (const entry of uploaded) {
             const doc = entry.doc;
             if (!doc?.id) continue;
-            const docId = String(doc.id);
-            const fileName = String(doc.file_name || entry.file || 'document');
-            try {
-              const downloadResult = await window.yibiao?.kbPersonal.downloadDocument(
-                docId,
-                fileName,
-              );
-              if (downloadResult?.success && downloadResult.data?.localPath) {
-                await window.yibiao?.knowledgeBase.analyzeExternalFile(
-                  docId,
-                  downloadResult.data.localPath,
-                  fileName,
-                  String(targetFolder.id),
-                  'personal',
-                );
-              }
-            } catch (analyzeError) {
-              console.warn(`个人库文档 ${docId} 启动分析失败`, analyzeError);
-            }
+            startPersonalAnalysisPolling(String(doc.id), String(targetFolder.id));
           }
           await loadPersonalTree();
-          showToast(`已上传 ${uploadedCount} 个文档${failedCount ? `，${failedCount} 个失败` : ''}`, 'success');
+          showToast(`已上传 ${uploadedCount} 个文档，服务器分析中${failedCount ? `，${failedCount} 个失败` : ''}`, 'success');
         } else if (failedCount) {
           showToast(`上传失败：${result.data?.failed?.map((entry) => entry.file).join('、')}`, 'error');
         }
@@ -1612,28 +1623,16 @@ function KnowledgeBasePage() {
         showToast('已重新触发服务器分析', 'success');
         return;
       }
-      // 个人库：本地重试（保留本地分析管道）
-      const downloadResult = await window.yibiao?.kbPersonal.downloadDocument(document.id, document.file_name);
-      if (!downloadResult?.success || !downloadResult.data?.localPath) {
-        throw new Error(downloadResult?.error || '下载文档失败');
+      // 个人库：服务器侧重试。触发 Worker 重新分析并本地清旧记录，然后轮询状态。
+      const retryResult = await window.yibiao?.kbPersonal.retryAnalysis(document.id);
+      if (!retryResult?.success) {
+        throw new Error(retryResult?.error || '重试分析失败');
       }
-      // 先清除旧的本地分析数据
+      // 清除本地旧分析缓存，让 hydrate 拉回新结果
       await window.yibiao?.knowledgeBase.deleteLocalAnalysis(document.id);
-      // 重新创建本地分析记录并启动分析
-      const updatedDocument = await window.yibiao?.knowledgeBase.analyzeExternalFile(
-        document.id,
-        downloadResult.data.localPath,
-        document.file_name,
-        document.folder_id,
-        kbTab,
-      );
-      if (updatedDocument) {
-        setIndex((prev) => ({
-          ...prev,
-          documents: mergeDocuments(prev.documents, [updatedDocument]),
-        }));
-      }
-      showToast('已重新开始解析', 'success');
+      startPersonalAnalysisPolling(String(document.id), String(document.folder_id));
+      await loadPersonalTree();
+      showToast('已重新触发服务器分析', 'success');
     } catch (error) {
       const message = error instanceof Error ? error.message : '重试失败';
       if (isLibreOfficeRequiredMessage(message)) {

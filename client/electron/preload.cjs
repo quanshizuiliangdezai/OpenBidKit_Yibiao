@@ -115,6 +115,7 @@ const bridge = {
     readAnalysis: (documentId) => ipcRenderer.invoke('knowledge-base:read-analysis', documentId),
     analyzeExternalFile: (documentId, filePath, fileName, folderId, libraryType) => ipcRenderer.invoke('knowledge-base:analyze-external-file', documentId, filePath, fileName, folderId, libraryType),
     hydrateTeamAnalysis: (documentId, folderId) => ipcRenderer.invoke('knowledge-base:hydrate-team-analysis', documentId, folderId),
+    hydratePersonalAnalysis: (documentId, folderId) => ipcRenderer.invoke('knowledge-base:hydrate-personal-analysis', documentId, folderId),
     getLocalStatus: (documentId) => ipcRenderer.invoke('knowledge-base:get-local-status', documentId),
     deleteLocalAnalysis: (documentId) => ipcRenderer.invoke('knowledge-base:delete-local-analysis', documentId),
     onEvent: (callback) => {
@@ -262,6 +263,8 @@ const bridge = {
     exportZip: (ids) => ipcRenderer.invoke('kb-personal:export-zip', ids),
     importToTeam: (documentIds, targetTeamFolderId, folderIds) => ipcRenderer.invoke('kb-personal:import-to-team', documentIds, targetTeamFolderId, folderIds),
     importFromTeam: (documentIds, folderIds) => ipcRenderer.invoke('kb-personal:import-from-team', documentIds, folderIds),
+    getAnalysisStatus: (documentId) => ipcRenderer.invoke('kb-personal:get-analysis-status', documentId),
+    retryAnalysis: (documentId) => ipcRenderer.invoke('kb-personal:retry-analysis', documentId),
   },
   kbQa: {
     retrieveContext: (question, options) => ipcRenderer.invoke('kb-qa:retrieve-context', question, options),

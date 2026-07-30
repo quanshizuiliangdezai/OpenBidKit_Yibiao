@@ -16,6 +16,9 @@ const { createAppStub } = require('./app-stub.cjs');
 const DATA_DIR = process.env.KB_WORKER_DATA || '/toubiao/yibiao-kb-worker/data';
 const KB_DB = process.env.KB_DB || '/toubiao/yibiao-kb-server/kb.sqlite';
 const KB_DATA_DIR = process.env.KB_DATA_DIR || '/toubiao/yibiao-kb-server/knowledge-base';
+// 个人库（master.sqlite）：文档按 folders/<fid>/documents/<did>/<filename> 存储，主键 TEXT document_id
+const MASTER_DB = process.env.YIBIAO_MASTER_DB || '/toubiao/yibiao-master/master.sqlite';
+const MASTER_KB = process.env.YIBIAO_MASTER_KB || '/toubiao/yibiao-master/knowledge-base';
 const SERVER_URL = process.env.KB_SERVER_URL || 'http://127.0.0.1:15004';
 const KB_USER = process.env.KB_USER || 'admin';
 const KB_PASS = process.env.KB_PASS || '';
@@ -134,17 +137,34 @@ const queue = [];
 let running = 0;
 const MAX_CONCURRENCY = parseInt(process.env.KB_WORKER_CONCURRENCY || '3', 10);
 
-function resolveDocumentFile(documentId) {
-  // 服务器文件以 doc_id 命名存在 KB_DATA_DIR 下
-  const p = path.join(KB_DATA_DIR, String(documentId));
-  return fs.existsSync(p) ? p : null;
-}
-
-async function resolveDocumentMeta(documentId) {
+async function resolveDocumentMeta(documentId, libraryType) {
+  if (libraryType === 'personal') {
+    // 个人库：master.sqlite，主键 TEXT document_id；列名与团队库不同
+    const db = new Database(MASTER_DB, { readonly: true, fileMustExist: true });
+    const row = db.prepare(
+      'SELECT document_id AS id, folder_id, file_name, file_name AS title FROM knowledge_documents WHERE document_id=?'
+    ).get(String(documentId));
+    db.close();
+    return row;
+  }
   const db = new Database(KB_DB, { readonly: true, fileMustExist: true });
   const row = db.prepare('SELECT id, folder_id, file_name, title FROM knowledge_documents WHERE id=?').get(documentId);
   db.close();
   return row;
+}
+
+function resolveDocumentFile(documentId, libraryType, meta) {
+  if (libraryType === 'personal') {
+    // 个人库文件路径：MASTER_KB/folders/<fid>/documents/<did>/<filename>
+    if (!meta || meta.folder_id == null) return null;
+    const fname = meta.file_name || meta.title;
+    if (!fname) return null;
+    const p = path.join(MASTER_KB, 'folders', String(meta.folder_id), 'documents', String(documentId), fname);
+    return fs.existsSync(p) ? p : null;
+  }
+  // 团队库：文件以 doc_id 命名扁平存于 KB_DATA_DIR 下
+  const p = path.join(KB_DATA_DIR, String(documentId));
+  return fs.existsSync(p) ? p : null;
 }
 
 async function runTask(task) {
@@ -152,12 +172,13 @@ async function runTask(task) {
   const fakeWc = makeFakeWebContents(documentId);
   taskStates.set(String(documentId), { status: 'pending', progress: 0, message: '排队中', updatedAt: new Date().toISOString() });
   try {
-    const filePath = resolveDocumentFile(documentId);
+    // 先取元数据：个人库文件定位依赖 folder_id + file_name，必须先查 meta。
+    const meta = await resolveDocumentMeta(documentId, libraryType);
+    const filePath = resolveDocumentFile(documentId, libraryType, meta);
     if (!filePath) {
       taskStates.set(String(documentId), { status: 'error', progress: 0, message: '服务器未找到文档文件', updatedAt: new Date().toISOString() });
       return;
     }
-    const meta = await resolveDocumentMeta(documentId);
     const folderId = meta ? meta.folder_id : 0;
     const fileName = meta ? (meta.file_name || meta.title || String(documentId)) : String(documentId);
     taskStates.set(String(documentId), { status: 'pending', progress: 0, message: '开始分析', updatedAt: new Date().toISOString() });

@@ -8,9 +8,11 @@
 const path = require('node:path');
 const fs = require('node:fs');
 
-function registerKbPersonalIpc({ kbAuthService, app }) {
+function registerKbPersonalIpc({ kbAuthService, app, personalService: injectedService }) {
   const { ipcMain, dialog, BrowserWindow } = require('electron');
-  const personalService = require('../services/kbPersonalService.cjs')({ app, kbAuthService });
+  // 优先使用外部注入的共享实例（供 knowledgeBaseService 水合复用同一 service）；
+  // 未注入时内部自建，保持向后兼容。
+  const personalService = injectedService || require('../services/kbPersonalService.cjs')({ app, kbAuthService });
 
   // 获取文件夹树 + 所有文档（loadPersonalTree 使用）
   ipcMain.handle('kb-personal:get-tree', async () => {
@@ -164,6 +166,26 @@ function registerKbPersonalIpc({ kbAuthService, app }) {
       return { success: true, data: result };
     } catch (err) {
       return { error: err.message || '移动文档失败' };
+    }
+  });
+
+  // 个人库分析状态（服务器侧 Worker 分析轮询）
+  ipcMain.handle('kb-personal:get-analysis-status', async (_event, documentId) => {
+    try {
+      const data = await personalService.getAnalysisStatus(documentId);
+      return { success: true, data };
+    } catch (err) {
+      return { error: err.message || '查询分析状态失败' };
+    }
+  });
+
+  // 个人库重新触发服务器分析
+  ipcMain.handle('kb-personal:retry-analysis', async (_event, documentId) => {
+    try {
+      const data = await personalService.retryAnalysis(documentId);
+      return { success: true, data };
+    } catch (err) {
+      return { error: err.message || '重试分析失败' };
     }
   });
 

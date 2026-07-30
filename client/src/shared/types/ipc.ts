@@ -605,6 +605,11 @@ export interface YibiaoBridge {
       item_count: number; block_count: number; filtered_block_count: number;
       candidate_item_count: number; file_name: string;
     } | null>;
+    hydratePersonalAnalysis: (documentId: string | number, folderId: string | number) => Promise<{
+      id: string; status: KnowledgeDocument['status']; progress: number; message: string;
+      item_count: number; block_count: number; filtered_block_count: number;
+      candidate_item_count: number; file_name: string;
+    } | null>;
     getLocalStatus: (documentId: string | number) => Promise<{
       id: string; status: KnowledgeDocument['status']; progress: number; message: string;
       item_count: number; block_count: number; filtered_block_count: number;
@@ -770,6 +775,8 @@ export interface YibiaoBridge {
     exportZip: (ids: Array<string | number>) => Promise<{ success: boolean; data?: { localPath: string }; error?: string; canceled?: boolean }>;
     importToTeam: (documentIds: Array<string | number>, targetTeamFolderId: string | number, folderIds?: Array<string | number>) => Promise<{ success: boolean; data?: { created: Array<{ document_id: string | number; remote_id: number; file_name?: string }>; failed: Array<{ document_id: string | number; error: string }>; auto_folder?: boolean; folder_name?: string; folder_id?: string }; error?: string }>;
     importFromTeam: (documentIds: Array<string | number>, folderIds?: Array<string | number>) => Promise<{ success: boolean; data?: { synced: Array<{ id: number; ok: boolean; personal_id?: string; folder_id?: string; file_name?: string; msg: string }> }; error?: string }>;
+    getAnalysisStatus: (documentId: string | number) => Promise<{ success: boolean; data?: { status: string; progress: number; message: string }; error?: string; needLogin?: boolean }>;
+    retryAnalysis: (documentId: string | number) => Promise<{ success: boolean; data?: { success?: boolean; message?: string }; error?: string; needLogin?: boolean }>;
   },
 }
 

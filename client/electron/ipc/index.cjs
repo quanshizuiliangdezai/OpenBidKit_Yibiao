@@ -34,6 +34,7 @@ const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs
 const { createTemplateStore } = require('../services/templateStore.cjs');
 const { createKbAuthService } = require('../services/kbAuthService.cjs');
 const { createKbTeamService } = require('../services/kbTeamService.cjs');
+const createKbPersonalService = require('../services/kbPersonalService.cjs');
 const { createSyncService } = require('../services/syncService.cjs');
 const { registerKbAuthIpc } = require('./kbAuthIpc.cjs');
 const { registerKbTeamIpc } = require('./kbTeamIpc.cjs');
@@ -188,10 +189,10 @@ function registerWorkspaceDatabaseStatusIpc({ mainWindow }) {
   };
 }
 
-function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, kbAuthService, kbTeamService, updateStatus, mainWindow }) {
+function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, kbAuthService, kbTeamService, kbPersonalService, updateStatus, mainWindow }) {
   const sqliteDatabase = createSqliteDatabase(app, { onStatus: updateStatus });
   const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
-  const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore, kbTeamService });
+  const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore, kbTeamService, kbPersonalService });
   const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService });
   const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db });
   const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore });
@@ -236,6 +237,8 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const aiService = createAiService({ app, configStore });
   const kbAuthService = createKbAuthService({ app });
   const kbTeamService = createKbTeamService({ kbAuthService, app });
+  // 个人库 service 共享实例：既供 kbPersonalIpc 处理 IPC，也供 knowledgeBaseService 水合复用（同一登录态）。
+  const kbPersonalService = createKbPersonalService({ app, kbAuthService });
   // 令牌失效时通知渲染进程，重新弹出门禁；同时把焦点拉回主窗口，避免登录框无法输入
   kbAuthService.onUnauthorized(() => {
     if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
@@ -332,7 +335,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerSystemFontIpc({ systemFontService });
   registerKbAuthIpc({ kbAuthService, mainWindow });
   registerKbTeamIpc({ kbTeamService, kbAuthService });
-  registerKbPersonalIpc({ kbAuthService, app });
+  registerKbPersonalIpc({ kbAuthService, app, personalService: kbPersonalService });
   registerPluginIpc(ipcMain, app, {
     taskService: null,
     technicalPlanStore: null,
@@ -359,7 +362,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     databaseStatus.updateStatus({ phase: 'checking', ready: false, message: '正在检查本地数据库' });
     setTimeout(() => {
       try {
-        registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, kbAuthService, kbTeamService, updateStatus: databaseStatus.updateStatus, mainWindow });
+        registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, fileService, kbAuthService, kbTeamService, kbPersonalService, updateStatus: databaseStatus.updateStatus, mainWindow });
       } catch (error) {
         databaseStatus.updateStatus({
           phase: 'error',

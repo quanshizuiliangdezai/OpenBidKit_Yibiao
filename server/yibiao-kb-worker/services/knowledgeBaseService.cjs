@@ -1107,7 +1107,8 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
   // 正常匹配完成后调用，「save:reuse」缓存命中分支也必须调用（否则 Worker 重跑永远不回写）。
   // 完全从 store 读取数据，不依赖匹配主流程的局部变量，两条路径行为一致。
   async function shareTeamAnalysisFromStore(documentId, libraryType, webContents) {
-    if (libraryType !== 'team' || !kbTeamService || !kbTeamService.saveAnalysis) return;
+    // team / personal 均回写服务器分析结果；personal 走 /api/personal 端点（owner 隔离，随文档同步）。
+    if ((libraryType !== 'team' && libraryType !== 'personal') || !kbTeamService || !kbTeamService.saveAnalysis) return;
     try {
       const doc = knowledgeBaseStore.getDocument(documentId);
       const markdown = knowledgeBaseStore.readMarkdown(documentId);
@@ -1130,16 +1131,18 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         discarded: analysis ? analysis.discarded : [],
         system_discarded_after_retry: analysis ? analysis.system_discarded_after_retry : [],
       };
-      await kbTeamService.saveAnalysis(documentId, sharedPayload);
+      await kbTeamService.saveAnalysis(documentId, sharedPayload, libraryType);
       teamShareResult.set(String(documentId), { ok: true });
-      debugLog(documentId, 'match:shared-analysis-saved', { item_count: finalItems.length });
+      debugLog(documentId, 'match:shared-analysis-saved', { item_count: finalItems.length, libraryType });
     } catch (shareErr) {
       const shareErrMsg = shareErr?.message || String(shareErr);
       teamShareResult.set(String(documentId), { ok: false, message: shareErrMsg });
       debugLog(documentId, 'match:shared-analysis-failed', { message: shareErrMsg });
       emitToast(webContents, {
         level: 'error',
-        message: `团队共享分析保存失败：${shareErrMsg}（本机已完成，其他成员暂时看不到）`,
+        message: libraryType === 'personal'
+          ? `个人库分析保存失败：${shareErrMsg}（本机已完成，服务器暂未同步）`
+          : `团队共享分析保存失败：${shareErrMsg}（本机已完成，其他成员暂时看不到）`,
       });
     }
   }
@@ -2457,10 +2460,10 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       teamShareResult.delete(String(documentId));
       await prepareDocument(documentId, filePath, webContents, libraryType);
       const finalDoc = knowledgeBaseStore.getDocument(documentId);
-      // team 库：本地分析成功不等于回写成功。Worker 的唯一目的是回写服务器，
+      // team/personal 库：本地分析成功不等于回写成功。Worker 的唯一目的是回写服务器，
       // 若 saveAnalysis 失败（如大 payload 超时被 abort），必须把任务判为 error，
       // 否则会出现「Worker 报 success 但 kb_analysis 无记录」的假成功。
-      if (libraryType === 'team' && finalDoc && finalDoc.status === 'success') {
+      if ((libraryType === 'team' || libraryType === 'personal') && finalDoc && finalDoc.status === 'success') {
         const share = teamShareResult.get(String(documentId));
         if (!share || !share.ok) {
           return {

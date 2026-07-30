@@ -1044,7 +1044,7 @@ function createReport({ blocks, filteredBlocks, candidateItems, finalItems, matc
   };
 }
 
-function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore, kbTeamService }) {
+function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore, kbTeamService, kbPersonalService }) {
   const baseDir = getKnowledgeBaseDir(app);
   const activePreparations = new Set();
   const activeMatches = new Set();
@@ -2433,10 +2433,12 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
     // 团队库：若本机无分析，则从服务器拉取共享分析结果水合到本地库，使「任一人分析、全员可见」。
     // 返回本地分析状态摘要（与 getLocalDocumentStatus 一致）或 null（无共享分析）。
     // 任何网络/鉴权异常都被吞掉并返回 null，避免阻断文档列表加载。
-    async hydrateTeamAnalysis(documentId, folderId) {
-      // 从服务器水合的文档必然是团队库文档，记录类型供后续匹配使用。
+    // 从服务器水合分析结果到本地库。libraryType='team'（默认）走团队库端点，
+    // 'personal' 走个人库端点（owner 隔离随文档同步）。hydratePersonalAnalysis 为其薄封装。
+    async hydrateTeamAnalysis(documentId, folderId, libraryType = 'team') {
       const docId = String(documentId);
-      documentLibraryType.set(docId, 'team');
+      documentLibraryType.set(docId, libraryType);
+      const svc = libraryType === 'personal' ? kbPersonalService : kbTeamService;
       let local = null;
       try {
         local = knowledgeBaseStore.getDocument(documentId);
@@ -2453,10 +2455,10 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       } catch {
         // 本机无记录，继续尝试从服务器拉取
       }
-      if (!kbTeamService || !kbTeamService.getAnalysis) return null;
+      if (!svc || !svc.getAnalysis) return null;
       let analysis;
       try {
-        analysis = await kbTeamService.getAnalysis(documentId);
+        analysis = await svc.getAnalysis(documentId);
       } catch (err) {
         debugLog(documentId, 'hydrate:server-analysis-failed', { message: err?.message || String(err) });
         return null;
@@ -2504,6 +2506,11 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         debugLog(documentId, 'hydrate:failed', { message: err?.message || String(err) });
         return null;
       }
+    },
+
+    // 个人库水合：复用 hydrateTeamAnalysis 逻辑，走个人库端点。
+    async hydratePersonalAnalysis(documentId, folderId) {
+      return this.hydrateTeamAnalysis(documentId, folderId, 'personal');
     },
   };
 }

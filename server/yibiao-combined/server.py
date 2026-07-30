@@ -129,6 +129,95 @@ def _master_db_conn():
     return conn
 
 
+def _master_ensure_analysis_table(conn):
+    """确保 master.sqlite 存在 kb_analysis 表（个人库分析结果，主键 TEXT document_id）。"""
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS kb_analysis (
+            document_id   TEXT PRIMARY KEY,
+            status        TEXT,
+            payload       TEXT,
+            item_count    INTEGER,
+            block_count   INTEGER,
+            analyzer_id   INTEGER,
+            analyzer_name TEXT,
+            updated_at    TEXT NOT NULL
+        )
+    ''')
+
+
+def _master_save_analysis(document_id, status, payload, item_count=None, block_count=None,
+                          analyzer_id=None, analyzer_name=None):
+    """写回/更新个人库某文档的分析结果（存 master.sqlite）。"""
+    with _MASTER_LOCK:
+        conn = _master_db_conn()
+        if conn is None:
+            return
+        try:
+            _master_ensure_analysis_table(conn)
+            payload_str = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+            conn.execute(
+                """INSERT INTO kb_analysis
+                   (document_id, status, payload, item_count, block_count, analyzer_id, analyzer_name, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(document_id) DO UPDATE SET
+                     status=excluded.status, payload=excluded.payload,
+                     item_count=excluded.item_count, block_count=excluded.block_count,
+                     analyzer_id=excluded.analyzer_id, analyzer_name=excluded.analyzer_name,
+                     updated_at=excluded.updated_at""",
+                (str(document_id), status, payload_str, item_count, block_count,
+                 analyzer_id, analyzer_name, datetime.datetime.now().isoformat()))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _master_get_analysis(document_id):
+    """返回个人库某文档分析结果 dict 或 None（不做 owner 校验，调用方负责校验 document 归属）。"""
+    with _MASTER_LOCK:
+        conn = _master_db_conn()
+        if conn is None:
+            return None
+        try:
+            _master_ensure_analysis_table(conn)
+            row = conn.execute(
+                "SELECT document_id, status, payload, item_count, block_count, "
+                "analyzer_id, analyzer_name, updated_at FROM kb_analysis WHERE document_id=?",
+                (str(document_id),)).fetchone()
+        finally:
+            conn.close()
+    if not row:
+        return None
+    payload = row['payload']
+    try:
+        payload_obj = json.loads(payload) if payload else None
+    except (TypeError, ValueError):
+        payload_obj = None
+    return {
+        'document_id': row['document_id'],
+        'status': row['status'],
+        'payload': payload_obj,
+        'item_count': row['item_count'],
+        'block_count': row['block_count'],
+        'analyzer_id': row['analyzer_id'],
+        'analyzer_name': row['analyzer_name'],
+        'updated_at': row['updated_at'],
+    }
+
+
+def _master_delete_analysis(document_id):
+    """删除个人库某文档的分析缓存（文档被删/重分析时调用）。"""
+    with _MASTER_LOCK:
+        conn = _master_db_conn()
+        if conn is None:
+            return
+        try:
+            _master_ensure_analysis_table(conn)
+            conn.execute("DELETE FROM kb_analysis WHERE document_id=?", (str(document_id),))
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def build_manifest():
     import sqlite3
     conn = _master_db_conn()
@@ -994,6 +1083,59 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 detail='团队库分析重试', ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '已重新触发分析'})
 
+        # ==================== 个人库分析写回（Worker 回写；随文档同步，owner 隔离）====================
+        m = re.match(r'^/api/personal/documents/([0-9a-fA-F]+)/analysis$', path)
+        if m:
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            doc, err = self._personal_doc_owner_check(m.group(1), employee)
+            if err is not None:
+                return
+            payload = data.get('payload')
+            if payload is None:
+                return self._send(400, {'error': '缺少 payload'})
+            if not isinstance(payload, str):
+                payload = json.dumps(payload, ensure_ascii=False)
+            _master_save_analysis(
+                m.group(1),
+                data.get('status') or 'success',
+                payload,
+                item_count=data.get('item_count'),
+                block_count=data.get('block_count'),
+                analyzer_id=employee['id'],
+                analyzer_name=employee.get('display_name') or employee.get('username'),
+            )
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee.get('username'),
+                role=employee.get('role'), action='doc', target_type='personal_document', target_id=m.group(1),
+                detail='个人库分析写回', ip=_client_ip(self))
+            return self._send(200, {'success': True, 'message': '分析已保存'})
+
+        # ==================== 个人库分析重试：重新触发 Worker 分析 ====================
+        m = re.match(r'^/api/personal/documents/([0-9a-fA-F]+)/analysis/retry$', path)
+        if m:
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            doc, err = self._personal_doc_owner_check(m.group(1), employee)
+            if err is not None:
+                return
+            try:
+                _master_delete_analysis(m.group(1))
+            except Exception:
+                pass
+            threading.Thread(
+                target=_trigger_worker_analysis,
+                args=(m.group(1), 'personal'),
+                daemon=True,
+            ).start()
+            audit_event(
+                account_id=employee['id'], account_name=employee.get('display_name') or employee.get('username'),
+                role=employee.get('role'), action='doc', target_type='personal_document', target_id=m.group(1),
+                detail='个人库分析重试', ip=_client_ip(self))
+            return self._send(200, {'success': True, 'message': '已重新触发分析'})
+
         # ==================== 个人库写接口（需登录会话）====================
         if path == '/api/personal/folders':
             employee = self._auth()
@@ -1193,6 +1335,21 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             conn.execute("ALTER TABLE knowledge_documents ADD COLUMN owner_name TEXT")
         if 'content_text' not in doc_cols:
             conn.execute("ALTER TABLE knowledge_documents ADD COLUMN content_text TEXT")
+        # 个人库分析结果表（对齐团队库 kb.sqlite 的 kb_analysis；主键为 TEXT document_id）。
+        # 分析结果存 master.sqlite，随现有个人库同步机制走；可见性由 document 的 owner 隔离天然保证
+        # （成员只看自己 + admin 看全部），因此本表不再单独存 owner 列。
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS kb_analysis (
+                document_id   TEXT PRIMARY KEY,
+                status        TEXT,
+                payload       TEXT,
+                item_count    INTEGER,
+                block_count   INTEGER,
+                analyzer_id   INTEGER,
+                analyzer_name TEXT,
+                updated_at    TEXT NOT NULL
+            )
+        ''')
         conn.commit()
 
     def _personal_folders(self, employee):
@@ -1269,6 +1426,28 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
 
     def _personal_doc_dir(self, folder_id, doc_id):
         return os.path.join(MASTER_KB, 'folders', str(folder_id), 'documents', str(doc_id))
+
+    def _personal_doc_owner_check(self, doc_id_str, employee):
+        """校验个人库文档归属：返回 (doc_dict, error_response_sent)。
+        非管理员只能访问自己的文档（owner_id 为空视为公共，允许访问）。
+        error_response_sent 为 True 时调用方已发出响应，应直接 return。"""
+        conn = _master_db_conn()
+        if conn is None:
+            return None, self._send(404, {'error': '个人库不可用'})
+        try:
+            self._ensure_owner_cols(conn)
+            row = conn.execute(
+                "SELECT document_id, folder_id, file_name, owner_id "
+                "FROM knowledge_documents WHERE document_id=?", (str(doc_id_str),)).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return None, self._send(404, {'error': '文档不存在'})
+        owner_id = row['owner_id']
+        if employee and employee.get('role') != 'admin' and owner_id is not None and owner_id != employee['id']:
+            return None, self._send(403, {'error': '无权访问该文档'})
+        return {'document_id': row['document_id'], 'folder_id': row['folder_id'],
+                'file_name': row['file_name'], 'owner_id': owner_id}, None
 
     def _send_personal_file(self, doc_id_str, employee):
         """发送个人库文件（document_id 为 TEXT 主键），非管理员只能访问自己的文件。"""
@@ -1394,6 +1573,8 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         os.makedirs(dst_dir, exist_ok=True)
         with open(os.path.join(dst_dir, filename), 'wb') as fh:
             fh.write(data)
+        # 触发个人库服务器侧分析（结构化条目抽取），与团队库对齐；fire-and-forget
+        _trigger_worker_analysis(doc_id, 'personal')
         return {'id': doc_id, 'folder_id': folder_id, 'title': filename,
                 'file_name': filename, 'file_size': len(data), 'created_at': now,
                 'owner_id': owner_id, 'owner_name': owner_name}, None
@@ -2171,11 +2352,24 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 os.makedirs(dst_dir, exist_ok=True)
                 if os.path.isfile(src):
                     shutil.copy2(src, os.path.join(dst_dir, fname))
-                return True, new_doc_id, folder_id, fname, '同步成功'
             except Exception as e:
                 return False, None, None, fname, str(e)
             finally:
                 conn.close()
+        # 团队库若已有分析结果，直接复制到个人库 kb_analysis（避免重跑 Worker）。
+        # 在 master 连接关闭后单独进行，_master_save_analysis 内部自持锁。
+        try:
+            team_analysis = kb_db.get_team_analysis(doc_id)
+            if team_analysis and team_analysis.get('payload'):
+                _master_save_analysis(
+                    new_doc_id, team_analysis.get('status') or 'success',
+                    team_analysis.get('payload'),
+                    item_count=team_analysis.get('item_count'),
+                    block_count=team_analysis.get('block_count'),
+                    analyzer_id=owner_id, analyzer_name=owner_name)
+        except Exception:
+            pass
+        return True, new_doc_id, folder_id, fname, '同步成功'
 
     def _import_personal_doc_to_team(self, master_doc_id, team_folder_id, employee):
         """个人库（master.sqlite）文档 → 团队库（kb.sqlite），只能导入自己的文档。返回 (团队文档id, 文件名, 错误)。"""
@@ -2420,6 +2614,41 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             analysis = kb_db.get_team_analysis(m.group(1))
             if not analysis:
                 return self._send(404, {'error': '暂无共享分析结果', 'analyzed': False})
+            return self._send(200, {'success': True, 'analyzed': True, 'data': analysis})
+
+        # ==================== 个人库分析状态（代理 Worker，owner 隔离）====================
+        m = re.match(r'^/api/personal/documents/([0-9a-fA-F]+)/analysis/status$', path)
+        if m:
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            doc, err = self._personal_doc_owner_check(m.group(1), employee)
+            if err is not None:
+                return
+            try:
+                import urllib.request
+                req = urllib.request.Request(WORKER_URL + '/status/' + m.group(1))
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    st = json.loads(resp.read().decode('utf-8'))
+                return self._send(200, st)
+            except Exception as e:
+                analysis = _master_get_analysis(m.group(1))
+                if analysis:
+                    return self._send(200, {'documentId': m.group(1), 'status': 'success', 'progress': 100, 'message': '分析完成'})
+                return self._send(200, {'documentId': m.group(1), 'status': 'unknown', 'progress': 0, 'message': 'Worker 不可达: %s' % e})
+
+        # ==================== 个人库分析读取（owner 隔离）====================
+        m = re.match(r'^/api/personal/documents/([0-9a-fA-F]+)/analysis$', path)
+        if m:
+            employee = self._auth()
+            if not employee:
+                return self._send(401, {'error': '未登录或会话已过期'})
+            doc, err = self._personal_doc_owner_check(m.group(1), employee)
+            if err is not None:
+                return
+            analysis = _master_get_analysis(m.group(1))
+            if not analysis:
+                return self._send(404, {'error': '暂无分析结果', 'analyzed': False})
             return self._send(200, {'success': True, 'analyzed': True, 'data': analysis})
 
         if path == '/api/folders':

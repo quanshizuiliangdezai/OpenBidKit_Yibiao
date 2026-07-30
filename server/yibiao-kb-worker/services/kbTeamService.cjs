@@ -306,27 +306,34 @@ function createKbTeamService({ kbAuthService, app }) {
 
   /** 写回团队文档的共享分析结果（切块/条目/报告等完整 payload）。
    * 服务端契约：POST /api/documents/<id>/analysis body {status, payload} */
-  async function saveAnalysis(documentId, payload) {
-    // 团队库分析回写 payload 可能达数 MB（markdown + blocks + items），
+  // libraryType='personal' 时走个人库端点 /api/personal/documents/<id>/analysis，否则团队库。
+  function _analysisPath(documentId, libraryType) {
+    return libraryType === 'personal'
+      ? `/api/personal/documents/${documentId}/analysis`
+      : `/api/documents/${documentId}/analysis`;
+  }
+
+  async function saveAnalysis(documentId, payload, libraryType) {
+    // 分析回写 payload 可能达数 MB（markdown + blocks + items），
     // 上传 + 服务端 json.dumps 落库耗时远超默认 10s，这里放宽到 120s，避免被 abort。
-    const { ok, status, data } = await api(`/api/documents/${documentId}/analysis`, {
+    const { ok, status, data } = await api(_analysisPath(documentId, libraryType), {
       method: 'POST',
       body: { status: 'success', payload },
       timeoutMs: 120000,
     });
     if (!ok) {
-      const msg = data?.error || `保存共享分析失败（${status}）`;
+      const msg = data?.error || `保存分析结果失败（${status}）`;
       throw new Error(msg);
     }
     return data?.data || data || { success: true };
   }
 
-  /** 读取团队文档的共享分析结果；无结果返回 null（HTTP 404）。
-   * 服务端契约：GET /api/documents/<id>/analysis → {success, analyzed, data} */
-  async function getAnalysis(documentId) {
-    const { ok, status, data } = await api(`/api/documents/${documentId}/analysis`);
+  /** 读取文档的分析结果；无结果返回 null（HTTP 404）。
+   * 服务端契约：GET .../analysis → {success, analyzed, data} */
+  async function getAnalysis(documentId, libraryType) {
+    const { ok, status, data } = await api(_analysisPath(documentId, libraryType));
     if (status === 404) return null;
-    if (!ok) throw new Error(data?.error || `读取共享分析失败（${status}）`);
+    if (!ok) throw new Error(data?.error || `读取分析结果失败（${status}）`);
     return data?.data || null;
   }
 

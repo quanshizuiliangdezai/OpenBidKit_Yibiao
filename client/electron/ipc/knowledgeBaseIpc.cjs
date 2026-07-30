@@ -21,6 +21,8 @@ function registerKnowledgeBaseIpc({ knowledgeBaseService }) {
   ipcMain.handle('knowledge-base:analyze-external-file', (event, documentId, filePath, fileName, folderId, libraryType) => knowledgeBaseService.analyzeExternalFile(documentId, filePath, fileName, folderId, event.sender, libraryType));
   // 团队库：本机无分析时从服务器拉取共享分析结果水合到本地库
   ipcMain.handle('knowledge-base:hydrate-team-analysis', (_event, documentId, folderId) => knowledgeBaseService.hydrateTeamAnalysis(documentId, folderId));
+  // 个人库：从服务器拉取分析结果水合到本地库（owner 隔离随文档同步）
+  ipcMain.handle('knowledge-base:hydrate-personal-analysis', (_event, documentId, folderId) => knowledgeBaseService.hydratePersonalAnalysis(documentId, folderId));
   ipcMain.handle('knowledge-base:get-local-status', (_event, documentId) => knowledgeBaseService.getLocalDocumentStatus(documentId));
   ipcMain.handle('knowledge-base:delete-local-analysis', (_event, documentId) => knowledgeBaseService.deleteLocalAnalysis(documentId));
 }
