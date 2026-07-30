@@ -426,6 +426,8 @@ function KnowledgeBasePage() {
   const [showSyncToTeam, setShowSyncToTeam] = useState(false);
   const [teamFolderOptions, setTeamFolderOptions] = useState<KnowledgeFolder[]>([]);
   const [syncTargetFolderId, setSyncTargetFolderId] = useState('');
+  const [showNewTeamFolderInput, setShowNewTeamFolderInput] = useState(false);
+  const [newTeamFolderName, setNewTeamFolderName] = useState('');
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<string>>(() => new Set());
   const [selectedFolderIds, setSelectedFolderIds] = useState<Set<string>>(() => new Set());
   // 文件夹树折叠状态
@@ -1012,6 +1014,27 @@ function KnowledgeBasePage() {
     setShowSyncToTeam(true);
   };
 
+  // 在「同步到团队」弹窗中新建团队库文件夹
+  const handleCreateTeamFolder = async () => {
+    const name = newTeamFolderName.trim();
+    if (!name) { showToast('请输入文件夹名称', 'info'); return; }
+    try {
+      const res = await window.yibiao?.kbTeam.createFolder(name, undefined);
+      if (res?.success && res.data) {
+        showToast(`已创建团队文件夹「${name}」`, 'success');
+        setNewTeamFolderName('');
+        setShowNewTeamFolderInput(false);
+        await fetchTeamFolders();
+        // 选中新创建的文件夹
+        if (res.data.id) setSyncTargetFolderId(String(res.data.id));
+      } else {
+        throw new Error(res?.error || '创建失败');
+      }
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '创建团队文件夹失败', 'error');
+    }
+  };
+
   // 确认将选中的个人文档同步到团队库（目标文件夹留空则自动创建）
   const confirmSyncToTeam = async () => {
     try {
@@ -1025,7 +1048,6 @@ function KnowledgeBasePage() {
       const autoName = result.data?.auto_folder ? result.data?.folder_name : null;
       const targetFolderId = result.data?.folder_id ? String(result.data.folder_id) : '';
       const tail = failed ? `，${failed} 个失败` : '';
-      showToast(`已同步 ${created} 个文档到团队${autoName ? `（自动创建文件夹「${autoName}」）` : ''}${tail}`, 'success');
       setSelectedDocumentIds(new Set());
       setSelectedFolderIds(new Set());
       setShowSyncToTeam(false);
@@ -1034,16 +1056,29 @@ function KnowledgeBasePage() {
       await loadTeamTree();
       if (targetFolderId) setActiveFolderId(targetFolderId);
       await loadTeamTree();
-      // 服务器侧分析：同步到团队的文档由服务器 Worker 自动分析，客户端仅轮询状态。
+      // 服务器侧分析：同步到团队的文档若个人库已有分析结果则直接复制（不需要重跑 Worker���，
+      // 否则启动轮询器等待服务器 Worker 自动分析。
       const analyzeErrors: string[] = [];
+      let syncedAnalysisCount = 0;
       if (targetFolderId) {
         for (const item of result.data?.created || []) {
           if (!item.remote_id) {
             analyzeErrors.push(`文档「${item.file_name || item.document_id}」缺少同步信息，跳过`);
             continue;
           }
-          startTeamAnalysisPolling(String(item.remote_id), targetFolderId);
+          const itemSynced = (item as any)?.analysis_synced;
+          if (itemSynced) {
+            syncedAnalysisCount += 1;
+            // 分析已同步，直接水合到本地库（刷新树时会从服务端读取共享分析）
+          } else {
+            startTeamAnalysisPolling(String(item.remote_id), targetFolderId);
+          }
         }
+      }
+      const syncMsg = `已同步 ${created} 个文档到团队${autoName ? `（自动创建文件夹「${autoName}」）` : ''}${tail}`;
+      showToast(syncMsg, 'success');
+      if (syncedAnalysisCount) {
+        showToast(`已同步 ${syncedAnalysisCount} 个文档的分析结果，无需重新分析`, 'success');
       }
       // 立即刷新，让新文档以「分析中」出现（后续状态由轮询器驱动刷新）
       window.setTimeout(() => { void loadTeamTree(); }, 2000);
@@ -2131,8 +2166,25 @@ function KnowledgeBasePage() {
                 <div className="knowledge-empty-box"><strong>团队库暂无文件夹</strong><p>不选文件夹将自动创建一个新文件夹。</p></div>
               )}
             </div>
+            <div style={{ marginBottom: 12 }}>
+              {showNewTeamFolderInput ? (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input
+                    value={newTeamFolderName}
+                    onChange={(e) => setNewTeamFolderName(e.target.value)}
+                    placeholder="输入文件夹名称"
+                    autoFocus
+                    onKeyDown={(e) => { if (e.key === 'Enter') void handleCreateTeamFolder(); if (e.key === 'Escape') { setShowNewTeamFolderInput(false); setNewTeamFolderName(''); } }}
+                  />
+                  <button type="button" className="primary-action" onClick={() => void handleCreateTeamFolder()}>创建</button>
+                  <button type="button" className="secondary-action" onClick={() => { setShowNewTeamFolderInput(false); setNewTeamFolderName(''); }}>取消</button>
+                </div>
+              ) : (
+                <button type="button" className="secondary-action" onClick={() => setShowNewTeamFolderInput(true)}>+ 新建文件夹</button>
+              )}
+            </div>
             <div className="knowledge-sync-actions">
-              <button type="button" className="secondary-action" onClick={() => setShowSyncToTeam(false)} disabled={syncing}>取消</button>
+              <button type="button" className="secondary-action" onClick={() => { setShowSyncToTeam(false); setShowNewTeamFolderInput(false); setNewTeamFolderName(''); }} disabled={syncing}>取消</button>
               <button type="button" className="primary-action" onClick={() => void confirmSyncToTeam()} disabled={syncing}>
                 {syncing ? '同步中...' : '开始同步'}
               </button>

@@ -1190,20 +1190,20 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 collected = []
                 self._collect_master_folder_docs(str(pfid), collected)
                 for did in collected:
-                    remote, rname, ierr = self._import_personal_doc_to_team(str(did), int(folder_id), employee)
+                    remote, rname, ierr, asyn = self._import_personal_doc_to_team(str(did), int(folder_id), employee)
                     if remote is None:
                         failed.append({'document_id': did, 'error': ierr or '导入失败'})
                         continue
-                    created.append({'document_id': did, 'remote_id': remote, 'file_name': rname})
+                    created.append({'document_id': did, 'remote_id': remote, 'file_name': rname, 'analysis_synced': asyn})
             for item in data['documents']:
                 doc_id = item.get('document_id') or item.get('id')
                 if not doc_id:
                     continue
-                remote, rname, ierr = self._import_personal_doc_to_team(str(doc_id), int(folder_id), employee)
+                remote, rname, ierr, asyn = self._import_personal_doc_to_team(str(doc_id), int(folder_id), employee)
                 if remote is None:
                     failed.append({'document_id': doc_id, 'error': ierr or '导入失败'})
                     continue
-                created.append({'document_id': doc_id, 'remote_id': remote, 'file_name': rname})
+                created.append({'document_id': doc_id, 'remote_id': remote, 'file_name': rname, 'analysis_synced': asyn})
             audit_event(
                 account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
                 role=employee.get('role'), action='import', target_type='document',
@@ -2404,8 +2404,24 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             title = '%s（%s %s修改版）%s' % (base_name, acct, ts, ext)
         doc, err = kb_db.upload_document(team_folder_id, employee['id'] if employee else owner_id, title, title, mime, data)
         if err:
-            return None, title, err
-        return doc['id'], title, None
+            return None, title, err, False
+        # 个人库若已有分析结果，直接复制到团队库 kb_analysis（避免重跑 Worker）。
+        analysis_synced = False
+        try:
+            analysis = _master_get_analysis(master_doc_id)
+            if analysis and analysis.get('payload'):
+                kb_db.save_team_analysis(
+                    doc['id'],
+                    analysis.get('status') or 'success',
+                    analysis.get('payload'),
+                    item_count=analysis.get('item_count'),
+                    block_count=analysis.get('block_count'),
+                    analyzer_id=employee['id'] if employee else owner_id,
+                    analyzer_name=(employee.get('display_name') or employee.get('username')) if employee else None)
+                analysis_synced = True
+        except Exception:
+            pass  # 分析同步失败不阻塞文档导入
+        return doc['id'], title, None, analysis_synced
 
     def _auto_team_folder_name(self, folder_ids, employee):
         """自动同步到团队库时，根据选中的个人库文件夹名决定新建文件夹名；无文件夹则用工号时间戳。"""
