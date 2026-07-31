@@ -809,8 +809,6 @@ function KnowledgeBasePage() {
 
   // 从服务器获取文件夹+文档列表，合并本地分析状态
   const loadTeamTree = async () => {
-    // 非团队库激活时直接返回，不写入 index，避免覆盖个人库内容（串库 bug）
-    if (kbTabRef.current !== 'team') return;
     try {
       setListLoading(true);
       const result = await window.yibiao?.kbTeam.getTree();
@@ -868,8 +866,6 @@ function KnowledgeBasePage() {
 
   // 从服务器获取个人库文件夹+文档列表（master.sqlite，已有分析状态）
   const loadPersonalTree = async () => {
-    // 非个人库激活时直接返回，不写入 index，避免覆盖团队库内容（串库 bug）
-    if (kbTabRef.current !== 'personal') return;
     try {
       setListLoading(true);
       const result = await window.yibiao?.kbPersonal.getTree();
@@ -1053,7 +1049,6 @@ function KnowledgeBasePage() {
       setShowSyncToTeam(false);
       // 自动切到团队库并选中目标文件夹，让用户立即看到同步结果
       setKbTab('team');
-      kbTabRef.current = 'team'; // setState 异步，必须同步更新 ref，否则 loadTeamTree 的 guard 会拦截
       await loadTeamTree();
       if (targetFolderId) setActiveFolderId(targetFolderId);
       await loadTeamTree();
@@ -1124,7 +1119,6 @@ function KnowledgeBasePage() {
 
       // 同步后自动切到个人库并选中“团队库导入”文件夹，避免用户以为没同步
       setKbTab('personal');
-      kbTabRef.current = 'personal'; // setState 异步，必须同步更新 ref，否则 loadPersonalTree 的 guard 会拦截
       await loadPersonalTree();
       if (targetFolderId) setActiveFolderId(targetFolderId);
       await loadPersonalTree();
