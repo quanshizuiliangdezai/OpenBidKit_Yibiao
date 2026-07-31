@@ -2701,7 +2701,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 return self._send(200, {'documentId': m.group(1), 'status': 'unknown', 'progress': 0, 'message': 'Worker 不可达: %s' % e})
 
         # ==================== 个人库分析读取（owner 隔离）====================
-        m = re.match(r'^/api/personal/documents/([0-9a-fA-F]+)/analysis$', path)
+        m = re.match(r'^/api/personal/documents/([0-9a-fA-F]+|team-\d+-\d+)/analysis$', path)
         if m:
             employee = self._auth()
             if not employee:
