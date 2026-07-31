@@ -1053,6 +1053,7 @@ function KnowledgeBasePage() {
       setShowSyncToTeam(false);
       // 自动切到团队库并选中目标文件夹，让用户立即看到同步结果
       setKbTab('team');
+      kbTabRef.current = 'team'; // setState 异步，必须同步更新 ref，否则 loadTeamTree 的 guard 会拦截
       await loadTeamTree();
       if (targetFolderId) setActiveFolderId(targetFolderId);
       await loadTeamTree();
@@ -1123,6 +1124,7 @@ function KnowledgeBasePage() {
 
       // 同步后自动切到个人库并选中“团队库导入”文件夹，避免用户以为没同步
       setKbTab('personal');
+      kbTabRef.current = 'personal'; // setState 异步，必须同步更新 ref，否则 loadPersonalTree 的 guard 会拦截
       await loadPersonalTree();
       if (targetFolderId) setActiveFolderId(targetFolderId);
       await loadPersonalTree();
