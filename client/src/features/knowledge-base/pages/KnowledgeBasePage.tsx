@@ -563,6 +563,16 @@ function KnowledgeBasePage() {
   const [batchProcessing, setBatchProcessing] = useState(false);
   const [showBatchMove, setShowBatchMove] = useState(false);
   const [batchMoveTargetId, setBatchMoveTargetId] = useState('');
+  // C4 删除确认弹窗：用 Radix Dialog 替代原生 window.confirm，避免 Electron 子窗口闪烁
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    type: 'document' | 'folder' | 'batch';
+    title: string;
+    message: string;
+    document?: KnowledgeDocument;
+    folderId?: string;
+    folderName?: string;
+  } | null>(null);
+  const [deleteConfirmBusy, setDeleteConfirmBusy] = useState(false);
 
   const toggleSelectFolder = (folderId: string) => {
     const isSelecting = !selectedFolderIds.has(folderId);
@@ -1464,9 +1474,18 @@ function KnowledgeBasePage() {
     }
   };
 
-  const deleteFolder = async (folderId: string, folderName: string) => {
+  const confirmDeleteFolder = (folderId: string, folderName: string) => {
     const count = documentsByFolder.get(folderId)?.length || 0;
-    if (!window.confirm(`确定删除文件夹"${folderName}"吗？其中 ${count} 个文档也会一起删除。`)) return;
+    setDeleteConfirm({
+      type: 'folder',
+      title: '删除文件夹',
+      message: `确定删除文件夹"${folderName}"吗？其中 ${count} 个文档也会一起删除。`,
+      folderId,
+      folderName,
+    });
+  };
+
+  const doDeleteFolder = async (folderId: string, folderName: string) => {
     try {
       const result = kbTab === 'team'
         ? await window.yibiao?.kbTeam.deleteFolder(folderId)
@@ -1504,12 +1523,20 @@ function KnowledgeBasePage() {
     }
   };
 
-  const deleteDocument = async (document: KnowledgeDocument) => {
+  const confirmDeleteDocument = (document: KnowledgeDocument) => {
     if (!canDeleteDoc(document)) {
       showToast('只能删除自己上传的文档', 'info');
       return;
     }
-    if (!window.confirm(`确定删除文档"${document.file_name}"吗？`)) return;
+    setDeleteConfirm({
+      type: 'document',
+      title: '删除文档',
+      message: `确定删除文档"${document.file_name}"吗？`,
+      document,
+    });
+  };
+
+  const doDeleteDocument = async (document: KnowledgeDocument) => {
     try {
       const result = kbTab === 'team'
         ? await window.yibiao?.kbTeam.deleteDocument(document.id)
@@ -1532,6 +1559,24 @@ function KnowledgeBasePage() {
       showToast('文档已删除', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '删除文档失败', 'error');
+    }
+  };
+
+  const handleDeleteConfirm = async () => {
+    const target = deleteConfirm;
+    setDeleteConfirm(null);
+    if (!target) return;
+    setDeleteConfirmBusy(true);
+    try {
+      if (target.type === 'document' && target.document) {
+        await doDeleteDocument(target.document);
+      } else if (target.type === 'folder' && target.folderId) {
+        await doDeleteFolder(target.folderId, target.folderName || '');
+      } else if (target.type === 'batch') {
+        await doBatchDelete();
+      }
+    } finally {
+      setDeleteConfirmBusy(false);
     }
   };
 
@@ -1694,11 +1739,18 @@ function KnowledgeBasePage() {
   };
 
   // ---- E1 批量操作 ----
-  const handleBatchDelete = async () => {
+  const confirmBatchDelete = () => {
     if (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0) return;
     const docCount = selectedDocumentIds.size;
     const folderCount = selectedFolderIds.size;
-    if (!window.confirm(`确定删除选中的 ${docCount} 个文档和 ${folderCount} 个文件夹吗？`)) return;
+    setDeleteConfirm({
+      type: 'batch',
+      title: '批量删除',
+      message: `确定删除选中的 ${docCount} 个文档和 ${folderCount} 个文件夹吗？`,
+    });
+  };
+
+  const doBatchDelete = async () => {
     try {
       setBatchProcessing(true);
       for (const id of Array.from(selectedDocumentIds)) {
@@ -2104,7 +2156,7 @@ function KnowledgeBasePage() {
               <button type="button" className="secondary-action" onClick={() => setShowBatchMove(true)} disabled={batchProcessing || syncing || hasSelectedProcessing}>
                 批量移动（{selectedDocumentIds.size + selectedFolderIds.size}）
               </button>
-              <button type="button" className="danger-action" onClick={() => void handleBatchDelete()} disabled={batchProcessing || syncing}>
+              <button type="button" className="danger-action" onClick={() => void confirmBatchDelete()} disabled={batchProcessing || syncing}>
                 {batchProcessing ? '处理中...' : `批量删除（${selectedDocumentIds.size + selectedFolderIds.size}）`}
               </button>
               {selectedDocumentIds.size > 0 && (
@@ -2307,7 +2359,7 @@ function KnowledgeBasePage() {
                             className="is-danger"
                             disabled={!canManageFolder(folder)}
                             title={canManageFolder(folder) ? '' : '只能删除自己创建的文件夹'}
-                            onClick={() => void deleteFolder(folder.id, folder.name)}
+                            onClick={() => void confirmDeleteFolder(folder.id, folder.name)}
                           >删除</button>
                         </div>
                       )}
@@ -2395,7 +2447,7 @@ function KnowledgeBasePage() {
                         </button>
                       )}
                       {canDeleteDoc(document) ? (
-                        <button type="button" className="is-danger" onClick={() => void deleteDocument(document)}>删除</button>
+                        <button type="button" className="is-danger" onClick={() => void confirmDeleteDocument(document)}>删除</button>
                       ) : (
                         <button type="button" className="is-danger" disabled title="只能删除自己上传的文档">删除</button>
                       )}
@@ -2487,7 +2539,7 @@ function KnowledgeBasePage() {
             onClick={(event) => {
               event.stopPropagation();
               closeFolderMenu();
-              void deleteFolder(folderMenu.folder.id, folderMenu.folder.name);
+              void confirmDeleteFolder(folderMenu.folder.id, folderMenu.folder.name);
             }}
           >
             删除文件夹
@@ -2612,6 +2664,24 @@ function KnowledgeBasePage() {
               <button type="button" className="secondary-action" onClick={() => setShowBatchMove(false)} disabled={batchProcessing}>取消</button>
               <button type="button" className="primary-action" onClick={() => void handleBatchMove(batchMoveTargetId)} disabled={batchProcessing || (selectedDocumentIds.size > 0 && !batchMoveTargetId)}>
                 {batchProcessing ? '移动中...' : '移动'}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={Boolean(deleteConfirm)} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="knowledge-sync-modal" />
+          <Dialog.Content className="knowledge-sync-dialog-card">
+            <div className="knowledge-sync-head">
+              <Dialog.Title className="knowledge-sync-title">{deleteConfirm?.title}</Dialog.Title>
+              <Dialog.Description className="knowledge-sync-desc">{deleteConfirm?.message}</Dialog.Description>
+            </div>
+            <div className="knowledge-sync-actions">
+              <button type="button" className="secondary-action" onClick={() => setDeleteConfirm(null)} disabled={deleteConfirmBusy || batchProcessing}>取消</button>
+              <button type="button" className="danger-action" onClick={() => void handleDeleteConfirm()} disabled={deleteConfirmBusy || batchProcessing}>
+                {deleteConfirmBusy || batchProcessing ? '删除中...' : '确认删除'}
               </button>
             </div>
           </Dialog.Content>
