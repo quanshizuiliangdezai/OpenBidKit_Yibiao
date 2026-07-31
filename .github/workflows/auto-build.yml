@@ -122,6 +122,17 @@ jobs:
           echo "Bumping version: $CURRENT -> $NEW_VERSION (trigger: $BUMP)"
           npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version
 
+      - name: Commit version bump
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          git config user.name "yibiao-ci"
+          git config user.email "ci@yibiao.local"
+          git add client/package.json client/package-lock.json
+          NEW_VERSION=$(node -p "require('./client/package.json').version")
+          git commit -m "chore(release): bump version to v${NEW_VERSION} [skip ci]" || echo "Nothing to commit"
+          git push origin main || echo "Push skipped"
+
       - name: Build renderer
         working-directory: client
         run: npm run build
