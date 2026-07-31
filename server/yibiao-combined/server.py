@@ -2696,6 +2696,21 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             doc, err = self._personal_doc_owner_check(m.group(1), employee)
             if err is not None:
                 return
+            # 本地（个人库/团队同步文档）已有分析结果时，直接返回 success，
+            # 不再代理到 Worker。否则 Worker 不认识 team-<id>-<user> 文档，
+            # 会误报 pending / 0 条，导致客户端轮询把正确状态覆盖成「等待处理」。
+            local_analysis = _master_get_analysis(m.group(1))
+            if local_analysis and (local_analysis.get('status') or '').lower() == 'success':
+                return self._send(200, {
+                    'documentId': m.group(1),
+                    'status': 'success',
+                    'progress': 100,
+                    'message': local_analysis.get('message') or '分析完成',
+                    'item_count': local_analysis.get('item_count') or 0,
+                    'block_count': local_analysis.get('block_count') or 0,
+                    'candidate_item_count': local_analysis.get('candidate_item_count') or 0,
+                    'filtered_block_count': local_analysis.get('filtered_block_count') or 0,
+                })
             try:
                 import urllib.request
                 req = urllib.request.Request(WORKER_URL + '/status/' + m.group(1))
@@ -2703,8 +2718,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     st = json.loads(resp.read().decode('utf-8'))
                 return self._send(200, st)
             except Exception as e:
-                analysis = _master_get_analysis(m.group(1))
-                if analysis:
+                if local_analysis:
                     return self._send(200, {'documentId': m.group(1), 'status': 'success', 'progress': 100, 'message': '分析完成'})
                 return self._send(200, {'documentId': m.group(1), 'status': 'unknown', 'progress': 0, 'message': 'Worker 不可达: %s' % e})
 

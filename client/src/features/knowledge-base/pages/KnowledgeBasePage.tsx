@@ -1182,10 +1182,13 @@ function KnowledgeBasePage() {
       await loadPersonalTree();
 
       // 分析走服务器：同步时服务端已把团队库现有分析结果复制到个人库；
-      // 对每篇启动个人库轮询，已分析的首轮即水合，未分析的走兜底超时自动停止。
+      // 对每篇启动个人库轮询。注意：从团队库同步来的文档 ID 形如 team-<id>-<user>，
+      // 其分析已随同步复制到个人库，个人库 Worker 不会再处理它，无需轮询（轮询会
+      // 被服务端 status 接口直接判定为 success 并停止，这里干脆跳过以减少干扰）。
       for (const item of syncedItems) {
-        if (item.personal_id) {
-          startPersonalAnalysisPolling(String(item.personal_id), String(item.folder_id || targetFolderId || ''));
+        const pid = item.personal_id ? String(item.personal_id) : '';
+        if (pid && !pid.startsWith('team-')) {
+          startPersonalAnalysisPolling(pid, String(item.folder_id || targetFolderId || ''));
         }
       }
     } catch (error) {
