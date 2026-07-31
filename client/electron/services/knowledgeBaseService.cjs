@@ -2444,7 +2444,10 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       let local = null;
       try {
         local = knowledgeBaseStore.getDocument(documentId);
-        if (local && local.status === 'success') {
+        // 本地已有 success 但条目数为 0 时，多半是旧/脏记录（如删除后重新同步、
+        // 或早期版本只写了状态没写内容），继续从服务器水合，避免界面显示「完成/未分析」
+        // 且查看条目/Markdown 空白。
+        if (local && local.status === 'success' && local.item_count > 0) {
           debugLog(docId, 'hydrate:local-success');
           return getLocalDocumentStatus(documentId);
         }

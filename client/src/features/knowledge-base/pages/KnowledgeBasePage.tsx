@@ -918,7 +918,14 @@ function KnowledgeBasePage() {
       const documents = await Promise.all(
         serverDocuments.map(async (doc) => {
           let localStatus = await getLocalStatusSafe(doc.id);
-          if (!localStatus || localStatus.status !== 'success') {
+          // 团队库同步过来的文档 ID 为 team-<id>-<user>，其分析结果以服务器为准。
+          // 本地记录若只有 success 状态但无条目（item_count=0），说明是脏/旧记录，
+          // 需要重新从服务器水合，否则会出现「完成/未分析」且查看内容空白。
+          const needsHydrate =
+            !localStatus ||
+            localStatus.status !== 'success' ||
+            (String(doc.id).startsWith('team-') && (localStatus.item_count || 0) === 0);
+          if (needsHydrate) {
             try {
               localStatus = (await window.yibiao?.knowledgeBase.hydratePersonalAnalysis(doc.id, doc.folder_id ?? '')) ?? null;
             } catch {
@@ -1920,6 +1927,16 @@ function KnowledgeBasePage() {
     if (mode === 'analysis') {
       await loadAnalysis(document.id);
       return;
+    }
+
+    // 个人库中从团队库同步的文档（team-<id>-<user>），查看条目/Markdown 前先确保已水合。
+    // 防止本地脏记录导致打开空白。
+    if (kbTab === 'personal' && String(document.id).startsWith('team-') && document.status === 'success') {
+      try {
+        await window.yibiao?.knowledgeBase.hydratePersonalAnalysis(document.id, document.folder_id ?? '');
+      } catch {
+        /* 水合失败继续尝试读取 */
+      }
     }
 
     try {
