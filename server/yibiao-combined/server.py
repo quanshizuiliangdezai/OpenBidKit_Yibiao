@@ -1090,7 +1090,8 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             return self._send(200, {'success': True, 'message': '已重新触发分析'})
 
         # ==================== 个人库分析写回（Worker 回写；随文档同步，owner 隔离）====================
-        m = re.match(r'^/api/personal/documents/([0-9a-fA-F]+)/analysis$', path)
+        # 文档 ID 可能是普通十六进制，也可能是从团队库同步下来的 team-<team_id>-<user_id>。
+        m = re.match(r'^/api/personal/documents/([0-9a-fA-F]+|team-\d+-\d+)/analysis$', path)
         if m:
             employee = self._auth()
             if not employee:
@@ -1101,14 +1102,33 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             payload = data.get('payload')
             if payload is None:
                 return self._send(400, {'error': '缺少 payload'})
+            # 即使客户端没传顶层统计字段，也从 payload 提取（与个人库字段保持一致）
+            item_count = data.get('item_count')
+            block_count = data.get('block_count')
+            filtered_block_count = data.get('filtered_block_count')
+            candidate_item_count = data.get('candidate_item_count')
+            if item_count is None or block_count is None:
+                try:
+                    payload_obj = json.loads(payload) if isinstance(payload, str) else payload
+                    if isinstance(payload_obj, dict):
+                        if item_count is None and isinstance(payload_obj.get('final_items'), list):
+                            item_count = len(payload_obj['final_items'])
+                        if block_count is None and isinstance(payload_obj.get('blocks'), list):
+                            block_count = len(payload_obj['blocks'])
+                        if filtered_block_count is None and isinstance(payload_obj.get('filtered_blocks'), list):
+                            filtered_block_count = len(payload_obj['filtered_blocks'])
+                        if candidate_item_count is None and isinstance(payload_obj.get('candidate_items'), list):
+                            candidate_item_count = len(payload_obj['candidate_items'])
+                except (TypeError, ValueError):
+                    pass
             if not isinstance(payload, str):
                 payload = json.dumps(payload, ensure_ascii=False)
             _master_save_analysis(
                 m.group(1),
                 data.get('status') or 'success',
                 payload,
-                item_count=data.get('item_count'),
-                block_count=data.get('block_count'),
+                item_count=item_count,
+                block_count=block_count,
                 analyzer_id=employee['id'],
                 analyzer_name=employee.get('display_name') or employee.get('username'),
             )
@@ -1119,7 +1139,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             return self._send(200, {'success': True, 'message': '分析已保存'})
 
         # ==================== 个人库分析重试：重新触发 Worker 分析 ====================
-        m = re.match(r'^/api/personal/documents/([0-9a-fA-F]+)/analysis/retry$', path)
+        m = re.match(r'^/api/personal/documents/([0-9a-fA-F]+|team-\d+-\d+)/analysis/retry$', path)
         if m:
             employee = self._auth()
             if not employee:
@@ -2660,7 +2680,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             return self._send(200, {'success': True, 'analyzed': True, 'data': analysis})
 
         # ==================== 个人库分析状态（代理 Worker，owner 隔离）====================
-        m = re.match(r'^/api/personal/documents/([0-9a-fA-F]+)/analysis/status$', path)
+        m = re.match(r'^/api/personal/documents/([0-9a-fA-F]+|team-\d+-\d+)/analysis/status$', path)
         if m:
             employee = self._auth()
             if not employee:

@@ -2068,9 +2068,11 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         system_discarded_after_retry_count: saveResult.report.system_discarded_after_retry_count,
       }, webContents);
 
-      // 团队库分析完成后，把完整结果（切块/条目/报告）回写服务器，实现「任一人分析、全员可见」。
-      // libraryType !== 'team'（个人库）不回写，个人分析保持本机私有。
-      if (libraryType === 'team' && kbTeamService && kbTeamService.saveAnalysis) {
+      // 分析完成后，把完整结果（切块/条目/报告）回写服务器：
+      // - 团队库：实现「任一人分析、全员可见」。
+      // - 个人库：回写到服务器 master.sqlite，使个人库→团队库同步能携带分析结果。
+      const shareService = libraryType === 'personal' ? kbPersonalService : kbTeamService;
+      if (shareService && shareService.saveAnalysis) {
         try {
           const markdown = knowledgeBaseStore.readMarkdown(documentId);
           const parserLabel = getDocument(documentId).parser_label || null;
@@ -2086,14 +2088,14 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
             discarded: recoveryResult.discarded,
             system_discarded_after_retry: recoveryResult.system_discarded,
           };
-          await kbTeamService.saveAnalysis(documentId, sharedPayload);
-          debugLog(documentId, 'match:shared-analysis-saved', { item_count: saveResult.finalItems.length });
+          await shareService.saveAnalysis(documentId, sharedPayload);
+          debugLog(documentId, 'match:shared-analysis-saved', { libraryType, item_count: saveResult.finalItems.length });
         } catch (shareErr) {
           const shareErrMsg = shareErr?.message || String(shareErr);
-          debugLog(documentId, 'match:shared-analysis-failed', { message: shareErrMsg });
+          debugLog(documentId, 'match:shared-analysis-failed', { libraryType, message: shareErrMsg });
           emitToast(webContents, {
             level: 'error',
-            message: `团队共享分析保存失败：${shareErrMsg}（本机已完成，其他成员暂时看不到）`,
+            message: `${libraryType === 'personal' ? '个人库' : '团队共享'}分析保存失败：${shareErrMsg}（本机已完成，同步时其他库暂时看不到）`,
           });
         }
       }
