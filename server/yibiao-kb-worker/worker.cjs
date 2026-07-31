@@ -314,53 +314,50 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname.startsWith('/status/')) {
       const id = url.pathname.split('/status/')[1];
-      // 1. 内存里有就直接返回（实时/进行中）
-      let st = taskStates.get(id);
-      // 2. 内存没有 → 先查 kb.sqlite 看是否已完成
-      let fromKbAnalysis = null;
+      // 1. 优先读 Worker 本地 SQLite 的真实文档状态（比内存 taskStates 更准，
+      //    因为分析管线内的 updateDocument 不一定每次都会触发 webContents 事件）。
+      let st = null;
       try {
-        const db = new Database(KB_DB, { readonly: true, fileMustExist: false });
-        const row = db.prepare(
-          'SELECT status, item_count, block_count, updated_at '
-          + 'FROM kb_analysis WHERE document_id=?'
-        ).get(parseInt(id, 10));
-        db.close();
-        if (row && row.status === 'success') {
-          fromKbAnalysis = {
-            status: 'success',
-            progress: 100,
-            message: '分析完成，已同步服务器',
-            item_count: row.item_count || 0,
-            candidate_item_count: 0,
-            block_count: row.block_count || 0,
-            filtered_block_count: 0,
-            updatedAt: row.updated_at || new Date().toISOString(),
+        const localDoc = knowledgeBaseStore.getDocument(id);
+        if (localDoc) {
+          const real = readRealStats(id, 'team') || {};
+          st = {
+            status: localDoc.status || 'pending',
+            progress: typeof localDoc.progress === 'number' ? localDoc.progress : 0,
+            message: localDoc.message || '',
+            item_count: localDoc.item_count || real.item_count || 0,
+            candidate_item_count: localDoc.candidate_item_count || real.candidate_item_count || 0,
+            block_count: localDoc.block_count || real.block_count || 0,
+            filtered_block_count: localDoc.filtered_block_count || real.filtered_block_count || 0,
+            updatedAt: localDoc.updated_at || new Date().toISOString(),
           };
         }
-      } catch (e) { /* kb.sqlite 不可读时忽略 */ }
-      if (fromKbAnalysis) {
-        st = fromKbAnalysis;
-      } else {
-        // 3. kb.sqlite 没有 success → 看 Worker SQLite 是否有部分数据（in-progress 文档重启后）
+      } catch (e) { /* 无本地记录时忽略 */ }
+      // 2. Worker 本地没有 / 非 success → 查 kb.sqlite 看是否已完成
+      if (!st || st.status !== 'success') {
         try {
-          const real = readRealStats(id, 'team');
-          if (real && (real.item_count > 0 || real.candidate_item_count > 0 || real.block_count > 0)) {
-            const isFinal = real.item_count > 0;
+          const db = new Database(KB_DB, { readonly: true, fileMustExist: false });
+          const row = db.prepare(
+            'SELECT status, item_count, block_count, updated_at '
+            + 'FROM kb_analysis WHERE document_id=?'
+          ).get(parseInt(id, 10));
+          db.close();
+          if (row && row.status === 'success') {
             st = {
-              status: isFinal ? 'success' : 'extracting',
-              progress: isFinal ? 100 : (real.candidate_item_count > 0 ? 65 : 35),
-              message: isFinal ? '分析完成，已同步服务器' : (real.candidate_item_count > 0 ? 'AI 正在提取知识条目' : '正在切分文档块'),
-              item_count: real.item_count,
-              candidate_item_count: real.candidate_item_count,
-              block_count: real.block_count,
-              filtered_block_count: real.filtered_block_count,
-              updatedAt: new Date().toISOString(),
+              status: 'success',
+              progress: 100,
+              message: '分析完成，已同步服务器',
+              item_count: row.item_count || 0,
+              candidate_item_count: 0,
+              block_count: row.block_count || 0,
+              filtered_block_count: 0,
+              updatedAt: row.updated_at || new Date().toISOString(),
             };
           }
-        } catch (e) { /* Worker SQLite 不可读时忽略 */ }
+        } catch (e) { /* kb.sqlite 不可读时忽略 */ }
       }
-      // 4. 都没有
-      if (!st) st = { status: 'pending', progress: 0, message: '尚未分析' };
+      // 3. 都没有
+      if (!st) st = taskStates.get(id) || { status: 'pending', progress: 0, message: '尚未分析' };
       return send(200, { documentId: id, ...st });
     }
     if (req.method === 'GET' && url.pathname === '/health') {
