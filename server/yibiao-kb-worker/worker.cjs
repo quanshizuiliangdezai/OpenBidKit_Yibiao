@@ -308,15 +308,40 @@ const server = http.createServer(async (req, res) => {
       const id = url.pathname.split('/status/')[1];
       // 1. 内存里有就直接返回（实时/进行中）
       let st = taskStates.get(id);
-      // 2. 内存没有 → 回查 Worker SQLite 已有分析记录（切块/条目等已落库的真实数据）
-      if (!st) {
+      // 2. 内存没有 → 先查 kb.sqlite 看是否已完成
+      let fromKbAnalysis = null;
+      try {
+        const db = new Database(KB_DB, { readonly: true, fileMustExist: false });
+        const row = db.prepare(
+          'SELECT status, item_count, block_count, updated_at '
+          + 'FROM kb_analysis WHERE document_id=?'
+        ).get(parseInt(id, 10));
+        db.close();
+        if (row && row.status === 'success') {
+          fromKbAnalysis = {
+            status: 'success',
+            progress: 100,
+            message: '分析完成，已同步服务器',
+            item_count: row.item_count || 0,
+            candidate_item_count: 0,
+            block_count: row.block_count || 0,
+            filtered_block_count: 0,
+            updatedAt: row.updated_at || new Date().toISOString(),
+          };
+        }
+      } catch (e) { /* kb.sqlite 不可读时忽略 */ }
+      if (fromKbAnalysis) {
+        st = fromKbAnalysis;
+      } else {
+        // 3. kb.sqlite 没有 success → 看 Worker SQLite 是否有部分数据（in-progress 文档重启后）
         try {
           const real = readRealStats(id, 'team');
-          if (real) {
+          if (real && (real.item_count > 0 || real.candidate_item_count > 0 || real.block_count > 0)) {
+            const isFinal = real.item_count > 0;
             st = {
-              status: (real.item_count > 0 || real.block_count > 0) ? 'extracting' : 'pending',
-              progress: real.item_count > 0 ? 80 : (real.candidate_item_count > 0 ? 50 : 0),
-              message: real.item_count > 0 ? '正在整理知识条目' : (real.candidate_item_count > 0 ? 'AI 正在提取知识条目' : '尚未分析'),
+              status: isFinal ? 'success' : 'extracting',
+              progress: isFinal ? 100 : (real.candidate_item_count > 0 ? 65 : 35),
+              message: isFinal ? '分析完成，已同步服务器' : (real.candidate_item_count > 0 ? 'AI 正在提取知识条目' : '正在切分文档块'),
               item_count: real.item_count,
               candidate_item_count: real.candidate_item_count,
               block_count: real.block_count,
@@ -325,29 +350,6 @@ const server = http.createServer(async (req, res) => {
             };
           }
         } catch (e) { /* Worker SQLite 不可读时忽略 */ }
-      }
-      // 3. 内存和 Worker SQLite 都没有 → 回查 kb.sqlite kb_analysis 表（历史完成文档）
-      if (!st || st.status === 'pending') {
-        try {
-          const db = new Database(KB_DB, { readonly: true, fileMustExist: false });
-          const row = db.prepare(
-            'SELECT status, item_count, block_count, updated_at '
-            + 'FROM kb_analysis WHERE document_id=?'
-          ).get(parseInt(id, 10));
-          db.close();
-          if (row && row.status === 'success') {
-            st = {
-              status: 'success',
-              progress: 100,
-              message: '分析完成，已同步服务器',
-              item_count: row.item_count || 0,
-              candidate_item_count: st?.candidate_item_count || 0,
-              block_count: row.block_count || 0,
-              filtered_block_count: st?.filtered_block_count || 0,
-              updatedAt: row.updated_at || new Date().toISOString(),
-            };
-          }
-        } catch (e) { /* kb.sqlite 不可读时忽略 */ }
       }
       // 4. 都没有
       if (!st) st = { status: 'pending', progress: 0, message: '尚未分析' };
