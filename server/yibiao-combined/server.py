@@ -2479,17 +2479,43 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         try:
             analysis = _master_get_analysis(master_doc_id)
             if analysis and analysis.get('payload'):
+                payload = analysis.get('payload')
+                # 从 payload 兜底提取统计字段，避免旧记录 item_count/block_count 为空
+                item_count = analysis.get('item_count')
+                block_count = analysis.get('block_count')
+                candidate_item_count = analysis.get('candidate_item_count')
+                filtered_block_count = analysis.get('filtered_block_count')
+                if item_count is None or block_count is None:
+                    try:
+                        if isinstance(payload, dict):
+                            if item_count is None and isinstance(payload.get('final_items'), list):
+                                item_count = len(payload['final_items'])
+                            if block_count is None and isinstance(payload.get('blocks'), list):
+                                block_count = len(payload['blocks'])
+                            if candidate_item_count is None and isinstance(payload.get('candidate_items'), list):
+                                candidate_item_count = len(payload['candidate_items'])
+                            if filtered_block_count is None and isinstance(payload.get('filtered_blocks'), list):
+                                filtered_block_count = len(payload['filtered_blocks'])
+                    except Exception:
+                        pass
                 kb_db.save_team_analysis(
                     doc['id'],
                     analysis.get('status') or 'success',
-                    analysis.get('payload'),
-                    item_count=analysis.get('item_count'),
-                    block_count=analysis.get('block_count'),
+                    payload,
+                    item_count=item_count,
+                    block_count=block_count,
                     analyzer_id=employee['id'] if employee else owner_id,
                     analyzer_name=(employee.get('display_name') or employee.get('username')) if employee else None)
                 analysis_synced = True
-        except Exception:
-            pass  # 分析同步失败不阻塞文档导入
+                log('[sync] import_personal_doc_to_team analysis_synced master=%s team=%s items=%s blocks=%s' % (
+                    master_doc_id, doc['id'], item_count, block_count))
+            else:
+                log('[sync] import_personal_doc_to_team no_analysis master=%s team=%s has_analysis=%s has_payload=%s' % (
+                    master_doc_id, doc['id'], bool(analysis), bool(analysis and analysis.get('payload'))))
+        except Exception as e:
+            log('[sync] import_personal_doc_to_team analysis_sync_failed master=%s team=%s: %s' % (
+                master_doc_id, doc['id'], e))
+            # 分析同步失败不阻塞文档导入
         return doc['id'], title, None, analysis_synced
 
     def _auto_team_folder_name(self, folder_ids, employee):
@@ -2660,18 +2686,32 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             employee = self._auth()
             if not employee:
                 return self._send(401, {'error': '未登录或会话已过期'})
+            doc_id = m.group(1)
+            # 优先检查服务器是否已有共享分析结果（个人库→团队库同步时已复制分析、
+            # 或本机分析回写）：避免 Worker 尚未处理/不可达时把完成状态覆盖成 pending。
+            analysis = kb_db.get_team_analysis(doc_id)
+            if analysis and (analysis.get('status') or '').lower() == 'success' and analysis.get('payload'):
+                return self._send(200, {
+                    'documentId': doc_id,
+                    'status': 'success',
+                    'progress': 100,
+                    'message': analysis.get('message') or '分析完成',
+                    'item_count': analysis.get('item_count') or 0,
+                    'candidate_item_count': analysis.get('candidate_item_count') or 0,
+                    'block_count': analysis.get('block_count') or 0,
+                    'filtered_block_count': analysis.get('filtered_block_count') or 0,
+                })
             try:
                 import urllib.request
-                req = urllib.request.Request(WORKER_URL + '/status/' + m.group(1))
+                req = urllib.request.Request(WORKER_URL + '/status/' + doc_id)
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     st = json.loads(resp.read().decode('utf-8'))
                 return self._send(200, st)
             except Exception as e:
                 # Worker 不可达时回退：直接看服务器是否已有分析结果
-                analysis = kb_db.get_team_analysis(m.group(1))
                 if analysis:
-                    return self._send(200, {'documentId': m.group(1), 'status': 'success', 'progress': 100, 'message': '分析完成'})
-                return self._send(200, {'documentId': m.group(1), 'status': 'unknown', 'progress': 0, 'message': 'Worker 不可达: %s' % e})
+                    return self._send(200, {'documentId': doc_id, 'status': 'success', 'progress': 100, 'message': '分析完成'})
+                return self._send(200, {'documentId': doc_id, 'status': 'unknown', 'progress': 0, 'message': 'Worker 不可达: %s' % e})
 
         # ==================== 团队库分析共享：读取分析结果 ====================
         m = re.match(r'^/api/documents/(\d+)/analysis$', path)

@@ -441,6 +441,7 @@ function KnowledgeBasePage() {
     });
   };
   const createFolderInputRef = useRef<HTMLInputElement>(null);
+  const newTeamFolderInputRef = useRef<HTMLInputElement>(null);
   // 服务器侧分析轮询器：docId -> setInterval 句柄。卸载时统一清理，避免泄漏。
   const analysisPollersRef = useRef<Map<string, number>>(new Map());
   useEffect(() => {
@@ -473,6 +474,23 @@ function KnowledgeBasePage() {
       return () => window.clearTimeout(timer);
     }
   }, [showCreateFolder]);
+
+  // 「同步到团队」弹窗中新建文件夹输入框的聚焦：Radix Dialog 打开后焦点管理
+  // 可能把焦点留在 Dialog 本身，导致输入框 autoFocus 失效，需要主动拉回。
+  useEffect(() => {
+    if (showNewTeamFolderInput && newTeamFolderInputRef.current) {
+      void window.yibiao?.focusMainWindow?.();
+      const timer = window.setTimeout(() => {
+        try {
+          newTeamFolderInputRef.current?.focus();
+          newTeamFolderInputRef.current?.select?.();
+        } catch {
+          /* 忽略聚焦异常 */
+        }
+      }, 60);
+      return () => window.clearTimeout(timer);
+    }
+  }, [showNewTeamFolderInput]);
   // 父子关系映射（用于折叠判断与折叠箭头）
   const folderParentMap = useMemo(() => {
     const map = new Map<string, string | null>();
@@ -1123,7 +1141,12 @@ function KnowledgeBasePage() {
           const itemSynced = (item as any)?.analysis_synced;
           if (itemSynced) {
             syncedAnalysisCount += 1;
-            // 分析已同步，直接水合到本地库（刷新树时会从服务端读取共享分析）
+            // 分析已同步，主动水合到本地库，避免 loadTeamTree 异步水合前显示「等待处理」
+            try {
+              await window.yibiao?.knowledgeBase.hydrateTeamAnalysis(String(item.remote_id), targetFolderId);
+            } catch {
+              /* 主动水合失败仍由 loadTeamTree 兜底 */
+            }
           } else {
             startTeamAnalysisPolling(String(item.remote_id), targetFolderId);
           }
@@ -2250,7 +2273,7 @@ function KnowledgeBasePage() {
       <Dialog.Root open={showSyncToTeam} onOpenChange={(open) => !open && setShowSyncToTeam(false)}>
         <Dialog.Portal>
           <Dialog.Overlay className="knowledge-sync-modal" />
-          <Dialog.Content className="knowledge-sync-dialog-card">
+          <Dialog.Content className="knowledge-sync-dialog-card" onCloseAutoFocus={(event) => event.preventDefault()}>
             <div className="knowledge-sync-head">
               <Dialog.Title className="knowledge-sync-title">同步到团队知识库</Dialog.Title>
               <Dialog.Description className="knowledge-sync-desc">
@@ -2275,21 +2298,26 @@ function KnowledgeBasePage() {
                 <div className="knowledge-empty-box"><strong>团队库暂无文件夹</strong><p>不选文件夹将自动创建一个新文件夹。</p></div>
               )}
             </div>
-            <div style={{ marginBottom: 12 }}>
+            <div className="knowledge-sync-new-folder">
               {showNewTeamFolderInput ? (
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div className="knowledge-sync-new-folder-form">
                   <input
+                    ref={newTeamFolderInputRef}
+                    className="knowledge-sync-new-folder-input"
                     value={newTeamFolderName}
                     onChange={(e) => setNewTeamFolderName(e.target.value)}
-                    placeholder="输入文件夹名称"
-                    autoFocus
+                    placeholder="输入新文件夹名称"
                     onKeyDown={(e) => { if (e.key === 'Enter') void handleCreateTeamFolder(); if (e.key === 'Escape') { setShowNewTeamFolderInput(false); setNewTeamFolderName(''); } }}
                   />
-                  <button type="button" className="primary-action" onClick={() => void handleCreateTeamFolder()}>创建</button>
-                  <button type="button" className="secondary-action" onClick={() => { setShowNewTeamFolderInput(false); setNewTeamFolderName(''); }}>取消</button>
+                  <div className="knowledge-sync-new-folder-actions">
+                    <button type="button" className="secondary-action" onClick={() => { setShowNewTeamFolderInput(false); setNewTeamFolderName(''); }}>取消</button>
+                    <button type="button" className="primary-action" onClick={() => void handleCreateTeamFolder()} disabled={!newTeamFolderName.trim()}>创建</button>
+                  </div>
                 </div>
               ) : (
-                <button type="button" className="secondary-action" onClick={() => setShowNewTeamFolderInput(true)}>+ 新建文件夹</button>
+                <button type="button" className="knowledge-sync-new-folder-trigger" onClick={() => setShowNewTeamFolderInput(true)}>
+                  <span>+</span> 新建文件夹
+                </button>
               )}
             </div>
             <div className="knowledge-sync-actions">
@@ -2349,7 +2377,12 @@ function KnowledgeBasePage() {
                             {isCollapsed ? '▸' : '▾'}
                           </button>
                         )}
-                        <button type="button" className="knowledge-folder-main" onClick={() => { if (searchActive) clearSearch(); startTransition(() => setActiveFolderId(folder.id)); }}>
+                        <button
+                          type="button"
+                          className="knowledge-folder-main"
+                          onMouseDown={() => { void window.yibiao?.focusMainWindow?.(); }}
+                          onClick={() => { if (searchActive) clearSearch(); startTransition(() => setActiveFolderId(folder.id)); }}
+                        >
                           <span aria-hidden="true">F</span>
                           <strong>{folder.name}</strong>
                           <small>{count} 个文档</small>
@@ -2553,7 +2586,7 @@ function KnowledgeBasePage() {
       <Dialog.Root open={showMoveFolder} onOpenChange={(open) => !open && setShowMoveFolder(false)}>
         <Dialog.Portal>
           <Dialog.Overlay className="knowledge-sync-modal" />
-          <Dialog.Content className="knowledge-sync-dialog-card">
+          <Dialog.Content className="knowledge-sync-dialog-card" onCloseAutoFocus={(event) => event.preventDefault()}>
             <div className="knowledge-sync-head">
               <Dialog.Title className="knowledge-sync-title">移动文件夹</Dialog.Title>
               <Dialog.Description className="knowledge-sync-desc">
@@ -2608,7 +2641,7 @@ function KnowledgeBasePage() {
       <Dialog.Root open={showRename} onOpenChange={(open) => !open && setShowRename(false)}>
         <Dialog.Portal>
           <Dialog.Overlay className="knowledge-sync-modal" />
-          <Dialog.Content className="knowledge-sync-dialog-card">
+          <Dialog.Content className="knowledge-sync-dialog-card" onCloseAutoFocus={(event) => event.preventDefault()}>
             <div className="knowledge-sync-head">
               <Dialog.Title className="knowledge-sync-title">重命名文件夹</Dialog.Title>
               <Dialog.Description className="knowledge-sync-desc">修改「{renameTarget?.name}」的名称。</Dialog.Description>
@@ -2636,7 +2669,7 @@ function KnowledgeBasePage() {
       <Dialog.Root open={showBatchMove} onOpenChange={(open) => !open && setShowBatchMove(false)}>
         <Dialog.Portal>
           <Dialog.Overlay className="knowledge-sync-modal" />
-          <Dialog.Content className="knowledge-sync-dialog-card">
+          <Dialog.Content className="knowledge-sync-dialog-card" onCloseAutoFocus={(event) => event.preventDefault()}>
             <div className="knowledge-sync-head">
               <Dialog.Title className="knowledge-sync-title">批量移动到</Dialog.Title>
               <Dialog.Description className="knowledge-sync-desc">
@@ -2676,7 +2709,7 @@ function KnowledgeBasePage() {
       <Dialog.Root open={Boolean(deleteConfirm)} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
         <Dialog.Portal>
           <Dialog.Overlay className="knowledge-sync-modal" />
-          <Dialog.Content className="knowledge-sync-dialog-card">
+          <Dialog.Content className="knowledge-sync-dialog-card" onCloseAutoFocus={(event) => event.preventDefault()}>
             <div className="knowledge-sync-head">
               <Dialog.Title className="knowledge-sync-title">{deleteConfirm?.title}</Dialog.Title>
               <Dialog.Description className="knowledge-sync-desc">{deleteConfirm?.message}</Dialog.Description>
@@ -2694,7 +2727,7 @@ function KnowledgeBasePage() {
       <Dialog.Root open={showTrash} onOpenChange={(open) => !open && setShowTrash(false)}>
         <Dialog.Portal>
           <Dialog.Overlay className="knowledge-sync-modal" />
-          <Dialog.Content className="knowledge-sync-dialog-card">
+          <Dialog.Content className="knowledge-sync-dialog-card" onCloseAutoFocus={(event) => event.preventDefault()}>
             <div className="knowledge-sync-head">
               <Dialog.Title className="knowledge-sync-title">回收站（24 小时内可恢复）</Dialog.Title>
               <Dialog.Description className="knowledge-sync-desc">删除的文件夹与文档会保留 24 小时，删除者本人或管理员可恢复。</Dialog.Description>
@@ -2978,7 +3011,7 @@ function KnowledgeItemSourceDialog({ item, developerMode, rendering, debugTrace,
   }, [debugTrace, developerMode, rendering]);
 
   return (
-    <Dialog.Content className="knowledge-source-dialog-card knowledge-source-viewer">
+    <Dialog.Content className="knowledge-source-dialog-card knowledge-source-viewer" onCloseAutoFocus={(event) => event.preventDefault()}>
       <div className="knowledge-source-head">
         <div>
           <span>知识条目原文</span>

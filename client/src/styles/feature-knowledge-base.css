@@ -1742,6 +1742,69 @@
   gap: 10px;
 }
 
+/* 同步到团队弹窗：新建文件夹区域 */
+.knowledge-sync-new-folder {
+  margin-top: 4px;
+}
+
+.knowledge-sync-new-folder-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  background: #ffffff;
+  border: 1px dashed var(--yb-border);
+  border-radius: 10px;
+  color: var(--yb-text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.knowledge-sync-new-folder-trigger:hover {
+  background: rgba(33, 116, 253, 0.06);
+  border-color: var(--yb-primary);
+  color: var(--yb-primary);
+}
+
+.knowledge-sync-new-folder-trigger span {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.knowledge-sync-new-folder-form {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  background: var(--yb-bg);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 12px;
+}
+
+.knowledge-sync-new-folder-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--yb-border);
+  border-radius: 10px;
+  font-size: 14px;
+  background: #ffffff;
+  color: var(--yb-text);
+  outline: none;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.knowledge-sync-new-folder-input:focus {
+  border-color: var(--yb-primary);
+  box-shadow: 0 0 0 3px rgba(33, 116, 253, 0.12);
+}
+
+.knowledge-sync-new-folder-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .knowledge-folder-context-menu {
   display: flex;
   flex-direction: column;
