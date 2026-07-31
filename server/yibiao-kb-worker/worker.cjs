@@ -129,21 +129,25 @@ function pickStats(doc) {
   };
 }
 
-// 实时从数据库读真实候选条目数（覆盖事件 document 上未及时更新的 candidate_item_count）。
-// 原因：kbService 在「提取/补充」阶段的多次 updateDocument 不带 candidate_item_count，
-// 而 saveCandidateItems 内部 updateDocument 又不传 webContents，导致 taskStates 长期为 0。
-function readRealCandidateCount(documentId, libraryType) {
+// 实时从 Worker 自己的 SQLite（yibiao.sqlite）读真实条目/块统计。
+// 原因：kb_service 在「切块/提取/匹配」阶段的多次 updateDocument 不带 item_count/candidate_item_count/block_count，
+// 且 saveCandidateItems 内部 updateDocument 又不传 webContents，导致 taskStates 长期为 0。
+// 注意：这些表在 Worker 进程的 SQLite（yibiao.sqlite）里，不在 kb.sqlite 里。
+function readRealStats(documentId, libraryType) {
   try {
-    const dbPath = (libraryType === 'personal') ? MASTER_DB : KB_DB;
-    const db = new Database(dbPath, { readonly: true, fileMustExist: false });
-    const idCol = (libraryType === 'personal') ? 'document_id' : 'document_id';
-    const row = db.prepare(
-      'SELECT COUNT(*) AS cnt FROM knowledge_candidate_items WHERE ' + idCol + '=?'
-    ).get(String(documentId));
-    db.close();
-    return row ? Number(row.cnt || 0) : 0;
+    // knowledgeBaseStore 是用 Worker 自己的 SQLite（yibiao.sqlite）初始化的
+    const items = knowledgeBaseStore.readItems(documentId);
+    const candidateItems = knowledgeBaseStore.readCandidateItems(documentId);
+    const blocks = knowledgeBaseStore.readBlocks(documentId);
+    const filteredBlocks = knowledgeBaseStore.readFilteredBlocks(documentId);
+    return {
+      item_count: Array.isArray(items) ? items.length : 0,
+      candidate_item_count: Array.isArray(candidateItems) ? candidateItems.length : 0,
+      block_count: Array.isArray(blocks) ? blocks.length : 0,
+      filtered_block_count: Array.isArray(filteredBlocks) ? filteredBlocks.length : 0,
+    };
   } catch {
-    return 0;
+    return null;
   }
 }
 
@@ -154,10 +158,15 @@ function makeFakeWebContents(documentId, libraryType) {
       if (channel === 'knowledge-base:event' && payload && payload.document) {
         const d = payload.document;
         const s = pickStats(d);
-        // 提取/补充阶段实时回查候选条目真实数
-        if (d.status === 'extracting' || d.status === 'analyzing' || d.status === 'matching' || d.status === 'recovering') {
-          const real = readRealCandidateCount(documentId, libraryType);
-          if (real > s.candidate_item_count) s.candidate_item_count = real;
+        // 提取/匹配阶段实时回查 Worker SQLite 真实条目/块数
+        if (d.status === 'extracting' || d.status === 'analyzing' || d.status === 'matching' || d.status === 'recovering' || d.status === 'ready_for_matching') {
+          const real = readRealStats(documentId, libraryType);
+          if (real) {
+            if (real.item_count > s.item_count) s.item_count = real.item_count;
+            if (real.candidate_item_count > s.candidate_item_count) s.candidate_item_count = real.candidate_item_count;
+            if (real.block_count > s.block_count) s.block_count = real.block_count;
+            if (real.filtered_block_count > s.filtered_block_count) s.filtered_block_count = real.filtered_block_count;
+          }
         }
         taskStates.set(String(documentId), {
           status: d.status || 'pending',
@@ -299,30 +308,48 @@ const server = http.createServer(async (req, res) => {
       const id = url.pathname.split('/status/')[1];
       // 1. 内存里有就直接返回（实时/进行中）
       let st = taskStates.get(id);
-      // 2. 内存没有 → 回查 kb.sqlite 已有分析结果（Worker 重启后老文档也能显示真实状态）
+      // 2. 内存没有 → 回查 Worker SQLite 已有分析记录（切块/条目等已落库的真实数据）
       if (!st) {
+        try {
+          const real = readRealStats(id, 'team');
+          if (real) {
+            st = {
+              status: (real.item_count > 0 || real.block_count > 0) ? 'extracting' : 'pending',
+              progress: real.item_count > 0 ? 80 : (real.candidate_item_count > 0 ? 50 : 0),
+              message: real.item_count > 0 ? '正在整理知识条目' : (real.candidate_item_count > 0 ? 'AI 正在提取知识条目' : '尚未分析'),
+              item_count: real.item_count,
+              candidate_item_count: real.candidate_item_count,
+              block_count: real.block_count,
+              filtered_block_count: real.filtered_block_count,
+              updatedAt: new Date().toISOString(),
+            };
+          }
+        } catch (e) { /* Worker SQLite 不可读时忽略 */ }
+      }
+      // 3. 内存和 Worker SQLite 都没有 → 回查 kb.sqlite kb_analysis 表（历史完成文档）
+      if (!st || st.status === 'pending') {
         try {
           const db = new Database(KB_DB, { readonly: true, fileMustExist: false });
           const row = db.prepare(
-            'SELECT status, item_count, candidate_item_count, block_count, filtered_block_count, updated_at '
+            'SELECT status, item_count, block_count, updated_at '
             + 'FROM kb_analysis WHERE document_id=?'
           ).get(parseInt(id, 10));
           db.close();
-          if (row && row.status) {
+          if (row && row.status === 'success') {
             st = {
-              status: row.status,
-              progress: row.status === 'success' ? 100 : 0,
-              message: row.status === 'success' ? '分析完成，已同步服务器' : '历史任务记录',
+              status: 'success',
+              progress: 100,
+              message: '分析完成，已同步服务器',
               item_count: row.item_count || 0,
-              candidate_item_count: row.candidate_item_count || 0,
+              candidate_item_count: st?.candidate_item_count || 0,
               block_count: row.block_count || 0,
-              filtered_block_count: row.filtered_block_count || 0,
+              filtered_block_count: st?.filtered_block_count || 0,
               updatedAt: row.updated_at || new Date().toISOString(),
             };
           }
         } catch (e) { /* kb.sqlite 不可读时忽略 */ }
       }
-      // 3. 都没有：未分析过
+      // 4. 都没有
       if (!st) st = { status: 'pending', progress: 0, message: '尚未分析' };
       return send(200, { documentId: id, ...st });
     }
