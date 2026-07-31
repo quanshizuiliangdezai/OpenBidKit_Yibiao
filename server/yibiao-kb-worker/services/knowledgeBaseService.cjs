@@ -9,6 +9,12 @@ const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 const { parseDocumentWithConfig } = require('./fileService.cjs');
 
+const parserLabels = {
+  local: '本地解析',
+  'mineru-accurate-api': 'MinerU 精准解析 API',
+  'mineru-agent-api': 'MinerU-Agent 轻量解析 API',
+};
+
 const supportedExtensions = new Set(['.doc', '.docx', '.wps', '.pdf', '.md', '.markdown', '.xls', '.xlsx']);
 const oversizedBlockChars = 8000;
 const semanticMergeTargetChars = 500;
@@ -2436,6 +2442,10 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       if (!supportedExtensions.has(ext)) {
         throw new Error(`不支持的文件类型：${ext}`);
       }
+      // 服务器 Worker 复用客户端本地解析逻辑；configStore 已强制 components.file_parser.provider='local'。
+      const config = configStore ? configStore.load() : { components: { file_parser: { provider: 'local' } } };
+      const parserProvider = config.components?.file_parser?.provider || 'local';
+      const parserLabel = parserLabels[parserProvider] || parserProvider;
       const effectiveFolderId = String(knowledgeBaseStore.ensureFolder(normalizedFolderId, '导入文档'));
       const documentDir = path.join('folders', effectiveFolderId, 'documents', documentId).replace(/\\/g, '/');
       const sourceName = `source${ext}`;
@@ -2452,6 +2462,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         item_count: 0, block_count: 0, filtered_block_count: 0,
         candidate_item_count: 0, discarded_block_count: 0,
         system_discarded_after_retry_count: 0,
+        parser_label: parserLabel,
         error: null, created_at: now(), updated_at: now(),
       };
       if (existing) knowledgeBaseStore.updateDocument(documentId, documentFields);

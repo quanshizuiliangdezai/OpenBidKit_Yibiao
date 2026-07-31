@@ -57,6 +57,14 @@ function readModelConfig() {
     developer_mode: false,
     analytics_client_id: 'worker',
     analytics_created_at: new Date().toISOString(),
+    // 文件解析方式：服务器 Worker 复用客户端本地解析逻辑，默认强制 local。
+    // 未来若需要在服务端启用 MinerU，可在此读取环境变量或扩展 model_config 表。
+    components: {
+      file_parser: {
+        provider: 'local',
+        mineru_token: '',
+      },
+    },
   };
   _modelCache = cfg;
   _modelCacheAt = now;
@@ -367,5 +375,7 @@ const server = http.createServer(async (req, res) => {
 server.listen(WORKER_PORT, async () => {
   console.log(`[worker] 分析 Worker 已启动：端口 ${WORKER_PORT}，数据目录 ${DATA_DIR}`);
   await ensureLogin();
-  console.log(`[worker] 模型配置 base_url=${readModelConfig().base_url} model=${readModelConfig().model_name}`);
+  const cfg = readModelConfig();
+  console.log(`[worker] 模型配置 base_url=${cfg.base_url} model=${cfg.model_name}`);
+  console.log(`[worker] 文件解析方式：${cfg.components?.file_parser?.provider || 'local'}（复用客户端本地解析逻辑）`);
 });
