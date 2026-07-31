@@ -2315,9 +2315,26 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                         (now, folder_id))
                 cols = {c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()}
                 doc_dir_rel = 'folders/%s/documents/%s' % (folder_id, new_doc_id)
-                team_status = team_doc.get('status') or 'pending'
-                team_progress = team_doc.get('progress') if team_doc.get('progress') is not None else (100 if team_status == 'success' else 0)
-                team_message = team_doc.get('message') or ('来自团队库' if team_status == 'success' else '等待处理')
+                # 团队库 knowledge_documents 没有 status/progress 字段，状态以 kb_analysis 为准
+                team_analysis = kb_db.get_team_analysis(doc_id)
+                analysis_status = (team_analysis.get('status') or '').lower() if team_analysis else ''
+                analysis_payload = team_analysis.get('payload') if team_analysis else None
+                if analysis_status == 'success' and analysis_payload:
+                    team_status = 'success'
+                    team_progress = 100
+                    team_message = '来自团队库（已分析）'
+                else:
+                    team_status = 'pending'
+                    team_progress = 0
+                    team_message = '等待处理'
+                team_item_count = team_analysis.get('item_count') if team_analysis else 0
+                team_block_count = team_analysis.get('block_count') if team_analysis else 0
+                # payload 中若存在候选条目/已过滤块，也同步计数（兼容旧 payload 结构）
+                payload_candidate_count = 0
+                payload_filtered_count = 0
+                if analysis_payload:
+                    payload_candidate_count = len(analysis_payload.get('candidate_items') or []) or len(analysis_payload.get('candidates') or [])
+                    payload_filtered_count = len(analysis_payload.get('filtered_blocks') or [])
                 fields = {
                     'document_id': new_doc_id, 'folder_id': folder_id, 'file_name': fname,
                     'title': team_doc.get('title') or fname,
@@ -2326,6 +2343,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     'status': team_status, 'progress': team_progress,
                     'message': team_message, 'created_at': now, 'updated_at': now,
                     'owner_id': owner_id, 'owner_name': owner_name,
+                    'item_count': team_item_count or 0,
+                    'block_count': team_block_count or 0,
+                    'candidate_item_count': payload_candidate_count,
+                    'filtered_block_count': payload_filtered_count,
                 }
                 # 个人库全文检索/RAG 需要 content_text；优先复制团队库已抽取的正文，没有则现场抽取。
                 if 'content_text' in cols:
