@@ -913,10 +913,18 @@ function KnowledgeBasePage() {
       }
       const { folders: serverFolders, documents: serverDocuments } = result.data;
       const folders = serverFolders.map(adaptServerFolder);
-      // 个人库文档分析在本地 store 完成，需合并本地状态
+      // 个人库文档分析在本地 store 完成，需合并本地状态；
+      // 从团队库同步过来的文档本地可能尚无记录，需从服务器水合共享分析结果。
       const documents = await Promise.all(
         serverDocuments.map(async (doc) => {
-          const localStatus = await getLocalStatusSafe(doc.id);
+          let localStatus = await getLocalStatusSafe(doc.id);
+          if (!localStatus || localStatus.status !== 'success') {
+            try {
+              localStatus = (await window.yibiao?.knowledgeBase.hydratePersonalAnalysis(doc.id, doc.folder_id ?? '')) ?? null;
+            } catch {
+              localStatus = null;
+            }
+          }
           return adaptPersonalDocument(doc, localStatus);
         }),
       );
