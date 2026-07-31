@@ -160,6 +160,25 @@
 }
 
 /* ---------- 账户列表 / 权限列表 公共 ---------- */
+.settings-section-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 36px 8px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--yb-text-strong, #1f2937);
+}
+.settings-section-title strong {
+  flex: 0 0 auto;
+}
+.settings-section-title span {
+  width: 6px;
+  height: 18px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #2174fd 0%, #4d8cff 100%);
+}
+
 .account-list-toolbar {
   display: flex;
   align-items: flex-start;
