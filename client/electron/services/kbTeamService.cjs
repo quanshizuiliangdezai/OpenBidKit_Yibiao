@@ -343,13 +343,17 @@ function createKbTeamService({ kbAuthService, app }) {
    * 404（无状态记录）视为 idle，让调用方继续轮询或回退。 */
   async function getAnalysisStatus(documentId) {
     const { ok, status, data } = await api(`/api/documents/${documentId}/analysis/status`);
-    if (status === 404) return { status: 'idle', progress: 0, message: '' };
+    if (status === 404) return { status: 'idle', progress: 0, message: '', item_count: 0, candidate_item_count: 0, block_count: 0, filtered_block_count: 0 };
     if (!ok) throw new Error(data?.error || `读取分析状态失败（${status}）`);
     const payload = data?.data || data || {};
     return {
       status: payload.status || 'idle',
       progress: typeof payload.progress === 'number' ? payload.progress : 0,
       message: payload.message || '',
+      item_count: typeof payload.item_count === 'number' ? payload.item_count : 0,
+      candidate_item_count: typeof payload.candidate_item_count === 'number' ? payload.candidate_item_count : 0,
+      block_count: typeof payload.block_count === 'number' ? payload.block_count : 0,
+      filtered_block_count: typeof payload.filtered_block_count === 'number' ? payload.filtered_block_count : 0,
     };
   }
 

@@ -328,6 +328,10 @@ function createKbPersonalService({ app, kbAuthService }) {
       status: p.status || 'idle',
       progress: typeof p.progress === 'number' ? p.progress : 0,
       message: p.message || '',
+      item_count: typeof p.item_count === 'number' ? p.item_count : 0,
+      candidate_item_count: typeof p.candidate_item_count === 'number' ? p.candidate_item_count : 0,
+      block_count: typeof p.block_count === 'number' ? p.block_count : 0,
+      filtered_block_count: typeof p.filtered_block_count === 'number' ? p.filtered_block_count : 0,
     };
   }
 
