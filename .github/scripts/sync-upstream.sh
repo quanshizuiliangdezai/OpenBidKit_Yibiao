@@ -44,7 +44,9 @@ log "Pre-merge HEAD: $PRE_MERGE_HEAD"
 # ========== 2. 添加 upstream 并 fetch ==========
 log "Adding upstream remote..."
 git remote add upstream "$UPSTREAM_REPO" 2>/dev/null || git remote set-url upstream "$UPSTREAM_REPO"
-git fetch upstream --tags
+# 只 fetch 上游分支（含 main），不要 --tags：fork 已有部分同名 tag 与上游指向不同
+# commit，--tags 会因 "would clobber existing tag" 失败，配合 set -e 直接退出整个同步。
+git fetch upstream '+refs/heads/*:refs/remotes/upstream/*' --no-tags
 
 # ========== 3. 检查落后情况 ==========
 BEHIND=$(git rev-list --count HEAD..upstream/main 2>/dev/null || echo "0")
