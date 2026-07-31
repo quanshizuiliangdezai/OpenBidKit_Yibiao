@@ -2308,6 +2308,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 return False, None, None, fname, '个人库尚未初始化（先在桌面端同步一次）'
             try:
                 self._ensure_owner_cols(conn)
+                self._ensure_deleted_col(conn)
                 # 确保 knowledge_folders 有 deleted_at/deleted_by 列（向后兼容）
                 fcols = {c[1] for c in conn.execute("PRAGMA table_info(knowledge_folders)").fetchall()}
                 for col in ('deleted_at', 'deleted_by', 'parent_id'):
@@ -2317,9 +2318,16 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 now = datetime.datetime.now().isoformat()
                 new_doc_id = 'team-%s-%s' % (team_doc['id'], owner_id)
                 folder_id = 'team-import-%s' % owner_id
-                if conn.execute("SELECT 1 FROM knowledge_documents WHERE document_id=?",
-                                (new_doc_id,)).fetchone():
-                    return True, new_doc_id, folder_id, fname, '已存在，跳过'
+                existing = conn.execute(
+                    "SELECT deleted_at FROM knowledge_documents WHERE document_id=?",
+                    (new_doc_id,)).fetchone()
+                if existing is not None:
+                    if existing['deleted_at']:
+                        # 之前同步过但已被用户删除，先清掉旧记录以便重新插入并恢复文件/分析
+                        conn.execute("DELETE FROM knowledge_documents WHERE document_id=?", (new_doc_id,))
+                        # kb_analysis 无 FK 级联，保留；下面会重新复制团队库分析
+                    else:
+                        return True, new_doc_id, folder_id, fname, '已存在，跳过'
                 # 创建/恢复「团队库导入」文件夹；若之前被软删则复活，避免文档无家可归。
                 existing_folder = conn.execute(
                     "SELECT deleted_at FROM knowledge_folders WHERE folder_id=?", (folder_id,)).fetchone()
