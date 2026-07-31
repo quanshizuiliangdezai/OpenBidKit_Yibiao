@@ -565,10 +565,43 @@ function KnowledgeBasePage() {
   const [batchMoveTargetId, setBatchMoveTargetId] = useState('');
 
   const toggleSelectFolder = (folderId: string) => {
+    const isSelecting = !selectedFolderIds.has(folderId);
+    // 递归收集该文件夹下的所有子文件夹与文档
+    const subtreeFolderIds = new Set<string>();
+    const collectFolderIds = (id: string) => {
+      subtreeFolderIds.add(id);
+      for (const child of folderChildrenMap.get(id) || []) {
+        collectFolderIds(child.id);
+      }
+    };
+    collectFolderIds(folderId);
+    const subtreeDocumentIds = new Set<string>();
+    for (const doc of index.documents) {
+      let fid: string | null = doc.folder_id;
+      while (fid) {
+        if (subtreeFolderIds.has(fid)) {
+          subtreeDocumentIds.add(doc.id);
+          break;
+        }
+        fid = folderParentMap.get(fid) ?? null;
+      }
+    }
     setSelectedFolderIds((prev) => {
       const next = new Set(prev);
-      if (next.has(folderId)) next.delete(folderId);
-      else next.add(folderId);
+      if (isSelecting) {
+        subtreeFolderIds.forEach((id) => next.add(id));
+      } else {
+        subtreeFolderIds.forEach((id) => next.delete(id));
+      }
+      return next;
+    });
+    setSelectedDocumentIds((prev) => {
+      const next = new Set(prev);
+      if (isSelecting) {
+        subtreeDocumentIds.forEach((id) => next.add(id));
+      } else {
+        subtreeDocumentIds.forEach((id) => next.delete(id));
+      }
       return next;
     });
   };
