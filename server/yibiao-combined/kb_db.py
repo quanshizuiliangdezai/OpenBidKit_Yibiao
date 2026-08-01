@@ -343,6 +343,23 @@ def get_session(token):
             conn.close()
 
 
+def verify_admin_password(admin_id, password):
+    """校验当前管理员密码是否正确（仅校验，不创建/清理 session）。"""
+    if not admin_id or not password:
+        return False, '管理员 ID 与密码均不能为空'
+    with _lock:
+        conn = _conn()
+        try:
+            row = conn.execute("SELECT * FROM employees WHERE id=? AND role='admin'", (int(admin_id),)).fetchone()
+            if not row:
+                return False, '管理员不存在或无权限'
+            if not verify_password(password, row['password_salt'], row['password_hash']):
+                return False, '管理员密码错误'
+            return True, None
+        finally:
+            conn.close()
+
+
 # ---------- 管理员操作 ----------
 
 def list_pending():

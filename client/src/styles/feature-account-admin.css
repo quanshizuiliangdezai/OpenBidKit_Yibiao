@@ -586,6 +586,38 @@
   font-size: 12px;
 }
 
+/* ---------- 系统账号二次验证弹窗 ---------- */
+.account-system-usage {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  line-height: 1.7;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 14px;
+}
+
+.account-system-usage strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--yb-text);
+  font-weight: 700;
+}
+
+.account-system-usage ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.account-system-usage li {
+  margin-bottom: 3px;
+}
+
+.account-system-usage li:last-child {
+  margin-bottom: 0;
+}
+
 @media (max-width: 720px) {
   .permission-edit-body,
   .permission-group-meta,

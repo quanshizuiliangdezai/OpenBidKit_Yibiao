@@ -210,6 +210,15 @@ function createKbAuthService({ app }) {
     return data || {};
   }
 
+  async function verifyAdminPassword(password) {
+    const { ok, status, data } = await apiFetch('/api/admin/verify-password', {
+      method: 'POST',
+      body: { password },
+    });
+    if (!ok) throw new Error(data?.error || `密码验证失败（${status}）`);
+    return data || {};
+  }
+
   async function setEmployeeStatus(user_id, status) {
     const { ok, status: st, data } = await apiFetch('/api/admin/set-status', {
       method: 'POST',
@@ -361,6 +370,7 @@ function createKbAuthService({ app }) {
     listPending,
     review,
     resetPassword,
+    verifyAdminPassword,
     setEmployeeStatus,
     deleteEmployee,
     adminUpdateEmployee,

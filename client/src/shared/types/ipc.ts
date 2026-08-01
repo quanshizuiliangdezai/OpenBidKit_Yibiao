@@ -708,6 +708,7 @@ export interface YibiaoBridge {
     listPending: () => Promise<{ success: boolean; data?: KbAuthEmployee[]; error?: string }>;
     review: (payload: { user_id: string | number; action: 'approve' | 'reject'; reject_reason?: string }) => Promise<{ success: boolean; error?: string; message?: string }>;
     resetPassword: (payload: { user_id: string | number; new_password: string }) => Promise<{ success: boolean; error?: string; message?: string }>;
+    verifyAdminPassword: (payload: { password: string }) => Promise<{ success: boolean; error?: string; message?: string }>;
     setStatus: (payload: { user_id: string | number; status: string }) => Promise<{ success: boolean; error?: string; message?: string }>;
     deleteEmployee: (payload: { user_id: string | number }) => Promise<{ success: boolean; error?: string; message?: string }>;
     updateEmployee: (payload: { user_id: string | number; fields: { display_name?: string; department?: string | null; role?: string; status?: string; group_ids?: Array<string | number> } }) => Promise<{ success: boolean; error?: string; message?: string }>;

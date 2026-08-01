@@ -30,6 +30,19 @@ const STATUS_CLASS: Record<string, string> = {
   disabled: 'disabled',
 };
 
+/** 系统账号：修改前必须二次验证管理员密码，并在弹窗中展示用途说明。 */
+const SYSTEM_ACCOUNTS: Record<string, { label: string; usage: string[] }> = {
+  'kb-worker': {
+    label: '知识库分析 Worker',
+    usage: [
+      '用于服务器端自动分析成员上传的文档（含个人库与团队库）',
+      '文档经 LibreOffice 转 Markdown、切块后，由此账号调模型提取结构化条目',
+      '禁用或密码错误会导致知识库文档分析任务无法执行',
+      '请勿随意删除；如需修改，请确认当前管理员身份',
+    ],
+  },
+};
+
 const STATUS_FILTERS: Array<{ key: StatusFilter; label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'pending', label: '待审核' },
@@ -69,6 +82,12 @@ export default function AccountListPage() {
   const [editError, setEditError] = useState('');
   const [saving, setSaving] = useState(false);
   const [groupOptions, setGroupOptions] = useState<Array<{ id: string | number; name: string }>>([]);
+
+  const [verifyTarget, setVerifyTarget] = useState<EmployeeRow | null>(null);
+  const [verifyAction, setVerifyAction] = useState<'reset' | 'toggle' | 'edit' | null>(null);
+  const [verifyPassword, setVerifyPassword] = useState('');
+  const [verifyError, setVerifyError] = useState('');
+  const [verifying, setVerifying] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -131,7 +150,7 @@ export default function AccountListPage() {
     }
   };
 
-  const toggleStatus = async (e: EmployeeRow) => {
+  const doToggleStatus = async (e: EmployeeRow) => {
     const next = e.status === 'disabled' ? 'approved' : 'disabled';
     const label = next === 'disabled' ? '禁用' : '启用';
     try {
@@ -144,7 +163,19 @@ export default function AccountListPage() {
     }
   };
 
+  const toggleStatus = async (e: EmployeeRow) => {
+    if (SYSTEM_ACCOUNTS[e.username]) {
+      openVerify(e, 'toggle');
+      return;
+    }
+    await doToggleStatus(e);
+  };
+
   const resetPassword = async (e: EmployeeRow) => {
+    if (SYSTEM_ACCOUNTS[e.username]) {
+      openVerify(e, 'reset');
+      return;
+    }
     setResetTarget(e);
     setResetPwd('');
     setResetError('');
@@ -169,7 +200,7 @@ export default function AccountListPage() {
     }
   };
 
-  const openEdit = async (e: EmployeeRow) => {
+  const doOpenEdit = async (e: EmployeeRow) => {
     setEditTarget(e);
     setEditForm({
       display_name: e.display_name || '',
@@ -185,6 +216,14 @@ export default function AccountListPage() {
     } catch {
       // 分组列表获取失败不阻断编辑
     }
+  };
+
+  const openEdit = async (e: EmployeeRow) => {
+    if (SYSTEM_ACCOUNTS[e.username]) {
+      openVerify(e, 'edit');
+      return;
+    }
+    await doOpenEdit(e);
   };
 
   const saveEdit = async () => {
@@ -229,6 +268,49 @@ export default function AccountListPage() {
       await load();
     } catch (error) {
       flash(error instanceof Error ? error.message : '操作失败', true);
+    }
+  };
+
+  const openVerify = (e: EmployeeRow, action: 'reset' | 'toggle' | 'edit') => {
+    setVerifyTarget(e);
+    setVerifyAction(action);
+    setVerifyPassword('');
+    setVerifyError('');
+  };
+
+  const closeVerify = () => {
+    setVerifyTarget(null);
+    setVerifyAction(null);
+    setVerifyPassword('');
+    setVerifyError('');
+  };
+
+  const confirmVerify = async () => {
+    if (!verifyPassword) {
+      setVerifyError('请输入管理员密码');
+      return;
+    }
+    setVerifying(true);
+    setVerifyError('');
+    try {
+      const res = await window.yibiao.kbAuth.verifyAdminPassword({ password: verifyPassword });
+      if (!res?.success) throw new Error(res?.error || '验证失败');
+      const e = verifyTarget;
+      const action = verifyAction;
+      closeVerify();
+      if (e && action === 'reset') {
+        setResetTarget(e);
+        setResetPwd('');
+        setResetError('');
+      } else if (e && action === 'toggle') {
+        await doToggleStatus(e);
+      } else if (e && action === 'edit') {
+        await doOpenEdit(e);
+      }
+    } catch (error) {
+      setVerifyError(error instanceof Error ? error.message : '验证失败');
+    } finally {
+      setVerifying(false);
     }
   };
 
@@ -528,6 +610,48 @@ export default function AccountListPage() {
               <div className="content-regenerate-actions">
                 <button type="button" className="secondary-action" onClick={() => setEditTarget(null)}>取消</button>
                 <button type="submit" className="primary-action" disabled={saving}>{saving ? '保存中…' : '保存'}</button>
+              </div>
+            </form>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={Boolean(verifyTarget)} onOpenChange={(open) => !open && closeVerify()}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="content-regenerate-card">
+            <div className="content-regenerate-card-head">
+              <Dialog.Title>请验证管理员密码</Dialog.Title>
+              <Dialog.Description>
+                你正在修改系统账号「{verifyTarget ? (verifyTarget.display_name || verifyTarget.username) : ''}」，请先输入当前管理员密码以确认身份。
+              </Dialog.Description>
+            </div>
+            {verifyTarget && SYSTEM_ACCOUNTS[verifyTarget.username] ? (
+              <div className="account-system-usage">
+                <strong>该账号用途：</strong>
+                <ul>
+                  {SYSTEM_ACCOUNTS[verifyTarget.username].usage.map((item, idx) => (
+                    <li key={idx}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <form className="account-form" onSubmit={(ev) => { ev.preventDefault(); void confirmVerify(); }}>
+              <label>
+                管理员密码
+                <input
+                  type="password"
+                  value={verifyPassword}
+                  onChange={(ev) => setVerifyPassword(ev.target.value)}
+                  placeholder="请输入你的登录密码"
+                  autoFocus
+                  required
+                />
+              </label>
+              {verifyError ? <p className="account-form-error">{verifyError}</p> : null}
+              <div className="content-regenerate-actions">
+                <button type="button" className="secondary-action" onClick={closeVerify}>取消</button>
+                <button type="submit" className="primary-action" disabled={verifying}>{verifying ? '验证中…' : '确认'}</button>
               </div>
             </form>
           </Dialog.Content>

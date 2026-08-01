@@ -844,6 +844,19 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '审核完成'})
 
+        if path == '/api/admin/verify-password':
+            admin = self._is_admin()
+            if not admin:
+                return self._send(403, {'error': '需要管理员权限'})
+            ok, err = kb_db.verify_admin_password(admin['id'], data.get('password', ''))
+            if not ok:
+                return self._send(400, {'error': err})
+            audit_event(
+                account_id=admin['id'], account_name=admin.get('display_name') or admin['username'],
+                role='admin', action='admin', target_type='employee', target_id=admin['id'],
+                detail='验证管理员密码', ip=_client_ip(self))
+            return self._send(200, {'success': True, 'message': '管理员密码验证通过'})
+
         if path == '/api/admin/reset-password':
             admin = self._is_admin()
             if not admin:

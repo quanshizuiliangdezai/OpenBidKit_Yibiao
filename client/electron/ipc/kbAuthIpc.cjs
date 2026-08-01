@@ -79,6 +79,14 @@ function registerKbAuthIpc({ kbAuthService, mainWindow }) {
     }
   });
 
+  ipcMain.handle('kb-auth:verify-admin-password', async (_event, payload) => {
+    try {
+      return { success: true, ...(await kbAuthService.verifyAdminPassword(payload?.password)) };
+    } catch (error) {
+      return { success: false, error: error?.message || '密码验证失败' };
+    }
+  });
+
   ipcMain.handle('kb-auth:set-status', async (_event, payload) => {
     try {
       return { success: true, ...(await kbAuthService.setEmployeeStatus(payload?.user_id, payload?.status)) };
