@@ -6,6 +6,8 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+// 直接引用具体文件而非 shared/ui 桶文件，避免潜在循环依赖
+import { releaseDialogSideEffects } from '../ui/ConfirmDialogProvider';
 
 export interface AuthEmployee {
   id: string | number;
@@ -141,6 +143,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.yibiao.kbAuth.logout();
     setEmployee(null);
     setSessionExpired(false);
+    // 退出会整棵替换组件树渲染登录页，此处兜底清除弹窗可能残留的
+    // pointer-events:none / aria-hidden，确保登录框可点击、可输入
+    releaseDialogSideEffects();
+    requestAnimationFrame(() => releaseDialogSideEffects());
   }
 
   async function refresh() {

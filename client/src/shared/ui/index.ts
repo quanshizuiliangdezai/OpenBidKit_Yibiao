@@ -30,5 +30,5 @@ export {
   useDocumentParseNotice,
 } from './DocumentParseNoticeProvider';
 export { default as MarkdownRenderer } from './MarkdownRenderer';
-export { ConfirmDialogProvider, useConfirmDialog } from './ConfirmDialogProvider';
+export { ConfirmDialogProvider, useConfirmDialog, releaseDialogSideEffects } from './ConfirmDialogProvider';
 export type { ConfirmOptions, PromptOptions, AlertOptions } from './ConfirmDialogProvider';
