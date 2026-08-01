@@ -175,7 +175,7 @@ export default function ModelConfigPage() {
         qa_model: model.trim(),
         embedding_model: globalEmbedding || null,
       });
-      if (res?.success) showToast('已应用到服务器（团队库分析 + 问答生效）', 'success');
+      if (res?.success) showToast('已应用到服务器（个人库 + 团队库分析 + 问答生效）', 'success');
       else showToast(res?.error || '应用失败', 'error');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '应用失败', 'error');
@@ -326,7 +326,7 @@ export default function ModelConfigPage() {
               <InfoIcon />
               <span>
                 「获取模型」按上方 Base URL + Key 拉取可用模型；「测试连接」验证可达性与鉴权；
-                「应用到服务器」将分析 / 问答 / 语义检索模型下发到服务器，对团队成员库立即生效。
+                「应用到服务器」将分析 / 问答 / 语义检索模型下发到服务器，对成员个人库与团队库的文档分析立即生效。
               </span>
             </div>
 
