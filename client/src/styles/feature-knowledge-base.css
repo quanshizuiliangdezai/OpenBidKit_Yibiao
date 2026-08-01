@@ -1743,7 +1743,7 @@
   flex-wrap: wrap;
 }
 
-/* 模型配置弹窗：表单 */
+/* 模型配置页面/弹窗：表单（由 ModelConfigPage 复用） */
 .knowledge-sync-form {
   display: grid;
   gap: 14px;
@@ -1790,30 +1790,6 @@
 .knowledge-sync-model-row button {
   flex: 0 0 auto;
   white-space: nowrap;
-}
-
-.knowledge-dialog-close {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  width: 30px;
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 8px;
-  background: var(--yb-bg);
-  color: var(--yb-text-muted);
-  font-size: 18px;
-  line-height: 1;
-  cursor: pointer;
-  transition: background 0.16s ease, color 0.16s ease;
-}
-
-.knowledge-dialog-close:hover {
-  background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
 }
 
 .knowledge-sync-hint {

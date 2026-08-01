@@ -126,6 +126,12 @@ export const appMenuItems: AppMenuItem[] = [
     description: '安装和管理插件，扩展软件功能',
   },
   {
+    id: 'model-config',
+    label: '模型配置',
+    description: 'AI 模型接入与全局参数配置',
+    requiredPermission: 'model_config',
+  },
+  {
     id: 'resources',
     label: '资源下载',
     description: '投标相关资料、工具下载',

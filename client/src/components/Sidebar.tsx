@@ -40,6 +40,7 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'developer-opencode-agent-test': FlaskIcon,
   'developer-agent-test': FlaskIcon,
   'plugin-manager': PluginIcon,
+  'model-config': ModelConfigIcon,
   settings: GearIcon,
   'account-list': UserIcon,
   'permission-list': KeyIcon,
@@ -425,6 +426,19 @@ function PluginIcon(props: SVGProps<SVGSVGElement>) {
       <path d="M16 3v5" />
       <path d="M6 8h12v2a6 6 0 0 1-12 0z" />
       <path d="M12 16v5" />
+    </svg>
+  );
+}
+
+function ModelConfigIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <rect x="7" y="7" width="10" height="10" rx="2" />
+      <path d="M7 12H4" />
+      <path d="M20 12h-3" />
+      <path d="M12 7V4" />
+      <path d="M12 20v-3" />
+      <circle cx="12" cy="12" r="2" />
     </svg>
   );
 }

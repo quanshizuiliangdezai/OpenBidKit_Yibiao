@@ -27,6 +27,7 @@ PERMISSION_CATALOG = [
     ('bid_check', '标书检查', '查重、废标项检查、AI评标'),
     ('bid_opportunity', '投标机会', '投标机会发现与线索跟踪'),
     ('resources', '资源下载', '投标相关资料与工具下载'),
+    ('model_config', '模型配置', 'AI 模型接入与全局模型参数配置'),
     ('account_manage', '账户管理', '查看与管理团队成员账户'),
     ('permission_manage', '权限管理', '管理权限分组与权限分配'),
 ]

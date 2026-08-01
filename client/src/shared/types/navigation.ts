@@ -29,7 +29,8 @@ export type SectionId =
   | 'account-list'
   | 'permission-list'
   | 'audit-log'
-  | 'plugin-manager';
+  | 'plugin-manager'
+  | 'model-config';
 
 export interface AppMenuNotice {
   message: string;

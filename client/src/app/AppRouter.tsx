@@ -15,6 +15,7 @@ import KbQaPage from '../features/knowledge-base/pages/KbQaPage';
 import RejectionCheckPage from '../features/rejection-check/pages/RejectionCheckPage';
 import ResourcesPage from '../features/resources/pages/ResourcesPage';
 import PluginsPage from '../features/plugins/pages/PluginsPage';
+import ModelConfigPage from '../features/model-config/pages/ModelConfigPage';
 import SettingsPage from '../features/settings/pages/SettingsPage';
 import AccountListPage from '../features/settings/pages/AccountListPage';
 import PermissionListPage from '../features/settings/pages/PermissionListPage';
@@ -63,6 +64,8 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <ResourcesPage />;
     case 'plugin-manager':
       return <PluginsPage />;
+    case 'model-config':
+      return <ModelConfigPage />;
     case 'duplicate-check':
       return <DuplicateCheckPage />;
     case 'rejection-check':
