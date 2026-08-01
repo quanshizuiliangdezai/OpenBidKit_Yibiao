@@ -124,26 +124,29 @@ export default function ModelConfigPage() {
   }, []);
 
   const fetchModels = async () => {
-    if (!baseUrl.trim()) { showToast('请先填写 API Base URL', 'info'); return; }
-    if (!apiKey.trim()) { showToast('请先填写 API Key', 'info'); return; }
     setLoadingModels(true);
     try {
-      // 用完整的本地配置对象作为基底，再覆盖当前表单值，保证与设置页调用口径完全一致。
+      // 以「设置」页同源的当前生效文本模型配置为基底，再优先用表单值覆盖。
+      // 表单为空时回退到活动 profile（与设置页完全一致），避免两页获取口径不一致。
       const cfg = (await window.yibiao?.config.load()) as unknown as Record<string, unknown> | undefined;
-      const probe = {
-        ...(cfg || {}),
-        base_url: baseUrl.trim(),
-        api_key: apiKey.trim(),
-        model_name: model.trim(),
-      };
+      const provider = (cfg?.text_model_provider as string) || 'custom';
+      const profiles = (cfg?.text_model_profiles as Record<string, Record<string, unknown>>) || {};
+      const active = profiles[provider] || {};
+      const base_url = (baseUrl.trim() || (active.base_url as string) || '').trim();
+      const api_key = (apiKey.trim() || (active.api_key as string) || '').trim();
+      const model_name = (model.trim() || (active.model_name as string) || '').trim();
+      if (!base_url) { showToast('请先填写 API Base URL（或在设置页配置文本模型）', 'info'); return; }
+      if (!api_key) { showToast('请先填写 API Key（或在设置页配置文本模型）', 'info'); return; }
+      const probe = { ...(cfg || {}), base_url, api_key, model_name };
       const result = await window.yibiao?.config.listModels(probe as never);
       const list = result?.models || [];
       setModels(list);
+      const masked = api_key.length > 8 ? `${api_key.slice(0, 4)}…${api_key.slice(-4)}` : api_key;
       if (result?.success && list.length) {
-        showToast(`获取到 ${list.length} 个模型`, 'success');
+        showToast(`获取到 ${list.length} 个模型（key ${masked}）`, 'success');
         if (!list.includes(model)) setModel(list[0]);
       } else {
-        showToast(result?.message || '未获取到模型列表', 'info');
+        showToast(`${result?.message || '未获取到模型列表'}（key ${masked}）`, 'info');
       }
     } catch (error) {
       showToast(error instanceof Error ? error.message : '获取模型失败', 'error');
@@ -257,17 +260,23 @@ export default function ModelConfigPage() {
                   <div className="model-config-input-row">
                     <div className="model-config-input-wrap">
                       <span className="input-icon"><SparklesIcon /></span>
-                      <input
-                        list="model-config-list"
-                        value={model}
-                        onChange={(event) => setModel(event.target.value)}
-                        placeholder="agens2.5"
-                      />
-                      <datalist id="model-config-list">
-                        {models.map((m) => (
-                          <option key={m} value={m} />
-                        ))}
-                      </datalist>
+                      {models.length > 0 ? (
+                        <select
+                          value={model}
+                          onChange={(event) => setModel(event.target.value)}
+                        >
+                          {models.map((m) => (
+                            <option key={m} value={m}>{m}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          value={model}
+                          onChange={(event) => setModel(event.target.value)}
+                          placeholder="agens2.5"
+                        />
+                      )}
                     </div>
                     <button
                       type="button"

@@ -156,7 +156,8 @@
   height: 18px;
 }
 
-.model-config-input-wrap input {
+.model-config-input-wrap input,
+.model-config-input-wrap select {
   width: 100%;
   height: 46px;
   padding: 0 14px 0 42px;
@@ -169,7 +170,8 @@
   transition: border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, background var(--yb-duration-fast) ease;
 }
 
-.model-config-input-wrap input:focus {
+.model-config-input-wrap input:focus,
+.model-config-input-wrap select:focus {
   border-color: var(--yb-primary);
   background: #fff;
   box-shadow: 0 0 0 3px rgba(33, 116, 253, 0.12);
@@ -179,7 +181,8 @@
   color: var(--yb-text-muted);
 }
 
-.model-config-input-wrap input:disabled {
+.model-config-input-wrap input:disabled,
+.model-config-input-wrap select:disabled {
   opacity: 0.6;
   cursor: not-allowed;
   background: var(--yb-border-soft);
