@@ -1740,6 +1740,87 @@
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* 模型配置弹窗：表单 */
+.knowledge-sync-form {
+  display: grid;
+  gap: 14px;
+}
+
+.knowledge-sync-field {
+  display: grid;
+  gap: 6px;
+}
+
+.knowledge-sync-field > span {
+  color: var(--yb-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.knowledge-sync-field input {
+  height: 38px;
+  padding: 0 12px;
+  background: var(--yb-bg);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 10px;
+  color: var(--yb-text);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.knowledge-sync-field input:focus {
+  border-color: rgba(33, 116, 253, 0.55);
+  box-shadow: 0 0 0 3px rgba(33, 116, 253, 0.12);
+}
+
+.knowledge-sync-model-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.knowledge-sync-model-row input {
+  flex: 1;
+}
+
+.knowledge-sync-model-row button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.knowledge-dialog-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: var(--yb-bg);
+  color: var(--yb-text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.knowledge-dialog-close:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+.knowledge-sync-hint {
+  margin: 0;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 /* 同步到团队弹窗：新建文件夹区域 */
