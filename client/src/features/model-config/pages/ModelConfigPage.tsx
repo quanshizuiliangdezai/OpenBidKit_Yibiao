@@ -128,7 +128,14 @@ export default function ModelConfigPage() {
     if (!apiKey.trim()) { showToast('请先填写 API Key', 'info'); return; }
     setLoadingModels(true);
     try {
-      const probe = { base_url: baseUrl.trim(), api_key: apiKey.trim(), model_name: model.trim() };
+      // 用完整的本地配置对象作为基底，再覆盖当前表单值，保证与设置页调用口径完全一致。
+      const cfg = (await window.yibiao?.config.load()) as unknown as Record<string, unknown> | undefined;
+      const probe = {
+        ...(cfg || {}),
+        base_url: baseUrl.trim(),
+        api_key: apiKey.trim(),
+        model_name: model.trim(),
+      };
       const result = await window.yibiao?.config.listModels(probe as never);
       const list = result?.models || [];
       setModels(list);

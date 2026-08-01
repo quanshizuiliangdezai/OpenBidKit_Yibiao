@@ -2087,6 +2087,7 @@ function createAiService({ app, configStore }) {
 
     async listModels(configOverride) {
       const config = configOverride || configStore.load();
+      console.log('[aiService.listModels] base_url=', config.base_url, 'api_key_prefix=', String(config.api_key || '').slice(0, 8), 'source=', configOverride ? 'override' : 'store');
 
       if (!config.api_key) {
         return { success: false, message: '请先填写文本模型 API Key', models: [] };
