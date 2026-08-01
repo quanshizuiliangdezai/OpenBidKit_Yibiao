@@ -28,26 +28,58 @@ async function resolveLocalIP(): Promise<string> {
 const ACTION_LABELS: Record<string, string> = {
   login: '登录',
   logout: '退出登录',
+  register: '注册',
   sync_push: '同步推送',
   folder: '文件夹',
   doc: '文档',
+  import: '导入',
+  restore: '恢复',
   admin: '管理操作',
   group: '分组',
 };
 
-const ACCOUNT_TYPE_LABELS: Record<string, string> = {
-  employee: '成员',
-  sync_client: '同步客户端',
+/** 日志业务分类（对应表格「类型」列）：按 action 聚合到更高层的资源/业务域 */
+const CATEGORY_LABELS: Record<string, string> = {
+  login: '登录',
+  doc: '文档',
+  folder: '文件夹',
+  admin: '管理',
+  group: '分组',
+  sync: '同步',
+  system: '系统',
 };
 
-const ACTION_FILTERS = ['login', 'logout', 'sync_push', 'folder', 'doc', 'admin', 'group'];
+const CATEGORY_FILTERS = ['login', 'doc', 'folder', 'admin', 'group', 'sync', 'system'];
 
 function formatAction(action: string): string {
   return ACTION_LABELS[action] ?? action;
 }
 
-function formatAccountType(type: string): string {
-  return ACCOUNT_TYPE_LABELS[type] ?? type;
+function formatCategory(category: string): string {
+  return CATEGORY_LABELS[category] ?? category;
+}
+
+function getLogCategory(log: AuditLogEntry): string {
+  switch (log.action) {
+    case 'login':
+    case 'logout':
+    case 'register':
+      return 'login';
+    case 'doc':
+    case 'import':
+    case 'restore':
+      return 'doc';
+    case 'folder':
+      return 'folder';
+    case 'admin':
+      return 'admin';
+    case 'group':
+      return 'group';
+    case 'sync_push':
+      return 'sync';
+    default:
+      return 'system';
+  }
 }
 
 export default function AuditLogPage() {
@@ -58,7 +90,7 @@ export default function AuditLogPage() {
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
-  const [actionFilter, setActionFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
   const [localIP, setLocalIP] = useState('本机');
 
   const loadAll = useCallback(async () => {
@@ -85,15 +117,17 @@ export default function AuditLogPage() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return logs.filter((log) => {
-      if (actionFilter && log.action !== actionFilter) return false;
+      const category = getLogCategory(log);
+      if (categoryFilter && category !== categoryFilter) return false;
       if (!q) return true;
       return (
         (log.account_name || '').toLowerCase().includes(q) ||
         (log.detail || '').toLowerCase().includes(q) ||
-        (log.action || '').toLowerCase().includes(q)
+        (log.action || '').toLowerCase().includes(q) ||
+        formatCategory(category).toLowerCase().includes(q)
       );
     });
-  }, [logs, query, actionFilter]);
+  }, [logs, query, categoryFilter]);
 
   if (!isAdmin) {
     return (
@@ -133,17 +167,17 @@ export default function AuditLogPage() {
             <input
               value={query}
               onChange={(ev) => setQuery(ev.target.value)}
-              placeholder="搜索账号 / 详情 / 操作"
+              placeholder="搜索账号 / 详情 / 类型 / 操作"
               style={{ flex: '1 1 260px', minWidth: 200, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border, #d6dae2)' }}
             />
             <select
-              value={actionFilter}
-              onChange={(ev) => setActionFilter(ev.target.value)}
+              value={categoryFilter}
+              onChange={(ev) => setCategoryFilter(ev.target.value)}
               style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border, #d6dae2)' }}
             >
-              <option value="">全部操作</option>
-              {ACTION_FILTERS.map((a) => (
-                <option key={a} value={a}>{formatAction(a)}</option>
+              <option value="">全部类型</option>
+              {CATEGORY_FILTERS.map((c) => (
+                <option key={c} value={c}>{formatCategory(c)}</option>
               ))}
             </select>
           </div>
@@ -173,7 +207,7 @@ export default function AuditLogPage() {
                     <tr key={log.id} style={{ borderTop: '1px solid var(--border, #eef1f5)' }}>
                       <td style={tdStyle}>{log.created_at}</td>
                       <td style={tdStyle}>{log.account_name || '—'}{log.role ? `（${log.role}）` : ''}</td>
-                      <td style={tdStyle}>{formatAccountType(log.account_type)}</td>
+                      <td style={tdStyle}>{formatCategory(getLogCategory(log))}</td>
                       <td style={tdStyle}>{formatAction(log.action)}</td>
                       <td style={tdStyle}>{[log.target_type, log.target_id].filter(Boolean).join(' · ') || '—'}</td>
                       <td style={tdStyle}>{log.detail || '—'}</td>
