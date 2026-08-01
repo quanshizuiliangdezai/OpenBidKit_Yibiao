@@ -105,7 +105,7 @@ export default function ModelConfigPage() {
     base_url?: string;
     analysis_model?: string;
     embedding_model?: string;
-  } | null>(null);
+  }>({});
 
   const loadConfig = async () => {
     setModels([]);
@@ -335,7 +335,7 @@ export default function ModelConfigPage() {
               </div>
             </section>
 
-            {serverConfig && (serverConfig.base_url || serverConfig.analysis_model || serverConfig.embedding_model) && (
+            {serverConfig && (
               <section className="model-config-card model-config-server-card">
                 <div className="model-config-server-header">
                   <div className="model-config-server-title-wrap">
