@@ -263,6 +263,12 @@ export default function ModelConfigPage() {
                       {loadingModels ? '获取中…' : '获取模型'}
                     </button>
                   </div>
+                  {models.length > 0 && (
+                    <span className="model-config-field-hint">
+                      当前 API Key 返回了 {models.length} 个模型
+                      {models.length <= 2 && '，如列表不全可直接手动输入模型名'}
+                    </span>
+                  )}
                 </label>
 
                 <label className="model-config-field">
