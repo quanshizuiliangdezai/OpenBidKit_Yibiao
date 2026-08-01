@@ -2191,22 +2191,38 @@ function KnowledgeBasePage() {
               </button>
             </>
           )}
-          {(selectedDocumentIds.size + selectedFolderIds.size) > 0 && (
-            <>
-              <button type="button" className="secondary-action" onClick={() => setShowBatchMove(true)} disabled={batchProcessing || syncing || hasSelectedProcessing}>
-                批量移动（{selectedDocumentIds.size + selectedFolderIds.size}）
-              </button>
-              <button type="button" className="danger-action" onClick={() => void confirmBatchDelete()} disabled={batchProcessing || syncing}>
-                {batchProcessing ? '处理中...' : `批量删除（${selectedDocumentIds.size + selectedFolderIds.size}）`}
-              </button>
-              {selectedDocumentIds.size > 0 && (
-                <button type="button" className="secondary-action" onClick={() => void handleExport()} disabled={exporting || syncing || hasSelectedProcessing}>
-                  {exporting ? '导出中...' : `导出（${selectedDocumentIds.size}）`}
-                </button>
-              )}
-              <button type="button" className="secondary-action" onClick={() => { setSelectedDocumentIds(new Set()); setSelectedFolderIds(new Set()); }}>取消选择</button>
-            </>
-          )}
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={() => setShowBatchMove(true)}
+            disabled={batchProcessing || syncing || hasSelectedProcessing || (selectedDocumentIds.size + selectedFolderIds.size) === 0}
+          >
+            批量移动（{selectedDocumentIds.size + selectedFolderIds.size}）
+          </button>
+          <button
+            type="button"
+            className="danger-action"
+            onClick={() => void confirmBatchDelete()}
+            disabled={batchProcessing || syncing || (selectedDocumentIds.size + selectedFolderIds.size) === 0}
+          >
+            {batchProcessing ? '处理中...' : `批量删除（${selectedDocumentIds.size + selectedFolderIds.size}）`}
+          </button>
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={() => void handleExport()}
+            disabled={exporting || syncing || hasSelectedProcessing || selectedDocumentIds.size === 0}
+          >
+            {exporting ? '导出中...' : `导出（${selectedDocumentIds.size}）`}
+          </button>
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={() => { setSelectedDocumentIds(new Set()); setSelectedFolderIds(new Set()); }}
+            disabled={(selectedDocumentIds.size + selectedFolderIds.size) === 0}
+          >
+            取消选择
+          </button>
           <button type="button" className="secondary-action" onClick={() => void openTrash()}>回收站</button>
         </div>
       </section>
