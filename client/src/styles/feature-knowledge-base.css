@@ -2181,3 +2181,213 @@
   font-size: 14px;
 }
 
+/* ---------- 多会话布局：左侧历史对话 + 右侧对话区 ---------- */
+.kb-qa-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 16px;
+}
+
+.kb-qa-sidebar {
+  display: flex;
+  flex: 0 0 240px;
+  flex-direction: column;
+  width: 240px;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--yb-panel, #fff);
+  border: 1px solid var(--yb-border);
+  border-radius: 14px;
+}
+
+.kb-qa-sidebar-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 14px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--yb-text);
+  border-bottom: 1px solid var(--yb-border);
+}
+
+.kb-qa-new-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--yb-primary, #2174fd);
+  background: color-mix(in srgb, var(--yb-primary, #2174fd) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--yb-primary, #2174fd) 28%, transparent);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.kb-qa-new-btn:hover {
+  background: color-mix(in srgb, var(--yb-primary, #2174fd) 18%, transparent);
+}
+
+.kb-qa-session-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.kb-qa-session-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 24px 12px;
+  font-size: 13px;
+  color: var(--yb-text-soft);
+  text-align: center;
+}
+
+.kb-qa-session-empty small {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.kb-qa-session-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.kb-qa-session-item:hover {
+  background: var(--yb-surface-hover, rgba(0, 0, 0, 0.04));
+}
+
+.kb-qa-session-item.active {
+  background: color-mix(in srgb, var(--yb-primary, #2174fd) 10%, transparent);
+  border-color: color-mix(in srgb, var(--yb-primary, #2174fd) 26%, transparent);
+}
+
+.kb-qa-session-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.kb-qa-session-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--yb-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-qa-session-badge {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 16px;
+  color: #fff;
+  background: var(--yb-primary, #2174fd);
+  border-radius: 999px;
+}
+
+.kb-qa-session-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--yb-text-soft);
+}
+
+.kb-qa-session-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-qa-session-time {
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+
+.kb-qa-session-actions {
+  display: none;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.kb-qa-session-item:hover .kb-qa-session-actions,
+.kb-qa-session-item.active .kb-qa-session-actions {
+  display: flex;
+}
+
+.kb-qa-session-actions button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--yb-text-soft);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.kb-qa-session-actions button:hover {
+  color: var(--yb-text);
+  background: var(--yb-surface-2, rgba(0, 0, 0, 0.06));
+}
+
+.kb-qa-session-actions button.danger:hover {
+  color: #fff;
+  background: var(--yb-danger, #e5484d);
+}
+
+.kb-qa-layout .kb-qa-panel {
+  flex: 1;
+  min-width: 0;
+}
+
+.kb-qa-offline-tip {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--yb-warning-text, #8a5a00);
+  background: var(--yb-warning-bg, rgba(255, 176, 32, 0.14));
+  border: 1px solid var(--yb-warning-border, rgba(255, 176, 32, 0.32));
+  border-radius: 10px;
+}
+
+.kb-qa-message-error {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--yb-danger, #e5484d);
+}
+
+.kb-qa-message .kb-qa-sources {
+  margin-top: 2px;
+}
+
+@media (max-width: 1100px) {
+  .kb-qa-sidebar {
+    flex-basis: 200px;
+    width: 200px;
+  }
+}
+

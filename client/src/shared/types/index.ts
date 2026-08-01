@@ -84,7 +84,7 @@ export {
 } from './exportFormat';
 export type { OutlineData, OutlineExpansionMode, OutlineItem, OutlineMode, OutlineWordControlOptions, TechnicalRequirementGroup } from './outline';
 export { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from './outline';
-export type { AgentDiagnosticSection, AgentRetryAttempt, AgentRunFile, AgentRunPayload, AgentRunResult, AgentRuntimeActiveTask, AgentRuntimeDescriptor, AgentRuntimePhase, AgentRuntimeStatus, AgentSelfCheckReportExportResult, AgentSelfCheckResult, AgentSelfCheckStatus, AgentSelfCheckStep, AgentSelfCheckStepStatus, GpuHardwareAccelerationStatus, KbQaDocument, LatestReleaseInfo, LicenseOfflineActivationResult, LicenseRuntimeStatus, UpdateCheckResult, WordExportProgressEvent, WordExportResult, WorkspaceDatabasePhase, WorkspaceDatabaseStatus, YibiaoBridge } from './ipc';
+export type { AgentDiagnosticSection, AgentRetryAttempt, AgentRunFile, AgentRunPayload, AgentRunResult, AgentRuntimeActiveTask, AgentRuntimeDescriptor, AgentRuntimePhase, AgentRuntimeStatus, AgentSelfCheckReportExportResult, AgentSelfCheckResult, AgentSelfCheckStatus, AgentSelfCheckStep, AgentSelfCheckStepStatus, GpuHardwareAccelerationStatus, KbQaAddMessagePayload, KbQaDocument, KbQaLibraryType, KbQaMessageSource, KbQaMessageStatus, KbQaSession, KbQaSessionResult, KbQaSessionStatus, KbQaStoredMessage, KbQaUpdateMessagePayload, LatestReleaseInfo, LicenseOfflineActivationResult, LicenseRuntimeStatus, UpdateCheckResult, WordExportProgressEvent, WordExportResult, WorkspaceDatabasePhase, WorkspaceDatabaseStatus, YibiaoBridge } from './ipc';
 export type {
   RejectionCheckFinding,
   RejectionCheckResultState,

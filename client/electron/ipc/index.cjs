@@ -42,6 +42,7 @@ const { registerKbPersonalIpc } = require('./kbPersonalIpc.cjs');
 const { registerSyncIpc } = require('./syncIpc.cjs');
 const { registerKbQaIpc } = require('./kbQaIpc.cjs');
 const { createKbQaRetrievalService } = require('../services/kbQaRetrieval.cjs');
+const { createKbQaSessionService } = require('../services/kbQaSessionService.cjs');
 const { checkRequiredOnlineServices, getRequiredOnlineServiceStatus } = require('../services/requiredOnlineServices.cjs');
 const { initLocalImageRenderService } = require('../services/localImageRenderService.cjs');
 
@@ -201,6 +202,8 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const taskService = createTaskService({ aiService, agentService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
   const syncService = createSyncService({ app, db: sqliteDatabase.db, configStore });
   const kbQaRetrievalService = createKbQaRetrievalService({ db: sqliteDatabase.db, aiService, kbAuthService });
+  // 问答会话持久化（服务器存储，按账号隔离）：让聊天记录在页面切换、甚至换电脑后依然可见
+  const kbQaSessionService = createKbQaSessionService({ kbAuthService });
 
   clearWorkspaceDatabaseIpc();
   registerKnowledgeBaseIpc({ knowledgeBaseService });
@@ -210,7 +213,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   registerTemplateIpc({ templateStore });
   registerTaskIpc({ taskService });
   registerSyncIpc({ syncService });
-  registerKbQaIpc({ kbQaRetrievalService });
+  registerKbQaIpc({ kbQaRetrievalService, kbQaSessionService });
   updateStatus({ phase: 'ready', ready: true, message: '本地数据库已就绪' });
   
   // 更新 pluginService 的服务引用

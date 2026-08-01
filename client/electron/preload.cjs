@@ -271,6 +271,17 @@ const bridge = {
     retrieveContext: (question, options) => ipcRenderer.invoke('kb-qa:retrieve-context', question, options),
     clearIndex: (source) => ipcRenderer.invoke('kb-qa:clear-index', source),
   },
+  kbQaSession: {
+    list: (limit) => ipcRenderer.invoke('kb-qa-session:list', limit),
+    create: (options) => ipcRenderer.invoke('kb-qa-session:create', options),
+    rename: (sessionId, title) => ipcRenderer.invoke('kb-qa-session:rename', sessionId, title),
+    setStatus: (sessionId, status) => ipcRenderer.invoke('kb-qa-session:set-status', sessionId, status),
+    remove: (sessionId) => ipcRenderer.invoke('kb-qa-session:delete', sessionId),
+    clear: () => ipcRenderer.invoke('kb-qa-session:clear'),
+    listMessages: (sessionId, afterId) => ipcRenderer.invoke('kb-qa-session:list-messages', sessionId, afterId),
+    addMessage: (sessionId, payload) => ipcRenderer.invoke('kb-qa-session:add-message', sessionId, payload),
+    updateMessage: (messageId, payload) => ipcRenderer.invoke('kb-qa-session:update-message', messageId, payload),
+  },
   plugins: {
     getAvailablePlugins: () => ipcRenderer.invoke('plugins:getAvailablePlugins'),
     install: (pluginId) => ipcRenderer.invoke('plugins:install', pluginId),

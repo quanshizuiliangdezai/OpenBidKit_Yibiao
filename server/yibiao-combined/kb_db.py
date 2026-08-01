@@ -146,6 +146,34 @@ def init_db():
             api_key         TEXT,
             updated_at      TEXT NOT NULL
         );
+        -- 知识库问答会话（按账号隔离，软删除，跨设备可读）
+        CREATE TABLE IF NOT EXISTS kb_qa_sessions (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id  INTEGER NOT NULL,
+            title        TEXT NOT NULL DEFAULT '新对话',
+            library_type TEXT NOT NULL DEFAULT 'team',
+            status       TEXT NOT NULL DEFAULT 'idle',
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL,
+            deleted_at   TEXT,
+            FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_kb_qa_sessions_emp
+            ON kb_qa_sessions(employee_id, updated_at DESC);
+        CREATE TABLE IF NOT EXISTS kb_qa_messages (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id  INTEGER NOT NULL,
+            employee_id INTEGER NOT NULL,
+            role        TEXT NOT NULL,
+            content     TEXT NOT NULL DEFAULT '',
+            status      TEXT NOT NULL DEFAULT 'done',
+            sources     TEXT,
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES kb_qa_sessions(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_kb_qa_messages_session
+            ON kb_qa_messages(session_id, id);
         ''')
     conn.close()
     # 一次性迁移：旧库 owner_id 为 NOT NULL 且无 ON DELETE 规则，删员工会被外键挡住。
@@ -1574,5 +1602,268 @@ def purge_expired_trash(hours=24):
                 _hard_delete_document(d['id'])
                 nd += 1
             return nf, nd
+        finally:
+            conn.close()
+
+
+# ==================== 知识库问答会话（kb_qa_sessions / kb_qa_messages）====================
+# 设计要点：
+#  1) 全部按 employee_id 隔离，任何读写都必须带上调用者 employee_id，杜绝越权访问他人会话；
+#  2) 会话软删除（deleted_at），30 天后由 qa_purge_deleted_sessions 物理清理；
+#  3) assistant 消息支持 pending 状态 —— 用户离开问答页去生成标书时，回答仍在后台继续，
+#     完成后回写 content + status='done'，回来即可看到结果。
+
+QA_DEFAULT_TITLE = '新对话'
+QA_TITLE_MAX = 40
+
+
+def _qa_now():
+    return datetime.datetime.now().isoformat()
+
+
+def _qa_title_from_question(question):
+    text = (question or '').strip().replace('\n', ' ')
+    if not text:
+        return QA_DEFAULT_TITLE
+    return text[:QA_TITLE_MAX] + ('…' if len(text) > QA_TITLE_MAX else '')
+
+
+def _qa_message_row(r):
+    if not r:
+        return None
+    d = dict(r)
+    raw = d.pop('sources', None)
+    try:
+        d['sources'] = json.loads(raw) if raw else []
+    except Exception:
+        d['sources'] = []
+    return d
+
+
+def qa_create_session(employee_id, title=None, library_type='team'):
+    """新建问答会话，返回会话 dict。"""
+    now = _qa_now()
+    lib = library_type if library_type in ('team', 'personal') else 'team'
+    with _lock:
+        conn = _conn()
+        try:
+            cur = conn.execute(
+                "INSERT INTO kb_qa_sessions (employee_id,title,library_type,status,created_at,updated_at) "
+                "VALUES (?,?,?,'idle',?,?)",
+                (int(employee_id), (title or QA_DEFAULT_TITLE)[:QA_TITLE_MAX + 1], lib, now, now))
+            conn.commit()
+            sid = cur.lastrowid
+            row = conn.execute("SELECT * FROM kb_qa_sessions WHERE id=?", (sid,)).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+
+def qa_list_sessions(employee_id, limit=100):
+    """列出该账号的问答会话（不含已删），附带消息数与最后一条消息摘要。"""
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT s.*, "
+                " (SELECT COUNT(1) FROM kb_qa_messages m WHERE m.session_id=s.id) AS message_count, "
+                " (SELECT m.content FROM kb_qa_messages m WHERE m.session_id=s.id ORDER BY m.id DESC LIMIT 1) AS last_content, "
+                " (SELECT m.status FROM kb_qa_messages m WHERE m.session_id=s.id ORDER BY m.id DESC LIMIT 1) AS last_status "
+                "FROM kb_qa_sessions s "
+                "WHERE s.employee_id=? AND (s.deleted_at IS NULL OR s.deleted_at='') "
+                "ORDER BY s.updated_at DESC LIMIT ?",
+                (int(employee_id), int(limit))).fetchall()
+            out = []
+            for r in rows:
+                d = dict(r)
+                preview = (d.pop('last_content', None) or '').strip().replace('\n', ' ')
+                d['preview'] = preview[:60]
+                out.append(d)
+            return out
+        finally:
+            conn.close()
+
+
+def qa_get_session(session_id, employee_id):
+    """取单个会话（校验归属）。"""
+    with _lock:
+        conn = _conn()
+        try:
+            r = conn.execute(
+                "SELECT * FROM kb_qa_sessions WHERE id=? AND employee_id=? "
+                "AND (deleted_at IS NULL OR deleted_at='')",
+                (int(session_id), int(employee_id))).fetchone()
+            return dict(r) if r else None
+        finally:
+            conn.close()
+
+
+def qa_rename_session(session_id, employee_id, title):
+    name = (title or '').strip()
+    if not name:
+        return False
+    with _lock:
+        conn = _conn()
+        try:
+            cur = conn.execute(
+                "UPDATE kb_qa_sessions SET title=?, updated_at=? "
+                "WHERE id=? AND employee_id=? AND (deleted_at IS NULL OR deleted_at='')",
+                (name[:QA_TITLE_MAX + 1], _qa_now(), int(session_id), int(employee_id)))
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+
+def qa_set_session_status(session_id, employee_id, status):
+    st = status if status in ('idle', 'running', 'error') else 'idle'
+    with _lock:
+        conn = _conn()
+        try:
+            cur = conn.execute(
+                "UPDATE kb_qa_sessions SET status=?, updated_at=? WHERE id=? AND employee_id=?",
+                (st, _qa_now(), int(session_id), int(employee_id)))
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+
+def qa_delete_session(session_id, employee_id):
+    """软删会话。"""
+    now = _qa_now()
+    with _lock:
+        conn = _conn()
+        try:
+            cur = conn.execute(
+                "UPDATE kb_qa_sessions SET deleted_at=?, updated_at=? WHERE id=? AND employee_id=?",
+                (now, now, int(session_id), int(employee_id)))
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+
+def qa_clear_sessions(employee_id):
+    """清空该账号全部会话（软删）。返回受影响条数。"""
+    now = _qa_now()
+    with _lock:
+        conn = _conn()
+        try:
+            cur = conn.execute(
+                "UPDATE kb_qa_sessions SET deleted_at=?, updated_at=? "
+                "WHERE employee_id=? AND (deleted_at IS NULL OR deleted_at='')",
+                (now, now, int(employee_id)))
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+
+
+def qa_list_messages(session_id, employee_id, after_id=0):
+    """列出会话消息（校验归属）。after_id 用于增量轮询；无权访问返回 None。"""
+    with _lock:
+        conn = _conn()
+        try:
+            own = conn.execute(
+                "SELECT id FROM kb_qa_sessions WHERE id=? AND employee_id=?",
+                (int(session_id), int(employee_id))).fetchone()
+            if not own:
+                return None
+            rows = conn.execute(
+                "SELECT id,session_id,role,content,status,sources,created_at,updated_at "
+                "FROM kb_qa_messages WHERE session_id=? AND id>? ORDER BY id ASC",
+                (int(session_id), int(after_id or 0))).fetchall()
+            return [_qa_message_row(r) for r in rows]
+        finally:
+            conn.close()
+
+
+def qa_add_message(session_id, employee_id, role, content='', status='done', sources=None):
+    """追加一条消息；首条用户提问自动作为会话标题。返回消息 dict。"""
+    if role not in ('user', 'assistant'):
+        return None
+    now = _qa_now()
+    src = json.dumps(sources, ensure_ascii=False) if sources else None
+    with _lock:
+        conn = _conn()
+        try:
+            sess = conn.execute(
+                "SELECT id,title FROM kb_qa_sessions WHERE id=? AND employee_id=? "
+                "AND (deleted_at IS NULL OR deleted_at='')",
+                (int(session_id), int(employee_id))).fetchone()
+            if not sess:
+                return None
+            cur = conn.execute(
+                "INSERT INTO kb_qa_messages (session_id,employee_id,role,content,status,sources,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (int(session_id), int(employee_id), role, content or '', status, src, now, now))
+            mid = cur.lastrowid
+            if role == 'user' and (sess['title'] or '') in ('', QA_DEFAULT_TITLE):
+                conn.execute("UPDATE kb_qa_sessions SET title=? WHERE id=?",
+                             (_qa_title_from_question(content), int(session_id)))
+            conn.execute("UPDATE kb_qa_sessions SET updated_at=? WHERE id=?", (now, int(session_id)))
+            conn.commit()
+            row = conn.execute(
+                "SELECT id,session_id,role,content,status,sources,created_at,updated_at "
+                "FROM kb_qa_messages WHERE id=?", (mid,)).fetchone()
+            return _qa_message_row(row)
+        finally:
+            conn.close()
+
+
+def qa_update_message(message_id, employee_id, content=None, status=None, sources=None):
+    """更新消息（后台生成完成时回写）。只能改自己的消息。"""
+    sets, args = [], []
+    if content is not None:
+        sets.append("content=?")
+        args.append(content)
+    if status is not None:
+        sets.append("status=?")
+        args.append(status)
+    if sources is not None:
+        sets.append("sources=?")
+        args.append(json.dumps(sources, ensure_ascii=False) if sources else None)
+    if not sets:
+        return None
+    now = _qa_now()
+    sets.append("updated_at=?")
+    args.append(now)
+    args.extend([int(message_id), int(employee_id)])
+    with _lock:
+        conn = _conn()
+        try:
+            cur = conn.execute(
+                "UPDATE kb_qa_messages SET " + ", ".join(sets) + " WHERE id=? AND employee_id=?", args)
+            if cur.rowcount == 0:
+                return None
+            row = conn.execute(
+                "SELECT id,session_id,role,content,status,sources,created_at,updated_at "
+                "FROM kb_qa_messages WHERE id=?", (int(message_id),)).fetchone()
+            if row:
+                conn.execute("UPDATE kb_qa_sessions SET updated_at=? WHERE id=?",
+                             (now, row['session_id']))
+            conn.commit()
+            return _qa_message_row(row)
+        finally:
+            conn.close()
+
+
+def qa_purge_deleted_sessions(days=30):
+    """物理清理软删超过 days 天的会话及其消息。返回清理数量。"""
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=days)).isoformat()
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT id FROM kb_qa_sessions WHERE deleted_at IS NOT NULL AND deleted_at<>'' AND deleted_at<?",
+                (cutoff,)).fetchall()
+            n = 0
+            for r in rows:
+                conn.execute("DELETE FROM kb_qa_messages WHERE session_id=?", (r['id'],))
+                conn.execute("DELETE FROM kb_qa_sessions WHERE id=?", (r['id'],))
+                n += 1
+            conn.commit()
+            return n
         finally:
             conn.close()

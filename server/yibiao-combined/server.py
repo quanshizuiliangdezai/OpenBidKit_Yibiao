@@ -811,6 +811,9 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             if data is None:
                 return self._send(400, {'error': '请求体不是合法 JSON'})
 
+        if path.startswith('/api/kb-qa/sessions'):
+            return self._qa_session_route('POST', path, data)
+
         if path == '/api/register':
             ok, err = kb_db.register(data.get('username', ''), data.get('password', ''), data.get('display_name', ''), data.get('department'))
             if not ok:
@@ -2584,8 +2587,101 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         for c in children:
             self._collect_team_folder_docs(c['id'], out)
 
+    # ==================== /api/kb-qa/sessions|messages 问答会话持久化 ====================
+    # 统一分发器：GET/POST/PUT/DELETE 四个入口都转到这里，避免路由散落。
+    # 所有操作强制带上当前登录者 employee_id，数据层再校验一次归属，双重防越权。
+    def _qa_session_route(self, method, path, data):
+        employee = self._auth()
+        if not employee:
+            return self._send(401, {'error': '未登录或会话已过期'})
+        eid = employee['id']
+
+        # ---- 会话集合 ----
+        if path == '/api/kb-qa/sessions':
+            if method == 'GET':
+                try:
+                    limit = min(int(self._query_param('limit') or '100'), 300)
+                except (TypeError, ValueError):
+                    limit = 100
+                return self._send(200, {'success': True, 'data': kb_db.qa_list_sessions(eid, limit)})
+            if method == 'POST':
+                sess = kb_db.qa_create_session(
+                    eid, (data.get('title') or '').strip() or None,
+                    data.get('library_type') or 'team')
+                if not sess:
+                    return self._send(400, {'error': '创建会话失败'})
+                return self._send(200, {'success': True, 'data': sess})
+            if method == 'DELETE':
+                n = kb_db.qa_clear_sessions(eid)
+                return self._send(200, {'success': True, 'data': {'removed': n}})
+            return self._send(405, {'error': '方法不支持'})
+
+        # ---- 单个会话：重命名 / 改状态 / 删除 ----
+        m = re.match(r'^/api/kb-qa/sessions/(\d+)$', path)
+        if m:
+            sid = int(m.group(1))
+            if method == 'GET':
+                sess = kb_db.qa_get_session(sid, eid)
+                if not sess:
+                    return self._send(404, {'error': '会话不存在'})
+                return self._send(200, {'success': True, 'data': sess})
+            if method == 'PUT':
+                changed = False
+                if data.get('title') is not None:
+                    changed = kb_db.qa_rename_session(sid, eid, data.get('title')) or changed
+                if data.get('status') is not None:
+                    changed = kb_db.qa_set_session_status(sid, eid, data.get('status')) or changed
+                if not changed:
+                    return self._send(404, {'error': '会话不存在或无可更新字段'})
+                return self._send(200, {'success': True, 'data': kb_db.qa_get_session(sid, eid)})
+            if method == 'DELETE':
+                if not kb_db.qa_delete_session(sid, eid):
+                    return self._send(404, {'error': '会话不存在'})
+                return self._send(200, {'success': True, 'message': '会话已删除'})
+            return self._send(405, {'error': '方法不支持'})
+
+        # ---- 会话消息 ----
+        m = re.match(r'^/api/kb-qa/sessions/(\d+)/messages$', path)
+        if m:
+            sid = int(m.group(1))
+            if method == 'GET':
+                try:
+                    after = int(self._query_param('after') or '0')
+                except (TypeError, ValueError):
+                    after = 0
+                msgs = kb_db.qa_list_messages(sid, eid, after)
+                if msgs is None:
+                    return self._send(404, {'error': '会话不存在'})
+                return self._send(200, {'success': True, 'data': msgs})
+            if method == 'POST':
+                role = (data.get('role') or '').strip()
+                if role not in ('user', 'assistant'):
+                    return self._send(400, {'error': 'role 必须是 user 或 assistant'})
+                msg = kb_db.qa_add_message(
+                    sid, eid, role, data.get('content') or '',
+                    (data.get('status') or 'done'), data.get('sources'))
+                if not msg:
+                    return self._send(404, {'error': '会话不存在'})
+                return self._send(200, {'success': True, 'data': msg})
+            return self._send(405, {'error': '方法不支持'})
+
+        # ---- 单条消息更新（后台生成完成回写）----
+        m = re.match(r'^/api/kb-qa/messages/(\d+)$', path)
+        if m and method == 'PUT':
+            msg = kb_db.qa_update_message(
+                int(m.group(1)), eid,
+                content=data.get('content'), status=data.get('status'),
+                sources=data.get('sources'))
+            if not msg:
+                return self._send(404, {'error': '消息不存在'})
+            return self._send(200, {'success': True, 'data': msg})
+
+        return self._send(404, {'error': '未知的问答会话接口'})
+
     def _kb_GET(self):
         path = urlparse(self.path).path
+        if path.startswith('/api/kb-qa/sessions'):
+            return self._qa_session_route('GET', path, {})
         if path in ('/', '/admin'):
             return self._serve_html('kb_admin.html')
         if path == '/register':
@@ -2879,6 +2975,11 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             if not employee:
                 return self._send(401, {'error': '未登录或会话已过期'})
             kb_db.purge_expired_trash(24)
+            # 顺带清理软删超过 30 天的问答会话（低频触发，避免每次列会话都扫全表）
+            try:
+                kb_db.qa_purge_deleted_sessions(30)
+            except Exception:
+                pass
             return self._send(200, {'data': kb_db.list_trash()})
         if path == '/api/personal/trash':
             employee = self._auth()
@@ -2906,6 +3007,8 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
 
     def _kb_DELETE(self):
         path = urlparse(self.path).path
+        if path.startswith('/api/kb-qa/sessions'):
+            return self._qa_session_route('DELETE', path, {})
         employee = self._auth()
         if not employee:
             return self._send(401, {'error': '未登录或会话已过期'})
@@ -3012,6 +3115,8 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             data = self._read_json()
             if data is None:
                 return self._send(400, {'error': '请求体不是合法 JSON'})
+        if path.startswith('/api/kb-qa/sessions') or path.startswith('/api/kb-qa/messages'):
+            return self._qa_session_route('PUT', path, data)
         employee = self._auth()
         if not employee:
             return self._send(401, {'error': '未登录或会话已过期'})

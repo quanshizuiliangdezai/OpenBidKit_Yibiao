@@ -457,6 +457,66 @@ export interface KbQaRetrieveOptions {
   maxDocs?: number;
 }
 
+/* ---------- 知识库问答会话（服务器持久化，按账号隔离）---------- */
+
+export type KbQaLibraryType = 'team' | 'personal';
+export type KbQaSessionStatus = 'idle' | 'running' | 'error';
+export type KbQaMessageStatus = 'pending' | 'done' | 'error';
+
+/** 回答引用的知识库来源 */
+export interface KbQaMessageSource {
+  id?: string | number;
+  title?: string;
+  qa_source?: KbQaLibraryType;
+}
+
+export interface KbQaSession {
+  id: number;
+  employee_id: number;
+  title: string;
+  library_type: KbQaLibraryType;
+  status: KbQaSessionStatus;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+  /** 列表接口附加：消息条数 */
+  message_count?: number;
+  /** 列表接口附加：最后一条消息摘要 */
+  preview?: string;
+  /** 列表接口附加：最后一条消息状态，用于列表上标「生成中」 */
+  last_status?: KbQaMessageStatus;
+}
+
+export interface KbQaStoredMessage {
+  id: number;
+  session_id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  status: KbQaMessageStatus;
+  sources: KbQaMessageSource[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KbQaAddMessagePayload {
+  role: 'user' | 'assistant';
+  content?: string;
+  status?: KbQaMessageStatus;
+  sources?: KbQaMessageSource[] | null;
+}
+
+export interface KbQaUpdateMessagePayload {
+  content?: string;
+  status?: KbQaMessageStatus;
+  sources?: KbQaMessageSource[] | null;
+}
+
+export interface KbQaSessionResult<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+}
+
 export interface KbTrashFolder {
   id: string | number;
   name: string;
@@ -746,6 +806,17 @@ export interface YibiaoBridge {
   kbQa: {
     retrieveContext: (question: string, options?: KbQaRetrieveOptions) => Promise<{ success: boolean; data?: KbQaDocument[]; warnings?: string[]; error?: string }>;
     clearIndex: (source?: 'team' | 'personal') => Promise<{ success: boolean; error?: string }>;
+  };
+  kbQaSession: {
+    list: (limit?: number) => Promise<KbQaSessionResult<KbQaSession[]>>;
+    create: (options?: { title?: string | null; libraryType?: KbQaLibraryType }) => Promise<KbQaSessionResult<KbQaSession>>;
+    rename: (sessionId: number, title: string) => Promise<KbQaSessionResult<KbQaSession>>;
+    setStatus: (sessionId: number, status: KbQaSessionStatus) => Promise<KbQaSessionResult<KbQaSession>>;
+    remove: (sessionId: number) => Promise<KbQaSessionResult<{ success: boolean }>>;
+    clear: () => Promise<KbQaSessionResult<{ removed: number }>>;
+    listMessages: (sessionId: number, afterId?: number) => Promise<KbQaSessionResult<KbQaStoredMessage[]>>;
+    addMessage: (sessionId: number, payload: KbQaAddMessagePayload) => Promise<KbQaSessionResult<KbQaStoredMessage>>;
+    updateMessage: (messageId: number, payload: KbQaUpdateMessagePayload) => Promise<KbQaSessionResult<KbQaStoredMessage>>;
   };
   plugins: {
     getAvailablePlugins: () => Promise<AvailablePlugin[]>;
