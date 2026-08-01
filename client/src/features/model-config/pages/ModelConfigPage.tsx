@@ -12,7 +12,6 @@ export default function ModelConfigPage() {
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [savingLocal, setSavingLocal] = useState(false);
   const [savingGlobal, setSavingGlobal] = useState(false);
   const [globalEmbedding, setGlobalEmbedding] = useState('');
   const [fullConfig, setFullConfig] = useState<Record<string, unknown> | null>(null);
@@ -89,51 +88,6 @@ export default function ModelConfigPage() {
     }
   };
 
-  const saveLocal = async () => {
-    if (!baseUrl.trim() || !apiKey.trim() || !model.trim()) {
-      showToast('Base URL、API Key、模型名称均不能为空', 'error');
-      return;
-    }
-    if (!fullConfig) {
-      showToast('无法读取本机配置，请重试', 'error');
-      return;
-    }
-    setSavingLocal(true);
-    try {
-      const provider = 'custom';
-      const profiles = (fullConfig.text_model_profiles as Record<string, Record<string, unknown>>) || {};
-      const prev = profiles[provider] || {};
-      const newProfile = {
-        ...(fullConfig.text_model_provider === provider ? prev : {}),
-        api_key: apiKey.trim(),
-        base_url: baseUrl.trim(),
-        model_name: model.trim(),
-        reasoning_effort: prev.reasoning_effort || '',
-        context_length_limit: prev.context_length_limit || 0,
-        concurrency_limit: prev.concurrency_limit || 2,
-        temperature_enabled: prev.temperature_enabled ?? false,
-        temperature: prev.temperature ?? 0.7,
-        request_mode: prev.request_mode || 'normal',
-      };
-      const updated = {
-        ...fullConfig,
-        text_model_provider: provider,
-        text_model_profiles: { ...profiles, [provider]: newProfile },
-      };
-      const res = await window.yibiao?.config.save(updated as never);
-      if (res?.success) {
-        setFullConfig(updated);
-        showToast('已保存到本机（个人库本地分析生效）', 'success');
-      } else {
-        showToast(res?.message || '保存失败', 'error');
-      }
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '保存失败', 'error');
-    } finally {
-      setSavingLocal(false);
-    }
-  };
-
   const applyGlobal = async () => {
     if (!baseUrl.trim() || !model.trim()) {
       showToast('Base URL 与模型名称不能为空', 'error');
@@ -166,14 +120,14 @@ export default function ModelConfigPage() {
             <strong>模型配置</strong>
           </div>
 
-          <div className="settings-row">
+            <div className="settings-row">
             <div className="settings-row-copy">
-              <strong>AI 模型接入</strong>
+              <strong>AI 模型接入（服务器全局）</strong>
               <span>
-                配置后个人库本地分析、团队库服务器分析、问答将使用该模型。
+                配置服务器侧的团队库分析与问答模型，保存后对全体成员立即生效。
                 {isAdmin
-                  ? ' 管理员可把配置应用到服务器，对全体成员生效。'
-                  : ' 服务器配置仅管理员可修改，你当前只能保存到本机。'}
+                  ? ' 管理员点击「应用到服务器」即可下发；可先从本机文本模型读取当前配置作为起点。'
+                  : ' 该配置仅管理员可修改。'}
               </span>
             </div>
           </div>
@@ -229,15 +183,12 @@ export default function ModelConfigPage() {
 
           <p className="knowledge-sync-hint">
             「获取模型」按上方 Base URL + Key 拉取可用模型；「测试连接」验证可达性与鉴权；
-            「保存到本机」用于个人库本地分析，「应用到服务器」用于团队库分析与问答（需管理员）。
+            「应用到服务器」将分析 / 问答 / 语义检索模型下发到服务器，对团队成员库立即生效（需管理员）。
           </p>
 
           <div className="knowledge-sync-actions">
             <button type="button" className="secondary-action" onClick={() => void testConnection()} disabled={testing}>
               {testing ? '测试中…' : '测试连接'}
-            </button>
-            <button type="button" className="primary-action" onClick={() => void saveLocal()} disabled={savingLocal}>
-              {savingLocal ? '保存中…' : '保存到本机'}
             </button>
             {isAdmin && (
               <button type="button" className="sync-action" onClick={() => void applyGlobal()} disabled={savingGlobal}>

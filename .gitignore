@@ -13,8 +13,7 @@ uploads/
 
 # 构建和打包相关
 dist/
-.verify-build/
-.verify-build2/
+.verify-build*/
 build/
 *.spec
 requirements_build.txt
