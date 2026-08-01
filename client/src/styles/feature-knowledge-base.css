@@ -2302,6 +2302,19 @@
   border-radius: 999px;
 }
 
+.kb-qa-session-expire {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--yb-danger, #e5484d);
+  background: var(--yb-danger-bg, rgba(229, 72, 77, 0.12));
+  border: 1px solid var(--yb-danger-border, rgba(229, 72, 77, 0.32));
+  border-radius: 999px;
+}
+
 .kb-qa-session-meta {
   display: flex;
   align-items: center;
@@ -2371,6 +2384,18 @@
   color: var(--yb-warning-text, #8a5a00);
   background: var(--yb-warning-bg, rgba(255, 176, 32, 0.14));
   border: 1px solid var(--yb-warning-border, rgba(255, 176, 32, 0.32));
+  border-radius: 10px;
+}
+
+.kb-qa-retention-notice {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--yb-danger, #e5484d);
+  background: var(--yb-danger-bg, rgba(229, 72, 77, 0.1));
+  border: 1px solid var(--yb-danger-border, rgba(229, 72, 77, 0.36));
   border-radius: 10px;
 }
 

@@ -3268,6 +3268,11 @@ if __name__ == '__main__':
                 CombinedHandler._personal_purge_expired_trash(CombinedHandler, 24)
             except Exception:
                 pass
+            # 定时滚动清理：硬删超过 7 天无活动的问答会话及其消息
+            try:
+                kb_db.qa_purge_old_sessions(7)
+            except Exception:
+                pass
             time.sleep(3600)
 
     threading.Thread(target=_purge_loop, daemon=True).start()

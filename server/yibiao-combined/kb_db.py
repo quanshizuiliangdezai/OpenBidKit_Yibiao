@@ -1867,3 +1867,27 @@ def qa_purge_deleted_sessions(days=30):
             return n
         finally:
             conn.close()
+
+
+def qa_purge_old_sessions(days=7, now=None):
+    """定时滚动清理：硬删除最近 days 天内无活动（updated_at 早于 cutoff）的活跃会话及其消息。
+    软删除（deleted_at 非空）的会话不在此处理，由 qa_purge_deleted_sessions 负责。
+    返回清理的会话数量。"""
+    if now is None:
+        now = datetime.datetime.now()
+    cutoff = (now - datetime.timedelta(days=days)).isoformat()
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT id FROM kb_qa_sessions WHERE deleted_at IS NULL AND updated_at<?",
+                (cutoff,)).fetchall()
+            n = 0
+            for r in rows:
+                conn.execute("DELETE FROM kb_qa_messages WHERE session_id=?", (r['id'],))
+                conn.execute("DELETE FROM kb_qa_sessions WHERE id=?", (r['id'],))
+                n += 1
+            conn.commit()
+            return n
+        finally:
+            conn.close()

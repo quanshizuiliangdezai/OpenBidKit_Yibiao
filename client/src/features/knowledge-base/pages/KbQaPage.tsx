@@ -38,6 +38,18 @@ function formatSessionTime(iso?: string) {
   return `${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
+// 问答记录滚动保留天数：超过该天数无活动的会话会被服务器定时清理
+const QA_RETENTION_DAYS = 7;
+
+// 返回该会话距离被自动清理还剩几天（ceil）；null 表示无法计算
+function retentionDaysLeft(updatedAt?: string): number | null {
+  if (!updatedAt) return null;
+  const d = new Date(updatedAt.replace(' ', 'T'));
+  if (Number.isNaN(d.getTime())) return null;
+  const elapsedDays = (Date.now() - d.getTime()) / 86_400_000;
+  return Math.ceil(QA_RETENTION_DAYS - elapsedDays);
+}
+
 function SourceList({ sources }: { sources: KbQaMessageSource[] }) {
   if (!sources || sources.length === 0) return null;
   return (
@@ -216,6 +228,15 @@ function KbQaPage() {
                       {runningSessionIds.has(s.id) ? (
                         <span className="kb-qa-session-badge">生成中</span>
                       ) : null}
+                      {(() => {
+                        const left = retentionDaysLeft(s.updated_at);
+                        if (left === null || left > 2) return null;
+                        return (
+                          <span className="kb-qa-session-expire">
+                            {left <= 0 ? '即将删除' : `${left}天后删除`}
+                          </span>
+                        );
+                      })()}
                     </div>
                     <div className="kb-qa-session-meta">
                       <span className="kb-qa-session-preview">
@@ -266,6 +287,10 @@ function KbQaPage() {
               未连接到服务器，当前对话仅保存在本机，重启后会丢失。
             </div>
           ) : null}
+
+          <div className="kb-qa-retention-notice">
+            问答记录仅保留最近 {QA_RETENTION_DAYS} 天，超过 {QA_RETENTION_DAYS} 天无活动的对话将被自动删除，重要内容请及时导出。
+          </div>
 
           <div className="kb-qa-source">
             <span>知识库来源：</span>
