@@ -339,3 +339,50 @@
   color: var(--yb-text-muted);
   opacity: 0.5;
 }
+
+/* 服务器当前已部署配置（只读） */
+.model-config-server-card {
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.06), rgba(99, 102, 241, 0.02));
+  border-color: rgba(99, 102, 241, 0.25);
+}
+
+.model-config-readonly-badge {
+  margin-left: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6366f1;
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  padding: 2px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+
+.model-config-server-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.model-config-server-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.model-config-server-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--yb-text-muted);
+}
+
+.model-config-server-value {
+  font-size: 13px;
+  color: var(--yb-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+  background: rgba(15, 23, 42, 0.03);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 8px;
+  padding: 6px 10px;
+}

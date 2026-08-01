@@ -78,13 +78,19 @@ export default function ModelConfigPage() {
   const [testing, setTesting] = useState(false);
   const [savingGlobal, setSavingGlobal] = useState(false);
   const [globalEmbedding, setGlobalEmbedding] = useState('');
-  const [fullConfig, setFullConfig] = useState<Record<string, unknown> | null>(null);
+  const [serverConfig, setServerConfig] = useState<{
+    base_url?: string;
+    analysis_model?: string;
+    embedding_model?: string;
+  } | null>(null);
 
   const loadConfig = async () => {
     setModels([]);
+    if (!isAdmin) return;
+    // 可编辑表单始终以「本地文本模型配置」为基准，保证与「设置」页口径一致，
+    // 避免服务器 global 配置与本地 api_key 错配导致「获取模型」结果不一致。
     try {
       const cfg = (await window.yibiao?.config.load()) as unknown as Record<string, unknown> | undefined;
-      setFullConfig(cfg || null);
       if (cfg) {
         const provider = (cfg.text_model_provider as string) || 'custom';
         const profiles = (cfg.text_model_profiles as Record<string, Record<string, unknown>>) || {};
@@ -96,17 +102,19 @@ export default function ModelConfigPage() {
     } catch {
       /* 忽略读取失败 */
     }
-    if (isAdmin) {
-      try {
-        const res = await window.yibiao?.config.loadGlobal();
-        if (res?.success && res.data) {
-          setGlobalEmbedding(res.data.embedding_model || '');
-          if (res.data.base_url) setBaseUrl(res.data.base_url);
-          if (res.data.analysis_model) setModel(res.data.analysis_model);
-        }
-      } catch {
-        /* 忽略读取失败 */
+    // 服务器当前已部署的配置仅作只读展示，不覆盖可编辑字段。
+    try {
+      const res = await window.yibiao?.config.loadGlobal();
+      if (res?.success && res.data) {
+        setServerConfig({
+          base_url: res.data.base_url || '',
+          analysis_model: res.data.analysis_model || '',
+          embedding_model: res.data.embedding_model || '',
+        });
+        setGlobalEmbedding(res.data.embedding_model || '');
       }
+    } catch {
+      /* 忽略读取失败 */
     }
   };
 
@@ -120,7 +128,7 @@ export default function ModelConfigPage() {
     if (!apiKey.trim()) { showToast('请先填写 API Key', 'info'); return; }
     setLoadingModels(true);
     try {
-      const probe = { ...(fullConfig || {}), base_url: baseUrl.trim(), api_key: apiKey.trim(), model_name: model.trim() };
+      const probe = { base_url: baseUrl.trim(), api_key: apiKey.trim(), model_name: model.trim() };
       const result = await window.yibiao?.config.listModels(probe as never);
       const list = result?.models || [];
       setModels(list);
@@ -142,7 +150,7 @@ export default function ModelConfigPage() {
     if (!model.trim()) { showToast('请先填写模型名称', 'info'); return; }
     setTesting(true);
     try {
-      const probe = { ...(fullConfig || {}), base_url: baseUrl.trim(), api_key: apiKey.trim(), model_name: model.trim() };
+      const probe = { base_url: baseUrl.trim(), api_key: apiKey.trim(), model_name: model.trim() };
       const result = await window.yibiao?.ai.testTextModel(probe as never);
       if (result?.success) showToast(result.message || '连接成功', 'success');
       else showToast(result?.message || '连接失败', 'error');
@@ -287,6 +295,32 @@ export default function ModelConfigPage() {
                 </label>
               </div>
             </section>
+
+            {serverConfig && (serverConfig.base_url || serverConfig.analysis_model || serverConfig.embedding_model) && (
+              <section className="model-config-card model-config-server-card">
+                <div className="model-config-section-title">
+                  服务器当前已部署配置
+                  <span className="model-config-readonly-badge">只读</span>
+                </div>
+                <div className="model-config-server-grid">
+                  <div className="model-config-server-item">
+                    <span className="model-config-server-label">API Base URL</span>
+                    <span className="model-config-server-value">{serverConfig.base_url || '（未配置）'}</span>
+                  </div>
+                  <div className="model-config-server-item">
+                    <span className="model-config-server-label">分析 / 问答模型</span>
+                    <span className="model-config-server-value">{serverConfig.analysis_model || '（未配置）'}</span>
+                  </div>
+                  <div className="model-config-server-item">
+                    <span className="model-config-server-label">语义检索模型</span>
+                    <span className="model-config-server-value">{serverConfig.embedding_model || '（未配置）'}</span>
+                  </div>
+                </div>
+                <span className="model-config-field-hint">
+                  上方「接入信息」用于修改并「应用到服务器」；此处为服务器当前生效值（密钥不回传，故不显示）。
+                </span>
+              </section>
+            )}
 
             <div className="model-config-hint-card">
               <InfoIcon />
