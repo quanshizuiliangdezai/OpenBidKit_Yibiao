@@ -50,6 +50,29 @@ const SearchIcon = ({ className }: { className?: string }) => (
   </svg>
 );
 
+const ServerIcon = ({ className }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
+    <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
+    <path d="M6 6h.01" />
+    <path d="M6 18h.01" />
+  </svg>
+);
+
+const LinkIcon = ({ className }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+  </svg>
+);
+
+const BrainIcon = ({ className }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z" />
+    <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z" />
+  </svg>
+);
+
 const InfoIcon = ({ className }: { className?: string }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="10" />
@@ -314,27 +337,55 @@ export default function ModelConfigPage() {
 
             {serverConfig && (serverConfig.base_url || serverConfig.analysis_model || serverConfig.embedding_model) && (
               <section className="model-config-card model-config-server-card">
-                <div className="model-config-section-title">
-                  服务器当前已部署配置
+                <div className="model-config-server-header">
+                  <div className="model-config-server-title-wrap">
+                    <span className="model-config-server-icon">
+                      <ServerIcon />
+                    </span>
+                    <div>
+                      <div className="model-config-section-title">服务器当前已部署配置</div>
+                      <div className="model-config-server-subtitle">仅管理员可见 · 密钥不回传</div>
+                    </div>
+                  </div>
                   <span className="model-config-readonly-badge">只读</span>
                 </div>
+
                 <div className="model-config-server-grid">
                   <div className="model-config-server-item">
-                    <span className="model-config-server-label">API Base URL</span>
-                    <span className="model-config-server-value">{serverConfig.base_url || '（未配置）'}</span>
+                    <div className="model-config-server-item-head">
+                      <span className="model-config-server-item-icon url"><LinkIcon /></span>
+                      <span className="model-config-server-label">API Base URL</span>
+                    </div>
+                    <span className={serverConfig.base_url ? 'model-config-server-value' : 'model-config-server-value empty'}>
+                      {serverConfig.base_url || '（未配置）'}
+                    </span>
                   </div>
+
                   <div className="model-config-server-item">
-                    <span className="model-config-server-label">分析 / 问答模型</span>
-                    <span className="model-config-server-value">{serverConfig.analysis_model || '（未配置）'}</span>
+                    <div className="model-config-server-item-head">
+                      <span className="model-config-server-item-icon model"><BrainIcon /></span>
+                      <span className="model-config-server-label">分析 / 问答模型</span>
+                    </div>
+                    <span className={serverConfig.analysis_model ? 'model-config-server-value' : 'model-config-server-value empty'}>
+                      {serverConfig.analysis_model || '（未配置）'}
+                    </span>
                   </div>
+
                   <div className="model-config-server-item">
-                    <span className="model-config-server-label">语义检索模型</span>
-                    <span className="model-config-server-value">{serverConfig.embedding_model || '（未配置）'}</span>
+                    <div className="model-config-server-item-head">
+                      <span className="model-config-server-item-icon embedding"><SearchIcon /></span>
+                      <span className="model-config-server-label">语义检索模型</span>
+                    </div>
+                    <span className={serverConfig.embedding_model ? 'model-config-server-value' : 'model-config-server-value empty'}>
+                      {serverConfig.embedding_model || '（未配置）'}
+                    </span>
                   </div>
                 </div>
-                <span className="model-config-field-hint">
-                  上方「接入信息」用于修改并「应用到服务器」；此处为服务器当前生效值（密钥不回传，故不显示）。
-                </span>
+
+                <div className="model-config-server-footer">
+                  <InfoIcon />
+                  <span>上方「接入信息」用于修改并「应用到服务器」；此处为服务器当前生效值。</span>
+                </div>
               </section>
             )}
 
