@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { useToast } from '../../../shared/ui';
+import { useToast, useConfirmDialog } from '../../../shared/ui';
 import { useAuth } from '../../../shared/auth/AuthContext';
 
 interface EmployeeRow {
@@ -54,6 +54,7 @@ const STATUS_FILTERS: Array<{ key: StatusFilter; label: string }> = [
 export default function AccountListPage() {
   const auth = useAuth();
   const { showToast } = useToast();
+  const { confirm, prompt } = useConfirmDialog();
   const myId = auth.employee?.id;
 
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
@@ -138,7 +139,12 @@ export default function AccountListPage() {
   };
 
   const reject = async (e: EmployeeRow) => {
-    const reason = window.prompt(`拒绝 ${e.display_name || e.username} 的理由（选填）`);
+    const reason = await prompt({
+      title: '拒绝注册',
+      message: `请输入拒绝 ${e.display_name || e.username} 的理由（选填）`,
+      defaultValue: '',
+      confirmText: '确认拒绝',
+    });
     if (reason === null) return;
     try {
       const res = await window.yibiao.kbAuth.review({ user_id: e.id, action: 'reject', reject_reason: reason || undefined });
@@ -260,7 +266,13 @@ export default function AccountListPage() {
       flash('不能删除当前登录账号', true);
       return;
     }
-    if (!window.confirm(`确定删除 ${e.display_name || e.username}？其名下知识库文档与文件夹将保留并解绑，仅删除账号本身。`)) return;
+    const ok = await confirm({
+      title: '删除账号',
+      message: `确定删除 ${e.display_name || e.username}？其名下知识库文档与文件夹将保留并解绑，仅删除账号本身。`,
+      variant: 'danger',
+      confirmText: '删除',
+    });
+    if (!ok) return;
     try {
       const res = await window.yibiao.kbAuth.deleteEmployee({ user_id: e.id });
       if (!res?.success) throw new Error(res?.error || '操作失败');

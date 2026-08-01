@@ -1,7 +1,14 @@
 import { Profiler, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type MouseEvent, type DragEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { isLibreOfficeRequiredMessage, MarkdownFullscreenViewer, MarkdownRenderer, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import {
+  isLibreOfficeRequiredMessage,
+  MarkdownFullscreenViewer,
+  MarkdownRenderer,
+  useConfirmDialog,
+  useDocumentParseNotice,
+  useToast,
+} from '../../../shared/ui';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeDocument, KnowledgeDocumentStatus, KnowledgeFolder, KnowledgeItem } from '../types';
 import type { KbAuthStatus, KbTeamDocument, KbTeamFolder, KbTrashFolder, KbTrashDocument } from '../../../shared/types/ipc';
 import { useAuth } from '../../../shared/auth/AuthContext';
@@ -640,6 +647,7 @@ function KnowledgeBasePage() {
   const viewerRequestIdRef = useRef(0);
   const viewerTraceRef = useRef<RenderDebugTrace | null>(null);
   const { showToast } = useToast();
+  const { confirm } = useConfirmDialog();
   const { showDocumentParseNotice } = useDocumentParseNotice();
   const auth = useAuth();
 
@@ -1179,7 +1187,13 @@ function KnowledgeBasePage() {
       showToast('处理中文档不可同步到个人', 'info');
       return;
     }
-    if (!window.confirm(`确定将选中的 ${selectedDocumentIds.size} 个文档同步到个人知识库吗？`)) return;
+    const ok = await confirm({
+      title: '同步到个人知识库',
+      message: `确定将选中的 ${selectedDocumentIds.size} 个文档同步到个人知识库吗？`,
+      variant: 'primary',
+      confirmText: '同步',
+    });
+    if (!ok) return;
     try {
       setSyncing(true);
       const ids = Array.from(selectedDocumentIds);

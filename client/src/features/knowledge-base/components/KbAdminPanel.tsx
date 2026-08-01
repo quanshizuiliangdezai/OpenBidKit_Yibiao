@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { useConfirmDialog } from '../../../shared/ui';
 import type { KbAuthEmployee, KbAuthStatus } from '../../../shared/types/ipc';
 
 interface KbAdminPanelProps {
@@ -22,6 +23,7 @@ const STATUS_CLASS: Record<string, string> = {
 
 function KbAdminPanel({ status, onClose }: KbAdminPanelProps) {
   const myId = status?.employee?.id;
+  const { confirm, prompt } = useConfirmDialog();
   const [employees, setEmployees] = useState<KbAuthEmployee[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -64,7 +66,12 @@ function KbAdminPanel({ status, onClose }: KbAdminPanelProps) {
   };
 
   const reject = async (e: KbAuthEmployee) => {
-    const reason = window.prompt(`拒绝 ${e.display_name || e.username} 的理由（选填）`);
+    const reason = await prompt({
+      title: '拒绝注册',
+      message: `请输入拒绝 ${e.display_name || e.username} 的理由（选填）`,
+      defaultValue: '',
+      confirmText: '确认拒绝',
+    });
     if (reason === null) return;
     try {
       const res = await window.yibiao?.kbAuth.review({ user_id: e.id, action: 'reject', reject_reason: reason || undefined });
@@ -90,7 +97,11 @@ function KbAdminPanel({ status, onClose }: KbAdminPanelProps) {
   };
 
   const resetPwd = async (e: KbAuthEmployee) => {
-    const pwd = window.prompt(`为 ${e.display_name || e.username} 设置新密码（至少 6 位）`);
+    const pwd = await prompt({
+      title: '重置密码',
+      message: `为 ${e.display_name || e.username} 设置新密码（至少 6 位）`,
+      confirmText: '确认重置',
+    });
     if (!pwd) return;
     if (pwd.length < 6) {
       flash('密码长度至少 6 位', true);
@@ -106,7 +117,13 @@ function KbAdminPanel({ status, onClose }: KbAdminPanelProps) {
   };
 
   const remove = async (e: KbAuthEmployee) => {
-    if (!window.confirm(`确定删除 ${e.display_name || e.username}？其名下文件夹与文档将一并删除。`)) return;
+    const ok = await confirm({
+      title: '删除成员',
+      message: `确定删除 ${e.display_name || e.username}？其名下文件夹与文档将一并删除。`,
+      variant: 'danger',
+      confirmText: '删除',
+    });
+    if (!ok) return;
     try {
       const res = await window.yibiao?.kbAuth.deleteEmployee({ user_id: e.id });
       if (!res?.success) throw new Error(res?.error || '操作失败');

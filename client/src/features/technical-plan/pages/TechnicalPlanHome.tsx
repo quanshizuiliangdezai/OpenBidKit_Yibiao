@@ -9,7 +9,14 @@ import { TemplatePreview } from '../../export-format/pages/ExportFormatPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, useToast } from '../../../shared/ui';
+import {
+  FloatingToolbar,
+  ToolbarArrowLeftIcon,
+  ToolbarArrowRightIcon,
+  ToolbarDocumentIcon,
+  useConfirmDialog,
+  useToast,
+} from '../../../shared/ui';
 import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
 import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../../shared/types';
 import type { OutlineData, OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
@@ -313,6 +320,7 @@ function updateOutlineItemContent(items: OutlineItem[], itemId: string, content:
 function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }: TechnicalPlanHomeProps) {
   const { hydrated, state, setState } = useTechnicalPlanWorkflow();
   const { showToast } = useToast();
+  const { confirm } = useConfirmDialog();
   const [tenderMarkdown, setTenderMarkdown] = useState('');
   const [originalPlanMarkdown, setOriginalPlanMarkdown] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
@@ -1004,9 +1012,13 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   };
 
   const resetTechnicalPlan = async () => {
-    if (!window.confirm('会清空整个技术方案编写进度，是否确认？')) {
-      return;
-    }
+    const ok = await confirm({
+      title: '重置技术方案',
+      message: '会清空整个技术方案编写进度，是否确认？',
+      variant: 'danger',
+      confirmText: '确认清空',
+    });
+    if (!ok) return;
 
     try {
       const result = await window.yibiao?.technicalPlan.clear();

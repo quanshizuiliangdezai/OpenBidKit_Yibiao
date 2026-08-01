@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { useToast } from '../../../shared/ui';
+import { useToast, useConfirmDialog } from '../../../shared/ui';
 import { useAuth } from '../../../shared/auth/AuthContext';
 import type { KbPermissionDef, KbPermissionGroup } from '../../../shared/types/ipc';
 
@@ -17,6 +17,7 @@ interface EmployeeRow {
 export default function PermissionListPage() {
   const auth = useAuth();
   const { showToast } = useToast();
+  const { confirm } = useConfirmDialog();
   const isAdmin = auth.isAdmin;
 
   const [catalog, setCatalog] = useState<KbPermissionDef[]>([]);
@@ -159,7 +160,13 @@ export default function PermissionListPage() {
   };
 
   const removeGroup = async (group: KbPermissionGroup) => {
-    if (!window.confirm(`确定删除分组「${group.name}」？该分组下的权限分配与成员关系将一并清除。`)) return;
+    const ok = await confirm({
+      title: '删除分组',
+      message: `确定删除分组「${group.name}」？该分组下的权限分配与成员关系将一并清除。`,
+      variant: 'danger',
+      confirmText: '删除',
+    });
+    if (!ok) return;
     try {
       const res = await window.yibiao.kbAuth.deleteGroup({ group_id: group.id });
       if (!res?.success) throw new Error(res?.error || '删除失败');

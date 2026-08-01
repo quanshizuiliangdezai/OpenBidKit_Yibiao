@@ -2,7 +2,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { useState, type ComponentType, type ReactElement, type SVGProps } from 'react';
 import { getAppMenuItems, getParentMenuItemBySection } from '../app/menuConfig';
 import type { AppMenuItem, SectionId } from '../shared/types/navigation';
-import { useToast } from '../shared/ui';
+import { useToast, useConfirmDialog } from '../shared/ui';
 import { useAuth } from '../shared/auth/AuthContext';
 import logoUrl from '../../assets/icon_256.png';
 
@@ -52,6 +52,7 @@ const USER_GUIDE_URL = 'https://wiki.agnet.top/';
 function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const { showToast } = useToast();
+  const { confirm } = useConfirmDialog();
   const auth = useAuth();
   const menuItems = getAppMenuItems(developerMode)
     .map((item) => {
@@ -138,10 +139,14 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
       <div className="sidebar-footer">
         {collapsed ? wrapTooltip('使用文档', renderUserGuideButton()) : renderUserGuideButton()}
         {collapsed ? wrapTooltip('设置', renderSettingsButton(activeSection, onSectionChange)) : renderSettingsButton(activeSection, onSectionChange)}
-        {renderUserCard(auth.employee, () => {
-          if (window.confirm('确定要退出当前账号吗？退出后需重新登录才能使用。')) {
-            auth.logout();
-          }
+        {renderUserCard(auth.employee, async () => {
+          const ok = await confirm({
+            title: '退出登录',
+            message: '确定要退出当前账号吗？退出后需重新登录才能使用。',
+            variant: 'primary',
+            confirmText: '退出登录',
+          });
+          if (ok) auth.logout();
         }, collapsed)}
       </div>
     </aside>

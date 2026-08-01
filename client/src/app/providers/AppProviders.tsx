@@ -1,5 +1,10 @@
 import type { ReactNode } from 'react';
-import { AiHttpErrorDialogProvider, DocumentParseNoticeProvider, ToastProvider } from '../../shared/ui';
+import {
+  AiHttpErrorDialogProvider,
+  ConfirmDialogProvider,
+  DocumentParseNoticeProvider,
+  ToastProvider,
+} from '../../shared/ui';
 import { AuthProvider } from '../../shared/auth/AuthContext';
 
 interface AppProvidersProps {
@@ -11,7 +16,9 @@ function AppProviders({ children }: AppProvidersProps) {
     <ToastProvider>
       <AiHttpErrorDialogProvider>
         <DocumentParseNoticeProvider>
-          <AuthProvider>{children}</AuthProvider>
+          <ConfirmDialogProvider>
+            <AuthProvider>{children}</AuthProvider>
+          </ConfirmDialogProvider>
         </DocumentParseNoticeProvider>
       </AiHttpErrorDialogProvider>
     </ToastProvider>
