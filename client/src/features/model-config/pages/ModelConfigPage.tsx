@@ -139,11 +139,12 @@ export default function ModelConfigPage() {
 
   const testConnection = async () => {
     if (!baseUrl.trim() || !apiKey.trim()) { showToast('请先填写 API Base URL 与 API Key', 'info'); return; }
+    if (!model.trim()) { showToast('请先填写模型名称', 'info'); return; }
     setTesting(true);
     try {
       const probe = { ...(fullConfig || {}), base_url: baseUrl.trim(), api_key: apiKey.trim(), model_name: model.trim() };
-      const result = await window.yibiao?.config.listModels(probe as never);
-      if (result?.success) showToast('连接成功（模型列表可获取）', 'success');
+      const result = await window.yibiao?.ai.testTextModel(probe as never);
+      if (result?.success) showToast(result.message || '连接成功', 'success');
       else showToast(result?.message || '连接失败', 'error');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '连接测试失败', 'error');
