@@ -1,7 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { ipcMain, shell, dialog } = require('electron');
-const { FormData } = require('undici');
 
 function registerConfigIpc({ configStore, aiService, kbAuthService, onDeveloperModeChange, onConfigChanged }) {
   ipcMain.handle('config:load', () => configStore.load());
@@ -75,13 +74,34 @@ function registerConfigIpc({ configStore, aiService, kbAuthService, onDeveloperM
     } catch (e) {
       return { success: false, error: '读取文件失败：' + (e?.message || String(e)) };
     }
-    const fd = new FormData();
-    fd.append('file', new Blob([fileBuf], { type: 'application/pdf' }), path.basename(filePath));
-    fd.append('provider', provider || 'mineru-agent-api');
-    fd.append('mineru_token', mineru_token || '');
+    // 手动构造 multipart/form-data body，避免依赖 Electron/Node 里 FormData/Blob 的实现差异。
+    const boundary = `----YibiaoMultipart${Date.now()}${Math.random().toString(36).slice(2, 10)}`;
+    const filename = path.basename(filePath);
+    const fileNameEncoded = filename.replace(/"/g, '\\"');
+    const p = provider || 'mineru-agent-api';
+    const token = mineru_token || '';
+    const prefix = Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="${fileNameEncoded}"\r\n` +
+      `Content-Type: application/pdf\r\n\r\n`,
+      'utf-8'
+    );
+    const suffix = Buffer.from(
+      `\r\n--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="provider"\r\n\r\n${p}` +
+      `\r\n--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="mineru_token"\r\n\r\n${token}` +
+      `\r\n--${boundary}--\r\n`,
+      'utf-8'
+    );
+    const body = Buffer.concat([prefix, fileBuf, suffix]);
     const { ok, status, data } = await kbAuthService.apiFetch('/api/admin/test-mineru-parse', {
       method: 'POST',
-      body: fd,
+      body,
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': String(body.length),
+      },
       timeoutMs: 600000,
     });
     if (!ok) return { success: false, status, error: data?.error || '解析测试失败' };

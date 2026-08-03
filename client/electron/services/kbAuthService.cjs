@@ -99,20 +99,26 @@ function createKbAuthService({ app }) {
     if (state.token) reqHeaders.Authorization = `Bearer ${state.token}`;
     const init = { method, headers: reqHeaders };
     if (body !== null) {
-      // 可靠判断 FormData：Node 中 require('undici').FormData 与 globalThis.FormData 不是同一个构造函数，
-      // 且生产构建 minify 后 constructor.name 可能被改写，因此用 Object.prototype.toString / Symbol.toStringTag 兜底。
-      const isFormDataLike = (() => {
-        if (typeof body !== 'object' || body === null) return false;
-        if (typeof FormData !== 'undefined' && body instanceof FormData) return true;
-        if (Object.prototype.toString.call(body) === '[object FormData]') return true;
-        if (body[Symbol.toStringTag] === 'FormData') return true;
-        return false;
-      })();
-      if (isFormDataLike) {
-        init.body = body; // 让 fetch 自动带 boundary
+      // 调用方已显式指定 Content-Type（例如手动构造的 multipart body）时直接透传，不做任何序列化。
+      const hasExplicitContentType = Boolean(reqHeaders['Content-Type'] || reqHeaders['content-type']);
+      if (hasExplicitContentType && (Buffer.isBuffer(body) || body instanceof Uint8Array)) {
+        init.body = body;
       } else {
-        reqHeaders['Content-Type'] = 'application/json';
-        init.body = JSON.stringify(body);
+        // 可靠判断 FormData：Node 中 require('undici').FormData 与 globalThis.FormData 不是同一个构造函数，
+        // 且生产构建 minify 后 constructor.name 可能被改写，因此用 Object.prototype.toString / Symbol.toStringTag 兜底。
+        const isFormDataLike = (() => {
+          if (typeof body !== 'object' || body === null) return false;
+          if (typeof FormData !== 'undefined' && body instanceof FormData) return true;
+          if (Object.prototype.toString.call(body) === '[object FormData]') return true;
+          if (body[Symbol.toStringTag] === 'FormData') return true;
+          return false;
+        })();
+        if (isFormDataLike) {
+          init.body = body; // 让 fetch 自动带 boundary
+        } else {
+          reqHeaders['Content-Type'] = 'application/json';
+          init.body = JSON.stringify(body);
+        }
       }
     }
     let res;
