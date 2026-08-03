@@ -5,6 +5,7 @@
 # 密码：pbkdf2_hmac(sha256) + 随机 salt，绝不存明文
 import sqlite3
 import os
+import re
 import json
 import hashlib
 import secrets
@@ -1240,6 +1241,40 @@ def _extract_text_for_search(data, file_name, mime_type):
     return ''
 
 
+def extract_content_text_from_analysis(payload):
+    """从分析结果 payload 的 markdown 中抽取纯文本，供全文检索 / QA 召回使用。
+
+    背景：上传阶段的 _extract_text_for_search 对扫描件 PDF 无能为力
+    （PyPDF2 与 LibreOffice 都拿不到文字层），content_text 会是空串，
+    导致这类文档在「按正文搜索」和知识库问答里永远召不回来。
+    而 Worker 走 OCR / 本地解析后，payload.markdown 里已有完整正文，
+    这里把它复用成 content_text，避免二次解析。
+    对 docx 也有收益：python-docx 只取 paragraphs，会漏掉表格里的文字，
+    markdown 则包含表格内容。
+    """
+    try:
+        obj = json.loads(payload) if isinstance(payload, str) else payload
+    except (TypeError, ValueError):
+        return ''
+    if not isinstance(obj, dict):
+        return ''
+    md = obj.get('markdown') or obj.get('content') or ''
+    if not isinstance(md, str) or not md.strip():
+        return ''
+    text = md
+    # HTML 表格/段落标签 -> 空白，保留单元格文字
+    text = re.sub(r'</\s*(tr|table|p|div|h[1-6]|li)\s*>', '\n', text, flags=re.I)
+    text = re.sub(r'</\s*(td|th)\s*>', ' ', text, flags=re.I)
+    text = re.sub(r'<[^>]+>', '', text)
+    # markdown 图片丢弃、链接只留文字
+    text = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', text)
+    text = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', text)
+    # 压缩空白
+    text = re.sub(r'[ \t\u00a0]+', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()[:200000]
+
+
 def reextract_document_text(doc_id):
     """根据磁盘上的原始文件重新抽取 content_text，用于修复历史数据。"""
     with _lock:
@@ -1398,6 +1433,25 @@ def save_team_analysis(document_id, status, payload, item_count=None, block_coun
                 (int(document_id), status, payload_str, item_count, block_count,
                  analyzer_id, analyzer_name, datetime.datetime.now().isoformat())
             )
+            # 分析成功时用解析出的正文回填 content_text：扫描件 PDF 上传阶段抽不出
+            # 文字（content_text 为空），只有这里能补上，否则全文检索/问答召不回。
+            if status == 'success':
+                try:
+                    text = extract_content_text_from_analysis(payload_str)
+                    if text:
+                        cols = {c[1] for c in conn.execute(
+                            "PRAGMA table_info(knowledge_documents)").fetchall()}
+                        if 'content_text' in cols:
+                            row = conn.execute(
+                                "SELECT LENGTH(COALESCE(content_text,'')) AS n "
+                                "FROM knowledge_documents WHERE id=?", (int(document_id),)).fetchone()
+                            # 仅在解析文本更完整时覆盖，避免把干净正文换成更差的结果
+                            if not row or (row['n'] or 0) < len(text):
+                                conn.execute(
+                                    "UPDATE knowledge_documents SET content_text=? WHERE id=?",
+                                    (text, int(document_id)))
+                except Exception:
+                    pass
             conn.commit()
         finally:
             conn.close()

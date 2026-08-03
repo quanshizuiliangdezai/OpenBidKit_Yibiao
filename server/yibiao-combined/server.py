@@ -1188,6 +1188,20 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                         }
                         if 'filtered_block_count' in cols:
                             fields['filtered_block_count'] = filtered_block_count or 0
+                        # 分析成功时用解析出的正文回填 content_text（扫描件 PDF 上传阶段
+                        # 抽不出文字，不补这一步就永远搜不到 / 问答召不回）。
+                        if analysis_status == 'success' and 'content_text' in cols:
+                            try:
+                                text = kb_db.extract_content_text_from_analysis(payload)
+                                if text:
+                                    row = conn.execute(
+                                        "SELECT LENGTH(COALESCE(content_text,'')) AS n "
+                                        "FROM knowledge_documents WHERE document_id=?",
+                                        (m.group(1),)).fetchone()
+                                    if not row or (row['n'] or 0) < len(text):
+                                        fields['content_text'] = text
+                            except Exception:
+                                pass
                         set_clause = ', '.join(f"{k}=?" for k in fields if k in cols)
                         if set_clause:
                             conn.execute(
