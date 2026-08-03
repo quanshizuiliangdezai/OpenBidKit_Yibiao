@@ -2051,6 +2051,34 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             finally:
                 conn.close()
 
+    def _personal_rename_document(self, doc_id, name, employee):
+        """个人库重命名文档：修改 file_name（个人库无独立 title 字段）。"""
+        doc_id = str(doc_id)
+        name = (name or '').strip()
+        if not name:
+            return False, '文档名不能为空'
+        with _MASTER_LOCK:
+            conn = _master_db_conn()
+            if conn is None:
+                return False, '个人库不可用'
+            try:
+                self._ensure_deleted_col(conn)
+                row = conn.execute(
+                    "SELECT document_id, owner_id, file_name FROM knowledge_documents WHERE document_id=?",
+                    (doc_id,)).fetchone()
+                if not row:
+                    return False, '文档不存在'
+                if employee and employee.get('role') != 'admin' and row['owner_id'] is not None and row['owner_id'] != employee['id']:
+                    return False, '只能重命名自己上传的个人文档'
+                now = datetime.datetime.now().isoformat()
+                conn.execute(
+                    "UPDATE knowledge_documents SET file_name=?, updated_at=? WHERE document_id=?",
+                    (name, now, doc_id))
+                conn.commit()
+                return True, None
+            finally:
+                conn.close()
+
     # ==================== 个人库：重命名 / 软删 / 回收站 / 恢复 / 搜索 / 导出 ====================
 
     def _ensure_deleted_col(self, conn):
@@ -3618,7 +3646,18 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             if not doc:
                 return self._send(404, {'error': '文档不存在'})
             if employee['role'] != 'admin' and doc.get('owner_id') is not None and doc['owner_id'] != employee['id']:
-                return self._send(403, {'error': '只能移动自己上传的文档'})
+                return self._send(403, {'error': '只能修改自己上传的文档'})
+            # 重命名优先（传了 name）
+            if data.get('name'):
+                ok, err = kb_db.rename_document(m.group(1), data.get('name'))
+                if not ok:
+                    return self._send(400, {'error': err})
+                audit_event(
+                    account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                    role=employee.get('role'), action='doc', target_type='document', target_id=m.group(1),
+                    detail='重命名文档: %s' % data.get('name'), ip=_client_ip(self))
+                return self._send(200, {'success': True, 'message': '文档已重命名'})
+            # 否则按移动处理（folder_id）
             new_folder_id = data.get('folder_id')
             if new_folder_id in (None, '', 0, '0'):
                 return self._send(400, {'error': '缺少目标文件夹'})
@@ -3633,6 +3672,17 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         m = re.match(r'^/api/personal/documents/([^/]+)$', path)
         if m:
             doc_id = m.group(1)
+            # 重命名优先（传了 name）
+            if data.get('name'):
+                ok, err = self._personal_rename_document(doc_id, data.get('name'), employee)
+                if not ok:
+                    return self._send(400, {'error': err})
+                audit_event(
+                    account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
+                    role=employee.get('role'), action='doc', target_type='personal_document', target_id=doc_id,
+                    detail='重命名个人文档: %s' % data.get('name'), ip=_client_ip(self))
+                return self._send(200, {'success': True, 'message': '文档已重命名'})
+            # 否则按移动处理（folder_id）
             new_folder_id = data.get('folder_id')
             if new_folder_id in (None, '', 0, '0'):
                 return self._send(400, {'error': '缺少目标文件夹'})

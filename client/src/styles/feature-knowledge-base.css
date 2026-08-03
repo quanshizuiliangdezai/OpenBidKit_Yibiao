@@ -625,6 +625,12 @@
   padding: 3px 7px;
 }
 
+.knowledge-document-subtitle {
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .knowledge-folder-card small,
 .knowledge-document-meta,
 .knowledge-empty-box p,

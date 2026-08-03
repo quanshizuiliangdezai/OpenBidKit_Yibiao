@@ -159,6 +159,16 @@ function registerKbPersonalIpc({ kbAuthService, app, personalService: injectedSe
     }
   });
 
+  // C1 重命名文档
+  ipcMain.handle('kb-personal:rename-document', async (_event, documentId, name) => {
+    try {
+      const result = await personalService.renameDocument(documentId, name);
+      return { success: true, data: result };
+    } catch (err) {
+      return { error: err.message || '重命名文档失败' };
+    }
+  });
+
   // E2 移动文档
   ipcMain.handle('kb-personal:move-document', async (_event, documentId, folderId) => {
     try {

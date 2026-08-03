@@ -235,6 +235,16 @@ function createKbTeamService({ kbAuthService, app }) {
     return data?.data || data || { success: true };
   }
 
+  /** 重命名文档：PUT /api/documents/{id} body {name} */
+  async function renameDocument(documentId, name) {
+    const { ok, status, data } = await api(`/api/documents/${documentId}`, { method: 'PUT', body: { name } });
+    if (!ok) {
+      const msg = data?.error || `重命名文档失败（${status}）`;
+      throw new Error(msg);
+    }
+    return data?.data || data || { success: true };
+  }
+
   /** 移动文档：PUT /api/documents/{id} body {folder_id} */
   async function moveDocument(documentId, folderId) {
     const { ok, status, data } = await api(`/api/documents/${documentId}`, {
@@ -380,6 +390,7 @@ function createKbTeamService({ kbAuthService, app }) {
     getDocumentVersions,
     renameFolder,
     moveFolder,
+    renameDocument,
     moveDocument,
     listTrash,
     restoreFromTrash,

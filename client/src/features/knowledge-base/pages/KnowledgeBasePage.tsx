@@ -132,6 +132,25 @@ function formatTrashRemaining(deletedAt?: string): string {
   return `剩余 ${h} 小时 ${m} 分`;
 }
 
+// 文档上传信息副标题：上传人 + 上传时间
+function formatUploadSubtitle(uploadedByName?: string, createdAt?: string): string {
+  const who = uploadedByName || '未知';
+  let when = '';
+  if (createdAt) {
+    const ms = Date.parse(createdAt.replace(' ', 'T'));
+    if (!Number.isNaN(ms)) {
+      const d = new Date(ms);
+      const yyyy = d.getFullYear();
+      const MM = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      when = `${yyyy}-${MM}-${dd} ${hh}:${mm}`;
+    }
+  }
+  return when ? `${who} ${when} 上传` : `${who} 上传`;
+}
+
 type RenderDebugKind = 'item-source' | 'document-markdown' | 'document-items';
 
 interface RenderDebugTrace {
@@ -580,6 +599,18 @@ function KnowledgeBasePage() {
       return () => cancelAnimationFrame(id);
     }
   }, [showRename]);
+  // C1 重命名文档
+  const [showDocRename, setShowDocRename] = useState(false);
+  const [docRenameTarget, setDocRenameTarget] = useState<KnowledgeDocument | null>(null);
+  const [docRenameValue, setDocRenameValue] = useState('');
+  const [docRenaming, setDocRenaming] = useState(false);
+  const docRenameInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (showDocRename && docRenameInputRef.current) {
+      const id = requestAnimationFrame(() => docRenameInputRef.current?.focus());
+      return () => cancelAnimationFrame(id);
+    }
+  }, [showDocRename]);
   // C2 导出
   const [exporting, setExporting] = useState(false);
   // C3 回收站
@@ -1728,6 +1759,36 @@ function KnowledgeBasePage() {
     }
   };
 
+  // ---- C1 重命名文档 ----
+  const openDocRename = (document: KnowledgeDocument) => {
+    setDocRenameTarget(document);
+    setDocRenameValue(document.file_name);
+    setShowDocRename(true);
+  };
+  const handleDocRename = async () => {
+    if (!docRenameTarget) return;
+    const name = docRenameValue.trim();
+    if (!name) { showToast('请输入文档名称', 'info'); return; }
+    try {
+      setDocRenaming(true);
+      const result = kbTab === 'team'
+        ? await window.yibiao?.kbTeam.renameDocument(docRenameTarget.id, name)
+        : await window.yibiao?.kbPersonal.renameDocument(docRenameTarget.id, name);
+      if (!result?.success) throw new Error(result?.error || '重命名失败');
+      setIndex((prev) => ({
+        ...prev,
+        documents: prev.documents.map((d) => (d.id === docRenameTarget.id ? { ...d, file_name: name } : d)),
+      }));
+      setShowDocRename(false);
+      setDocRenameTarget(null);
+      showToast('已重命名', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '重命名失败', 'error');
+    } finally {
+      setDocRenaming(false);
+    }
+  };
+
   // ---- C2 批量导出 zip ----
   const handleExport = async () => {
     if (selectedDocumentIds.size === 0) { showToast('请先勾选要导出的文档', 'info'); return; }
@@ -2494,6 +2555,9 @@ function KnowledgeBasePage() {
                             <strong>{document.file_name}</strong>
                             {developerMode && <code className="knowledge-entity-id">文档ID：{document.id}</code>}
                           </div>
+                          <small className="knowledge-document-subtitle">
+                            {formatUploadSubtitle(document.uploaded_by_name, document.created_at)}
+                          </small>
                         </div>
                       </div>
                       <span className={`knowledge-status is-${document.status}`}>{statusLabels[document.status]}</span>
@@ -2506,7 +2570,6 @@ function KnowledgeBasePage() {
                       <span>{document.item_count || 0} 条知识</span>
                       <span>{document.candidate_item_count || 0} 个候选</span>
                       <span>{document.block_count || 0} 个 block</span>
-                      <span>上传人：{document.uploaded_by_name || '未知'}</span>
                     </div>
                     <div className="knowledge-document-actions">
                       {developerMode && <button type="button" onClick={() => void openDocument(document, 'analysis')} disabled={!canOpenAnalysis(document)}>分析调试</button>}
@@ -2516,6 +2579,11 @@ function KnowledgeBasePage() {
                         <button type="button" className="is-retry" onClick={() => void retryDocument(document)} disabled={retrying}>
                           {retrying ? '重试中...' : '重试'}
                         </button>
+                      )}
+                      {canDeleteDoc(document) ? (
+                        <button type="button" onClick={() => void openDocRename(document)}>重命名</button>
+                      ) : (
+                        <button type="button" disabled title="只能重命名自己上传的文档">重命名</button>
                       )}
                       {canDeleteDoc(document) ? (
                         <button type="button" className="is-danger" onClick={() => void confirmDeleteDocument(document)}>删除</button>
@@ -2695,6 +2763,34 @@ function KnowledgeBasePage() {
               <button type="button" className="secondary-action" onClick={() => setShowRename(false)} disabled={renaming}>取消</button>
               <button type="button" className="primary-action" onClick={() => void handleRename()} disabled={renaming || !renameValue.trim()}>
                 {renaming ? '保存中...' : '保存'}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={showDocRename} onOpenChange={(open) => !open && setShowDocRename(false)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="knowledge-sync-modal" />
+          <Dialog.Content className="knowledge-sync-dialog-card" onCloseAutoFocus={(event) => event.preventDefault()}>
+            <div className="knowledge-sync-head">
+              <Dialog.Title className="knowledge-sync-title">重命名文档</Dialog.Title>
+              <Dialog.Description className="knowledge-sync-desc">修改「{docRenameTarget?.file_name}」的显示名称。</Dialog.Description>
+            </div>
+            <div className="knowledge-sync-folder-list">
+              <input
+                ref={docRenameInputRef}
+                className="knowledge-search-input"
+                value={docRenameValue}
+                onChange={(event) => setDocRenameValue(event.target.value)}
+                placeholder="输入新文档名称"
+                onKeyDown={(event) => { if (event.key === 'Enter') void handleDocRename(); }}
+              />
+            </div>
+            <div className="knowledge-sync-actions">
+              <button type="button" className="secondary-action" onClick={() => setShowDocRename(false)} disabled={docRenaming}>取消</button>
+              <button type="button" className="primary-action" onClick={() => void handleDocRename()} disabled={docRenaming || !docRenameValue.trim()}>
+                {docRenaming ? '保存中...' : '保存'}
               </button>
             </div>
           </Dialog.Content>

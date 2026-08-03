@@ -1180,6 +1180,29 @@ def move_document(doc_id, new_folder_id):
             conn.close()
 
 
+def rename_document(doc_id, name):
+    """重命名文档：同时更新 title 与 file_name，保持两者一致。"""
+    name = (name or '').strip()
+    if not name:
+        return False, '文档名不能为空'
+    did = int(doc_id)
+    with _lock:
+        conn = _conn()
+        try:
+            d = conn.execute(
+                "SELECT id FROM knowledge_documents WHERE id=? AND (deleted_at IS NULL OR deleted_at='')",
+                (did,)).fetchone()
+            if not d:
+                return False, '文档不存在'
+            conn.execute(
+                "UPDATE knowledge_documents SET title=?, file_name=? WHERE id=?",
+                (name, name, did))
+            conn.commit()
+            return True, None
+        finally:
+            conn.close()
+
+
 # ---------- 文档（上传/列表/下载/硬删）----------
 
 def _libreoffice_to_text(data, ext):

@@ -233,6 +233,18 @@ function createKbPersonalService({ app, kbAuthService }) {
     return data;
   }
 
+  /** 个人库重命名文档：PUT /api/personal/documents/{id} body {name} */
+  async function renameDocument(documentId, name) {
+    const res = await fetch(`${baseUrl()}/api/personal/documents/${encodeURIComponent(documentId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error || `重命名文档失败（${res.status}）`);
+    return data;
+  }
+
   /** 个人库移动文档：PUT /api/personal/documents/{id} body {folder_id} */
   async function moveDocument(documentId, folderId) {
     const res = await fetch(`${baseUrl()}/api/personal/documents/${encodeURIComponent(documentId)}`, {
@@ -383,6 +395,7 @@ function createKbPersonalService({ app, kbAuthService }) {
     deleteDocument,
     moveFolder,
     renameFolder,
+    renameDocument,
     moveDocument,
     listTrash,
     restoreFromTrash,

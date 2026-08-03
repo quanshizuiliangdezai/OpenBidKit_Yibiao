@@ -157,6 +157,17 @@ function registerKbTeamIpc({ kbTeamService, kbAuthService }) {
     }
   });
 
+  // C1 重命名文档
+  ipcMain.handle('kb-team:rename-document', async (_event, documentId, name) => {
+    try {
+      if (!kbAuthService.isLoggedIn()) return { success: false, error: '未登录团队库', needLogin: true };
+      const result = await kbTeamService.renameDocument(documentId, name);
+      return { success: true, data: result };
+    } catch (error) {
+      return { success: false, error: error?.message || '重命名文档失败' };
+    }
+  });
+
   // E2 移动文档
   ipcMain.handle('kb-team:move-document', async (_event, documentId, folderId) => {
     try {

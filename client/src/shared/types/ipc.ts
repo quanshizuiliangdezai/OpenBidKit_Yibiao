@@ -798,6 +798,7 @@ export interface YibiaoBridge {
     listDocuments: (folderId?: string | number, searchQuery?: string) => Promise<{ success: boolean; data?: KbTeamDocument[]; error?: string }>;
     renameFolder: (folderId: string | number, name: string) => Promise<KbTeamResult>;
     moveFolder: (folderId: string | number, parentId?: string | number | null) => Promise<KbTeamResult>;
+    renameDocument: (documentId: string | number, name: string) => Promise<KbTeamResult>;
     moveDocument: (documentId: string | number, folderId: string | number) => Promise<KbTeamResult>;
     search: (query: string, mode?: 'name' | 'content') => Promise<{ success: boolean; data?: KbTeamDocument[]; error?: string; needLogin?: boolean }>;
     qaRetrieve: (query: string, limit?: number) => Promise<{ success: boolean; data?: KbQaDocument[]; error?: string; needLogin?: boolean }>;
@@ -847,6 +848,7 @@ export interface YibiaoBridge {
     deleteDocument: (documentId: string) => Promise<{ success: boolean; data?: unknown; error?: string }>;
     moveFolder: (folderId: string, parentId?: string | null) => Promise<{ success: boolean; data?: unknown; error?: string }>;
     renameFolder: (folderId: string, name: string) => Promise<{ success: boolean; data?: unknown; error?: string }>;
+    renameDocument: (documentId: string, name: string) => Promise<{ success: boolean; data?: unknown; error?: string }>;
     moveDocument: (documentId: string, folderId: string | number) => Promise<{ success: boolean; data?: unknown; error?: string }>;
     listTrash: () => Promise<{ success: boolean; data?: KbTrash; error?: string }>;
     restoreFromTrash: (type: 'folder' | 'document', id: string | number) => Promise<{ success: boolean; data?: unknown; error?: string }>;
