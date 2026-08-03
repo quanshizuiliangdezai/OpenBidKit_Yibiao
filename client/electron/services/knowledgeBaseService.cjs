@@ -2554,7 +2554,21 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
             updated_at: now(),
           });
         }
-        knowledgeBaseStore.hydrateFromServerPayload(documentId, analysis.payload);
+        try {
+          knowledgeBaseStore.hydrateFromServerPayload(documentId, analysis.payload);
+        } catch (hydrateErr) {
+          // payload 水合（blocks/items/markdown）失败时，仍把服务器分析状态同步到本地，
+          // 避免界面把已完成文档显示成「未分析」。用户可点击查看原始 Markdown（若已写入）。
+          debugLog(docId, 'hydrate:payload-partial', { message: hydrateErr?.message || String(hydrateErr) });
+          try {
+            knowledgeBaseStore.updateDocument(documentId, {
+              status: 'success',
+              progress: 100,
+              message: '已从团队共享分析加载',
+              error: null,
+            });
+          } catch { /* 兜底写状态失败不再阻断 */ }
+        }
         // 从服务端响应顶层统计写入本地 knowledge_documents（payload 本身不含顶层计数）
         try {
           knowledgeBaseStore.updateDocument(documentId, {

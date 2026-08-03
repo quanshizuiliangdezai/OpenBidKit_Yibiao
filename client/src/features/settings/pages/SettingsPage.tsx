@@ -2069,7 +2069,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
               <div className="settings-row-copy">
                 <strong>文件解析方式</strong>
                 <span>
-                  优先使用本地解析，复杂扫描件可尝试 MinerU 精准解析 API
+                  仅作用于客户端本地解析（标书生成、本地文件预览等）；知识库文档分析由服务器统一控制，请前往「模型配置」修改。
                   <DetailHelpLink title="文件解析方式说明" label="查看介绍">
                     <div className="parser-help-dialog">
                       <p className="parser-help-note">

@@ -59,7 +59,7 @@ function adaptServerDocument(
     file_name: String(server.title || server.file_name || server.name || server.original_name || '未知文档'),
     status: (srv.status as KnowledgeDocumentStatus) || localStatus?.status || 'pending',
     progress: (srv.progress as number) || localStatus?.progress || 0,
-    message: (srv.message as string) || localStatus?.message || '未分析',
+    message: (srv.message as string) || localStatus?.message || '等待同步',
     item_count: (srv.item_count as number) ?? localStatus?.item_count ?? 0,
     block_count: (srv.block_count as number) ?? localStatus?.block_count ?? 0,
     filtered_block_count: (srv.filtered_block_count as number) ?? localStatus?.filtered_block_count ?? 0,
@@ -83,7 +83,7 @@ function adaptPersonalDocument(
     file_name: ((srv.title || server.name || server.original_name || '未知文档') as string),
     status: (srv.status as KnowledgeDocumentStatus) || localStatus?.status || ('pending' as KnowledgeDocumentStatus),
     progress: (srv.progress as number) || localStatus?.progress || 0,
-    message: (srv.message as string) || localStatus?.message || '未分析',
+    message: (srv.message as string) || localStatus?.message || '等待同步',
     item_count: (srv.item_count as number) ?? localStatus?.item_count ?? 0,
     block_count: (srv.block_count as number) ?? localStatus?.block_count ?? 0,
     filtered_block_count: (srv.filtered_block_count as number) ?? localStatus?.filtered_block_count ?? 0,
@@ -2170,61 +2170,61 @@ function KnowledgeBasePage() {
           <button type="button" className={`kb-tab ${kbTab === 'personal' ? 'is-active' : ''}`} onClick={() => setKbTab('personal')}>个人知识库</button>
         </div>
         <div className="knowledge-toolbar-actions">
-          {kbTab === 'team' && (
-            <>
-              <button type="button" className="secondary-action" onClick={() => { setNewFolderParentId(null); setCreateAsSubfolder(false); setShowCreateFolder((value) => !value); }} disabled={listLoading}>新建文件夹</button>
-              <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading || !activeFolder}>
-                {loading ? '处理中...' : '上传文档'}
+          <div className="knowledge-main-actions">
+            <button type="button" className="secondary-action" onClick={() => { setNewFolderParentId(null); setCreateAsSubfolder(false); setShowCreateFolder((value) => !value); }} disabled={listLoading}>新建文件夹</button>
+            <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading || !activeFolder}>
+              {loading ? '处理中...' : '上传文档'}
+            </button>
+          </div>
+
+          {(selectedDocumentIds.size + selectedFolderIds.size) > 0 && (
+            <div className="knowledge-batch-group">
+              <span className="knowledge-batch-count">{selectedDocumentIds.size + selectedFolderIds.size}</span>
+              {kbTab === 'team' && (
+                <button type="button" className="sync-action" onClick={() => void syncFromTeam()} disabled={syncing || hasSelectedProcessing}>
+                  同步到个人
+                </button>
+              )}
+              {kbTab === 'personal' && (
+                <button type="button" className="sync-action" onClick={() => void openSyncToTeam()} disabled={syncing || hasSelectedProcessing}>
+                  同步到团队
+                </button>
+              )}
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => setShowBatchMove(true)}
+                disabled={batchProcessing || syncing || hasSelectedProcessing}
+              >
+                移动
               </button>
-              <button type="button" className="sync-action" onClick={() => void syncFromTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0) || hasSelectedProcessing}>
-                同步到个人{(selectedDocumentIds.size + selectedFolderIds.size) ? `（${selectedDocumentIds.size + selectedFolderIds.size}）` : ''}
+              <button
+                type="button"
+                className="danger-action"
+                onClick={() => void confirmBatchDelete()}
+                disabled={batchProcessing || syncing}
+              >
+                {batchProcessing ? '处理中...' : '删除'}
               </button>
-            </>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => void handleExport()}
+                disabled={exporting || syncing || hasSelectedProcessing || selectedDocumentIds.size === 0}
+              >
+                {exporting ? '导出中...' : '导出'}
+              </button>
+              <button
+                type="button"
+                className="secondary-action is-ghost"
+                onClick={() => { setSelectedDocumentIds(new Set()); setSelectedFolderIds(new Set()); }}
+              >
+                取消
+              </button>
+            </div>
           )}
-          {kbTab === 'personal' && (
-            <>
-              <button type="button" className="secondary-action" onClick={() => { setNewFolderParentId(null); setCreateAsSubfolder(false); setShowCreateFolder((value) => !value); }} disabled={listLoading}>新建文件夹</button>
-              <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading || !activeFolder}>
-                {loading ? '处理中...' : '上传文档'}
-              </button>
-              <button type="button" className="sync-action" onClick={() => void openSyncToTeam()} disabled={syncing || (selectedDocumentIds.size === 0 && selectedFolderIds.size === 0) || hasSelectedProcessing}>
-                同步到团队{(selectedDocumentIds.size + selectedFolderIds.size) ? `（${selectedDocumentIds.size + selectedFolderIds.size}）` : ''}
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={() => setShowBatchMove(true)}
-            disabled={batchProcessing || syncing || hasSelectedProcessing || (selectedDocumentIds.size + selectedFolderIds.size) === 0}
-          >
-            批量移动（{selectedDocumentIds.size + selectedFolderIds.size}）
-          </button>
-          <button
-            type="button"
-            className="danger-action"
-            onClick={() => void confirmBatchDelete()}
-            disabled={batchProcessing || syncing || (selectedDocumentIds.size + selectedFolderIds.size) === 0}
-          >
-            {batchProcessing ? '处理中...' : `批量删除（${selectedDocumentIds.size + selectedFolderIds.size}）`}
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={() => void handleExport()}
-            disabled={exporting || syncing || hasSelectedProcessing || selectedDocumentIds.size === 0}
-          >
-            {exporting ? '导出中...' : `导出（${selectedDocumentIds.size}）`}
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={() => { setSelectedDocumentIds(new Set()); setSelectedFolderIds(new Set()); }}
-            disabled={(selectedDocumentIds.size + selectedFolderIds.size) === 0}
-          >
-            取消选择
-          </button>
-          <button type="button" className="secondary-action" onClick={() => void openTrash()}>回收站</button>
+
+          <button type="button" className="secondary-action is-ghost" onClick={() => void openTrash()}>回收站</button>
         </div>
       </section>
 

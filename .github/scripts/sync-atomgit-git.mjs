@@ -3,13 +3,10 @@ import { spawn } from 'node:child_process';
 const MAIN_BRANCH = 'main';
 const RELEASE_TAG_PATTERN = 'v*';
 
-/** 读取必填环境变量。 */
-function requireEnv(name) {
+/** 读取环境变量；为空时返回 null（允许优雅跳过）。 */
+function readEnv(name) {
   const value = String(process.env[name] || '').trim();
-  if (!value) {
-    throw new Error(`${name} is required.`);
-  }
-  return value;
+  return value || null;
 }
 
 /** 执行 Git 命令并继承当前终端输出。 */
@@ -34,9 +31,19 @@ function runGit(args, env = process.env) {
 
 /** 将 GitHub 的 main 分支和版本标签单向同步到 AtomGit。 */
 async function main() {
-  const token = requireEnv('ATOMGIT_ACCESS_TOKEN');
-  const owner = requireEnv('ATOMGIT_OWNER');
-  const repo = requireEnv('ATOMGIT_REPO');
+  const token = readEnv('ATOMGIT_ACCESS_TOKEN');
+  const owner = readEnv('ATOMGIT_OWNER');
+  const repo = readEnv('ATOMGIT_REPO');
+
+  if (!token || !owner || !repo) {
+    console.log('AtomGit 同步已跳过：未配置 ATOMGIT_ACCESS_TOKEN / ATOMGIT_OWNER / ATOMGIT_REPO。');
+    console.log('如需启用同步，请在 GitHub 仓库设置中配置：');
+    console.log('  - Secrets: ATOMGIT_ACCESS_TOKEN（AtomGit 个人访问令牌）');
+    console.log('  - Variables: ATOMGIT_OWNER（AtomGit 用户名/组织名）');
+    console.log('  - Variables: ATOMGIT_REPO（AtomGit 仓库名）');
+    return;
+  }
+
   const remoteUrl = `https://atomgit.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}.git`;
 
   await runGit([
