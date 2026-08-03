@@ -9,8 +9,8 @@ function readEnv(name) {
   return value || null;
 }
 
-/** 执行 Git 命令并继承当前终端输出。 */
-function runGit(args, env = process.env) {
+/** 执行 Git 命令并继承当前终端输出。timeoutSec>0 时超时杀掉子进程。 */
+function runGit(args, env = process.env, timeoutSec = 0) {
   return new Promise((resolve, reject) => {
     const child = spawn('git', args, {
       env,
@@ -18,8 +18,17 @@ function runGit(args, env = process.env) {
       windowsHide: true,
     });
 
+    let timer = null;
+    if (timeoutSec > 0) {
+      timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        reject(new Error(`git 命令超时（${timeoutSec}s）：可能网络被拦截或远端无响应。`));
+      }, timeoutSec * 1000);
+    }
+
     child.on('error', reject);
     child.on('exit', (code, signal) => {
+      if (timer) clearTimeout(timer);
       if (code === 0) {
         resolve();
         return;
@@ -89,7 +98,7 @@ async function main() {
     '--force',
     remoteUrl,
     ...refspecs,
-  ], gitEnv);
+  ], gitEnv, 240);
 
   console.log(`AtomGit code synchronized: ${owner}/${repo} (${MAIN_BRANCH}, ${RELEASE_TAG_PATTERN}).`);
 }
