@@ -64,13 +64,31 @@ async function main() {
     GIT_TERMINAL_PROMPT: '0',
   };
 
+  // 仅推送 main 分支 + 最新 10 个发布标签（避免 292 个历史标签全量冷推过慢）。
+  // 首次冷推后，后续均为增量推送，速度很快。
+  const MAX_TAGS = 10;
+  const refspecs = [`refs/remotes/origin/${MAIN_BRANCH}:refs/heads/${MAIN_BRANCH}`];
+  try {
+    const { execSync } = await import('node:child_process');
+    const tagList = execSync(
+      `git tag --list '${RELEASE_TAG_PATTERN}' --sort=-creatordate`,
+      { encoding: 'utf8' },
+    ).split('\n').map((t) => t.trim()).filter(Boolean);
+    for (const t of tagList.slice(0, MAX_TAGS)) {
+      refspecs.push(`refs/tags/${t}:refs/tags/${t}`);
+    }
+    console.log(`AtomGit 同步将推送 ${tagList.length} 个标签中的最新 ${Math.min(MAX_TAGS, tagList.length)} 个。`);
+  } catch {
+    // 取标签失败时退回到推送全部匹配标签，保证不丢数据
+    refspecs.push(`refs/tags/${RELEASE_TAG_PATTERN}:refs/tags/${RELEASE_TAG_PATTERN}`);
+    console.log('获取标签列表失败，回退为推送全部发布标签。');
+  }
+
   await runGit([
     'push',
     '--force',
-    '--prune',
     remoteUrl,
-    `refs/remotes/origin/${MAIN_BRANCH}:refs/heads/${MAIN_BRANCH}`,
-    `refs/tags/${RELEASE_TAG_PATTERN}:refs/tags/${RELEASE_TAG_PATTERN}`,
+    ...refspecs,
   ], gitEnv);
 
   console.log(`AtomGit code synchronized: ${owner}/${repo} (${MAIN_BRANCH}, ${RELEASE_TAG_PATTERN}).`);
