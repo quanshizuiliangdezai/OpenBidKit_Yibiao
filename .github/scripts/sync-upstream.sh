@@ -80,11 +80,13 @@ if [ $MERGE_EXIT -ne 0 ]; then
   # --- 4a. DU 冲突（我们删除，上游修改）→ git rm 保留删除 ---
   DU_FILES=$(git diff --name-only --diff-filter=DU 2>/dev/null || true)
   if [ -n "$DU_FILES" ]; then
-    log "Resolving DU conflicts (keep fork's deletion)..."
+    log "Resolving DU conflicts (keep fork's version unless in keep-deleted list)..."
     echo "$DU_FILES" | while IFS= read -r f; do
       [ -z "$f" ] && continue
-      # 检查是否在 keep-deleted 列表
-      SHOULD_DELETE=true
+      # 默认保留 fork 版本：git 常因 upstream rename 把“我们修改、上游删除”误判为 DU，
+      # 无脑 git rm 会丢掉 fork 专属改动（如 SettingsPage.tsx），导致 import 失效、tsc 失败。
+      # 仅 DU_KEEP_DELETED 列表里的（fork 主动删除的目录）才真正删除。
+      SHOULD_DELETE=false
       for pattern in "${DU_KEEP_DELETED[@]}"; do
         if [[ "$f" == *"$pattern"* ]]; then
           SHOULD_DELETE=true
@@ -93,6 +95,8 @@ if [ $MERGE_EXIT -ne 0 ]; then
       done
       if [ "$SHOULD_DELETE" = true ]; then
         git rm "$f" 2>/dev/null && log "  [DU→rm] $f"
+      else
+        git checkout --ours "$f" 2>/dev/null && git add "$f" && log "  [DU→ours] $f"
       fi
     done
   fi
@@ -218,6 +222,19 @@ if [ -n "$LEFTOVER" ]; then
   exit 1
 fi
 log "No leftover conflict markers."
+
+# 关键文件存活检查：避免 fork 专属文件（如 SettingsPage.tsx）被误判为删除而丢失，
+# 否则 AppRouter 的 import 会失效、tsc 报 “Cannot find module”。
+for keep in client/src/features/settings/pages/SettingsPage.tsx; do
+  if [ ! -f "$keep" ]; then
+    err "CRITICAL: $keep is missing after merge (wrongly resolved as deletion). Aborting."
+    git merge --abort 2>/dev/null || git reset --hard "$PRE_MERGE_HEAD"
+    exit 1
+  else
+    log "Kept fork file: $keep"
+  fi
+done
+log "Changed files after merge: $(git diff --name-only HEAD | head -20 | tr '\n' ' ')"
 
 # ========== 6. 校验 ==========
 log "Running validation..."
