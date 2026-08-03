@@ -60,8 +60,14 @@ if [ "$BEHIND" = "0" ]; then
 fi
 
 # ========== 4. Merge ==========
-MERGE_OUTPUT=$(git merge upstream/main --no-edit 2>&1) || true
+# 注意：脚本顶部 set -e 下，若 merge 冲突（退出码非0），命令替换会直接终止脚本。
+# 这里用 set +e 包裹，既避免异常退出，又能拿到真实退出码；否则 || true 会吞掉退出码，
+# 导致下方冲突处理分支（4a-4e）永不执行，残留的 conflict marker 会让后续 tsc 失败。
+set +e
+git merge upstream/main --no-edit > /tmp/sync_merge.log 2>&1
 MERGE_EXIT=$?
+set -e
+MERGE_OUTPUT=$(cat /tmp/sync_merge.log)
 
 if echo "$MERGE_OUTPUT" | grep -q "Already up to date"; then
   log "Already up to date after fetch."
@@ -198,6 +204,20 @@ if [ "$RESTORED" -gt 0 ]; then
 else
   log "All modifications intact, no restore needed."
 fi
+
+# ========== 5b. 安全网：扫描残留的 conflict marker ==========
+# 若任何文件仍含 <<<<<<< / ======= / >>>>>>> 标记，说明冲突未解决干净，
+# 直接回滚并退出，避免把坏代码 push 上去（之前就因此导致 tsc 失败）。
+log "Scanning for leftover conflict markers..."
+LEFTOVER=$(git grep -Il -E '^(<<<<<<<|=======|>>>>>>>)' -- './*' 2>/dev/null || true)
+if [ -n "$LEFTOVER" ]; then
+  err "Leftover conflict markers found in:"
+  echo "$LEFTOVER"
+  err "Aborting sync to avoid pushing broken code."
+  git merge --abort 2>/dev/null || git reset --hard "$PRE_MERGE_HEAD"
+  exit 1
+fi
+log "No leftover conflict markers."
 
 # ========== 6. 校验 ==========
 log "Running validation..."
