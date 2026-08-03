@@ -2474,7 +2474,17 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         debugLog(docId, 'hydrate:preserve-error');
         return getLocalDocumentStatus(documentId);
       }
-      if (!analysis || !analysis.payload) return null;
+      // 分析进行中（payload 尚未生成）时返回进行中状态，
+      // 避免 return null 导致 UI 回退显示「等待处理」。
+      if (!analysis) return null;
+      if (!analysis.payload) {
+        const rawStatus = String(analysis.status || '').toLowerCase();
+        if (rawStatus === 'running' || rawStatus === 'processing' || rawStatus === 'pending' || rawStatus === 'queued') {
+          debugLog(docId, 'hydrate:analysis-in-progress', { status: analysis.status, progress: analysis.progress });
+          return { status: 'processing', progress: analysis.progress || 0, message: '分析中…' };
+        }
+        return null;
+      }
 
       // 服务器返回 error 时，把错误状态同步到本地，避免 hydrateFromServerPayload
       // 无条件把状态写成 success 导致「失败」变「完成」。
