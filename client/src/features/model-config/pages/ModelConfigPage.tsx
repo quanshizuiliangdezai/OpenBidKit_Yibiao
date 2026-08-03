@@ -101,10 +101,15 @@ export default function ModelConfigPage() {
   const [testing, setTesting] = useState(false);
   const [savingGlobal, setSavingGlobal] = useState(false);
   const [globalEmbedding, setGlobalEmbedding] = useState('');
+  const [fileParserProvider, setFileParserProvider] = useState<'local' | 'mineru-accurate-api' | 'mineru-agent-api'>('local');
+  const [mineruToken, setMineruToken] = useState('');
+  const [showMineruToken, setShowMineruToken] = useState(false);
   const [serverConfig, setServerConfig] = useState<{
     base_url?: string;
     analysis_model?: string;
     embedding_model?: string;
+    file_parser_provider?: string;
+    has_mineru_token?: boolean;
   }>({});
 
   const loadConfig = async () => {
@@ -133,8 +138,11 @@ export default function ModelConfigPage() {
           base_url: res.data.base_url || '',
           analysis_model: res.data.analysis_model || '',
           embedding_model: res.data.embedding_model || '',
+          file_parser_provider: res.data.file_parser_provider || 'local',
+          has_mineru_token: Boolean(res.data.has_mineru_token),
         });
         setGlobalEmbedding(res.data.embedding_model || '');
+        setFileParserProvider((res.data.file_parser_provider as 'local' | 'mineru-accurate-api' | 'mineru-agent-api') || 'local');
       }
     } catch {
       /* 忽略读取失败 */
@@ -207,6 +215,8 @@ export default function ModelConfigPage() {
         analysis_model: model.trim(),
         qa_model: model.trim(),
         embedding_model: globalEmbedding || null,
+        file_parser_provider: fileParserProvider,
+        mineru_token: mineruToken.trim() ? mineruToken.trim() : '__UNCHANGED__',
       });
       if (res?.success) showToast('已应用到服务器（个人库 + 团队库分析 + 问答生效）', 'success');
       else showToast(res?.error || '应用失败', 'error');
@@ -332,6 +342,48 @@ export default function ModelConfigPage() {
                     />
                   </div>
                 </label>
+
+                <label className="model-config-field">
+                  <div className="model-config-field-head">
+                    <span className="model-config-field-label">文件解析方式</span>
+                    <span className="model-config-field-hint">扫描件 / 图片 / Office 等需 MinerU 云端 OCR；本地解析仅支持有文字层的 PDF/Word/Excel</span>
+                  </div>
+                  <div className="model-config-input-wrap">
+                    <span className="input-icon"><ServerIcon /></span>
+                    <select
+                      value={fileParserProvider}
+                      onChange={(event) => setFileParserProvider(event.target.value as 'local' | 'mineru-accurate-api' | 'mineru-agent-api')}
+                    >
+                      <option value="local">本地解析（默认，纯本地、无 OCR）</option>
+                      <option value="mineru-agent-api">MinerU-Agent（免 Token，云端 OCR）</option>
+                      <option value="mineru-accurate-api">MinerU 精准解析（需 Token，质量更高）</option>
+                    </select>
+                  </div>
+                </label>
+
+                <label className="model-config-field">
+                  <div className="model-config-field-head">
+                    <span className="model-config-field-label">MinerU Token</span>
+                    <span className="model-config-field-hint">仅 mineru-accurate-api 需要；留空 = 沿用现有 Token</span>
+                  </div>
+                  <div className="model-config-input-wrap model-config-key-wrap">
+                    <span className="input-icon"><KeyIcon /></span>
+                    <input
+                      type={showMineruToken ? 'text' : 'password'}
+                      value={mineruToken}
+                      onChange={(event) => setMineruToken(event.target.value)}
+                      placeholder="mineru-..."
+                    />
+                    <button
+                      type="button"
+                      className="model-config-key-toggle"
+                      onClick={() => setShowMineruToken((prev) => !prev)}
+                      tabIndex={-1}
+                    >
+                      {showMineruToken ? '隐藏' : '显示'}
+                    </button>
+                  </div>
+                </label>
               </div>
             </section>
 
@@ -378,6 +430,28 @@ export default function ModelConfigPage() {
                     </div>
                     <span className={serverConfig.embedding_model ? 'model-config-server-value' : 'model-config-server-value empty'}>
                       {serverConfig.embedding_model || '（未配置）'}
+                    </span>
+                  </div>
+
+                  <div className="model-config-server-item">
+                    <div className="model-config-server-item-head">
+                      <span className="model-config-server-item-icon url"><LinkIcon /></span>
+                      <span className="model-config-server-label">文件解析方式</span>
+                    </div>
+                    <span className={serverConfig.file_parser_provider && serverConfig.file_parser_provider !== 'local' ? 'model-config-server-value' : 'model-config-server-value empty'}>
+                      {serverConfig.file_parser_provider === 'mineru-accurate-api' ? 'MinerU 精准解析（需 Token）'
+                        : serverConfig.file_parser_provider === 'mineru-agent-api' ? 'MinerU-Agent（免 Token）'
+                          : serverConfig.file_parser_provider || '本地解析'}
+                    </span>
+                  </div>
+
+                  <div className="model-config-server-item">
+                    <div className="model-config-server-item-head">
+                      <span className="model-config-server-item-icon model"><BrainIcon /></span>
+                      <span className="model-config-server-label">MinerU Token</span>
+                    </div>
+                    <span className={serverConfig.has_mineru_token ? 'model-config-server-value' : 'model-config-server-value empty'}>
+                      {serverConfig.has_mineru_token ? '已配置' : '（未配置）'}
                     </span>
                   </div>
                 </div>

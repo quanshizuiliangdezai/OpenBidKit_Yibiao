@@ -993,6 +993,9 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             analysis_model = (data.get('analysis_model') or '').strip() or 'sensenova-6.7-flash-lite'
             qa_model = (data.get('qa_model') or '').strip() or 'sensenova-6.7-flash-lite'
             embedding_model = (data.get('embedding_model') or '').strip() or None
+            file_parser_provider = (data.get('file_parser_provider') or 'local').strip() or 'local'
+            if file_parser_provider not in ('local', 'mineru-accurate-api', 'mineru-agent-api'):
+                file_parser_provider = 'local'
             if not base_url:
                 return self._send(400, {'error': 'base_url 不能为空'})
             # api_key 为空串或 null 时清除；否则更新。前端若传 '__UNCHANGED__' 表示保留原值
@@ -1000,7 +1003,14 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 api_key = kb_db.get_model_config().get('api_key')
             elif api_key is not None:
                 api_key = api_key.strip() or None
-            kb_db.save_model_config(base_url, api_key, analysis_model, qa_model, embedding_model)
+            # mineru_token 同理：留空清除，'__UNCHANGED__' 保留原值
+            mineru_token = data.get('mineru_token')
+            if mineru_token == '__UNCHANGED__':
+                mineru_token = kb_db.get_model_config().get('mineru_token')
+            elif mineru_token is not None:
+                mineru_token = mineru_token.strip() or None
+            kb_db.save_model_config(base_url, api_key, analysis_model, qa_model, embedding_model,
+                                    file_parser_provider, mineru_token)
             audit_event(
                 account_id=admin['id'], account_name=admin.get('display_name') or admin.get('username'),
                 role='admin', action='admin', target_type='model_config', target_id='1',
@@ -2740,6 +2750,8 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     'analysis_model': cfg['analysis_model'],
                     'qa_model': cfg['qa_model'],
                     'embedding_model': cfg['embedding_model'],
+                    'file_parser_provider': cfg.get('file_parser_provider') or 'local',
+                    'has_mineru_token': bool(cfg.get('mineru_token')),
                     'has_api_key': bool(cfg['api_key']),
                     'updated_at': cfg['updated_at'],
                 },

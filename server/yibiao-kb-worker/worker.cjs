@@ -37,7 +37,8 @@ function readModelConfig() {
   let row = null;
   try {
     const db = new Database(KB_DB, { readonly: true, fileMustExist: true });
-    row = db.prepare('SELECT base_url, api_key, analysis_model, qa_model, embedding_model FROM model_config WHERE id=1').get();
+    row = db.prepare('SELECT base_url, api_key, analysis_model, qa_model, embedding_model, '
+                     + 'file_parser_provider, mineru_token FROM model_config WHERE id=1').get();
     db.close();
   } catch (e) {
     console.warn('[worker] 读取 model_config 失败，使用默认值:', e.message);
@@ -57,14 +58,24 @@ function readModelConfig() {
     developer_mode: false,
     analytics_client_id: 'worker',
     analytics_created_at: new Date().toISOString(),
-    // 文件解析方式：服务器 Worker 复用客户端本地解析逻辑，默认强制 local。
-    // 未来若需要在服务端启用 MinerU，可在此读取环境变量或扩展 model_config 表。
-    components: {
-      file_parser: {
-        provider: 'local',
-        mineru_token: '',
-      },
-    },
+    // 文件解析方式：优先读环境变量（便于不改库快速切换），其次读 model_config 表
+    // （与客户端「模型配置」侧边栏「应用到服务器」共用），默认 local。
+    // mineru-accurate-api / mineru-agent-api 走 MinerU 云端 OCR，可解析扫描件/图片/Office 等本地解析不支持的文档。
+    components: (() => {
+      const envProvider = (process.env.KB_FILE_PARSER_PROVIDER || '').trim();
+      const envToken = (process.env.KB_MINERU_TOKEN || '').trim();
+      const dbProvider = (row && row.file_parser_provider) || 'local';
+      const dbToken = (row && row.mineru_token) || '';
+      const fileParserProvider = envProvider || dbProvider || 'local';
+      const fileParserToken = envToken || dbToken || '';
+      return {
+        file_parser: {
+          provider: ['local', 'mineru-accurate-api', 'mineru-agent-api'].includes(fileParserProvider)
+            ? fileParserProvider : 'local',
+          mineru_token: fileParserToken,
+        },
+      };
+    })(),
   };
   _modelCache = cfg;
   _modelCacheAt = now;

@@ -144,6 +144,8 @@ def init_db():
             embedding_model TEXT,
             base_url        TEXT NOT NULL DEFAULT 'http://127.0.0.1:15005/v1',
             api_key         TEXT,
+            file_parser_provider TEXT NOT NULL DEFAULT 'local',
+            mineru_token    TEXT,
             updated_at      TEXT NOT NULL
         );
         -- 知识库问答会话（按账号隔离，软删除，跨设备可读）
@@ -1449,14 +1451,24 @@ def _ensure_model_config_row():
     conn = _conn()
     try:
         row = conn.execute("SELECT id FROM model_config WHERE id=1").fetchone()
+        # 迁移：已存在的库补加文件解析方式字段（不影响新建库）
+        try:
+            cols = {r['name'] for r in conn.execute("PRAGMA table_info(model_config)").fetchall()}
+            if 'file_parser_provider' not in cols:
+                conn.execute("ALTER TABLE model_config ADD COLUMN file_parser_provider TEXT NOT NULL DEFAULT 'local'")
+            if 'mineru_token' not in cols:
+                conn.execute("ALTER TABLE model_config ADD COLUMN mineru_token TEXT")
+        except Exception:
+            pass
         if not row:
             now = datetime.datetime.now().isoformat()
-            conn.execute(
-                "INSERT INTO model_config (id, analysis_model, qa_model, embedding_model, base_url, api_key, updated_at) "
-                "VALUES (1, 'sensenova-6.7-flash-lite', 'sensenova-6.7-flash-lite', NULL, "
-                "'http://127.0.0.1:15005/v1', NULL, ?)",
-                (now,))
-            conn.commit()
+        conn.execute(
+            "INSERT INTO model_config (id, analysis_model, qa_model, embedding_model, base_url, api_key, "
+            "file_parser_provider, mineru_token, updated_at) "
+            "VALUES (1, 'sensenova-6.7-flash-lite', 'sensenova-6.7-flash-lite', NULL, "
+            "'http://127.0.0.1:15005/v1', NULL, 'local', NULL, ?)",
+            (now,))
+        conn.commit()
     finally:
         conn.close()
 
@@ -1468,7 +1480,8 @@ def get_model_config():
         conn = _conn()
         try:
             row = conn.execute(
-                "SELECT base_url, api_key, analysis_model, qa_model, embedding_model, updated_at "
+                "SELECT base_url, api_key, analysis_model, qa_model, embedding_model, "
+                "file_parser_provider, mineru_token, updated_at "
                 "FROM model_config WHERE id=1").fetchone()
         finally:
             conn.close()
@@ -1476,7 +1489,8 @@ def get_model_config():
         return {
             'base_url': 'http://127.0.0.1:15005/v1', 'api_key': None,
             'analysis_model': 'sensenova-6.7-flash-lite', 'qa_model': 'sensenova-6.7-flash-lite',
-            'embedding_model': None, 'updated_at': None,
+            'embedding_model': None, 'file_parser_provider': 'local', 'mineru_token': None,
+            'updated_at': None,
         }
     return {
         'base_url': row['base_url'],
@@ -1484,11 +1498,14 @@ def get_model_config():
         'analysis_model': row['analysis_model'],
         'qa_model': row['qa_model'],
         'embedding_model': row['embedding_model'],
+        'file_parser_provider': row['file_parser_provider'] or 'local',
+        'mineru_token': row['mineru_token'],
         'updated_at': row['updated_at'],
     }
 
 
-def save_model_config(base_url, api_key, analysis_model, qa_model, embedding_model):
+def save_model_config(base_url, api_key, analysis_model, qa_model, embedding_model,
+                      file_parser_provider='local', mineru_token=None):
     """更新全局模型配置（upsert id=1）。"""
     _ensure_model_config_row()
     with _lock:
@@ -1496,8 +1513,9 @@ def save_model_config(base_url, api_key, analysis_model, qa_model, embedding_mod
         try:
             conn.execute(
                 "UPDATE model_config SET base_url=?, api_key=?, analysis_model=?, qa_model=?, "
-                "embedding_model=?, updated_at=? WHERE id=1",
+                "embedding_model=?, file_parser_provider=?, mineru_token=?, updated_at=? WHERE id=1",
                 (base_url, api_key, analysis_model, qa_model, embedding_model,
+                 file_parser_provider or 'local', mineru_token,
                  datetime.datetime.now().isoformat()))
             conn.commit()
         finally:
