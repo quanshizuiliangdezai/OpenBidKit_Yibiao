@@ -15,7 +15,7 @@ const parserLabels = {
   'mineru-agent-api': 'MinerU-Agent 轻量解析 API',
 };
 
-const supportedExtensions = new Set(['.doc', '.docx', '.wps', '.pdf', '.md', '.markdown', '.xls', '.xlsx']);
+const supportedExtensions = new Set(['.doc', '.docx', '.wps', '.pdf', '.md', '.markdown', '.xls', '.xlsx', '.txt', '.ppt', '.pptx']);
 const oversizedBlockChars = 8000;
 const semanticMergeTargetChars = 500;
 const recoveryMaxAttempts = 2;

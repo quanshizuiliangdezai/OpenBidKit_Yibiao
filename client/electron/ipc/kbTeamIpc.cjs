@@ -67,7 +67,7 @@ function registerKbTeamIpc({ kbTeamService, kbAuthService }) {
       const result = await dialog.showOpenDialog({
         title: '选择要上传的文档',
         filters: [
-          { name: '文档', extensions: ['doc', 'docx', 'pdf', 'txt', 'md'] },
+          { name: '文档', extensions: ['doc', 'docx', 'pdf', 'txt', 'md', 'ppt', 'pptx'] },
           { name: '所有文件', extensions: ['*'] },
         ],
         properties: ['openFile', 'multiSelections'],

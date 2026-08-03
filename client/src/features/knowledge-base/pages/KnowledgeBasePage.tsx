@@ -941,6 +941,29 @@ function KnowledgeBasePage() {
             } catch {
               localStatus = null;
             }
+            // 水合失败或本机无记录时，直接查询服务器 status 接口兜底，
+            // 避免团队库共享分析已存在但本地水合异常导致显示「等待处理」。
+            if (!localStatus || localStatus.status !== 'success') {
+              try {
+                const serverStatus = await window.yibiao?.kbTeam.getAnalysisStatus(doc.id);
+                const payload = (serverStatus?.data ?? {}) as Record<string, unknown>;
+                if (payload.status === 'success' || payload.status === 'error') {
+                  localStatus = {
+                    id: String(doc.id),
+                    status: payload.status as KnowledgeDocumentStatus,
+                    progress: typeof payload.progress === 'number' ? payload.progress : 100,
+                    message: String(payload.message || (payload.status === 'success' ? '分析完成' : '分析失败')),
+                    item_count: Number(payload.item_count ?? 0),
+                    block_count: Number(payload.block_count ?? 0),
+                    filtered_block_count: Number(payload.filtered_block_count ?? 0),
+                    candidate_item_count: Number(payload.candidate_item_count ?? 0),
+                    file_name: String(doc.file_name || doc.title || ''),
+                  };
+                }
+              } catch {
+                // 兜底查询失败也不阻断，最终按 pending 渲染
+              }
+            }
           }
           return adaptServerDocument(doc, localStatus);
         }),
