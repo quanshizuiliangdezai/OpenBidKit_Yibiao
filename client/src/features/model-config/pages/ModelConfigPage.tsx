@@ -216,9 +216,13 @@ export default function ModelConfigPage() {
   };
 
   const testMineruParseConnection = async () => {
-    const provider = pdfImageParserProvider;
+    // 优先用精准解析（accurate-api）做测试：只要任一解析方式选了精准解析，
+    // Token 字段就会出现，此时应用户填入的 Token 验证精准解析链路。
+    const provider = pdfImageParserProvider === 'mineru-accurate-api' ? 'mineru-accurate-api'
+      : fileParserProvider === 'mineru-accurate-api' ? 'mineru-accurate-api'
+      : pdfImageParserProvider;
     if (provider === 'local') {
-      showToast('当前「PDF/PPT/图片/HTML」解析方式为本地解析，未启用 MinerU，无需此测试', 'info');
+      showToast('当前未启用 MinerU（解析方式均为本地解析），无需此测试', 'info');
       return;
     }
     const token = mineruToken.trim();
