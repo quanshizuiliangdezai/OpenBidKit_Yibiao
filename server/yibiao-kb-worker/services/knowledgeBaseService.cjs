@@ -1125,6 +1125,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       // readAnalysis 汇总了 report / discarded / 覆盖率等派生数据，一次读齐。
       let analysis = null;
       try { analysis = knowledgeBaseStore.readAnalysis(documentId); } catch { analysis = null; }
+      const docStatus = (doc && doc.status) || 'success';
       const sharedPayload = {
         file_name: (doc && doc.file_name) || null,
         markdown,
@@ -1136,8 +1137,9 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         report: analysis ? analysis.report : null,
         discarded: analysis ? analysis.discarded : [],
         system_discarded_after_retry: analysis ? analysis.system_discarded_after_retry : [],
+        error: docStatus === 'error' ? ((doc && (doc.error || doc.message)) || '分析失败') : null,
       };
-      await kbTeamService.saveAnalysis(documentId, sharedPayload, libraryType);
+      await kbTeamService.saveAnalysis(documentId, sharedPayload, libraryType, docStatus);
       teamShareResult.set(String(documentId), { ok: true });
       debugLog(documentId, 'match:shared-analysis-saved', { item_count: finalItems.length, libraryType });
     } catch (shareErr) {
@@ -1565,6 +1567,8 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         stack: error.stack,
       });
       updateDocument(documentId, { status: 'error', progress: 100, message: error.message || '处理失败', error: error.message || '处理失败' }, webContents);
+      // 解析失败也要把 error 状态回写服务器，避免客户端一直显示 pending/success。
+      await shareTeamAnalysisFromStore(documentId, libraryType, webContents);
     } finally {
       activePreparations.delete(documentId);
       debugLog(documentId, 'prepare:finish');
@@ -2141,6 +2145,8 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         message: error.message || '匹配失败',
         error: error.message || '匹配失败',
       }, webContents);
+      // 匹配失败也要把 error 状态回写服务器，避免客户端一直显示 pending/success。
+      await shareTeamAnalysisFromStore(documentId, libraryType, webContents);
     } finally {
       activeMatches.delete(documentId);
       debugLog(documentId, 'match:finish');

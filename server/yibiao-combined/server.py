@@ -1139,15 +1139,53 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     pass
             if not isinstance(payload, str):
                 payload = json.dumps(payload, ensure_ascii=False)
+            analysis_status = data.get('status') or 'success'
             _master_save_analysis(
                 m.group(1),
-                data.get('status') or 'success',
+                analysis_status,
                 payload,
                 item_count=item_count,
                 block_count=block_count,
                 analyzer_id=employee['id'],
                 analyzer_name=employee.get('display_name') or employee.get('username'),
             )
+            # 同步更新 knowledge_documents 表状态，保证列表页/详情页与 kb_analysis 一致。
+            now = datetime.datetime.now().isoformat()
+            error_msg = None
+            message = '分析完成'
+            if analysis_status != 'success':
+                try:
+                    payload_obj = json.loads(payload) if isinstance(payload, str) else payload
+                    if isinstance(payload_obj, dict):
+                        error_msg = payload_obj.get('error') or payload_obj.get('message')
+                except (TypeError, ValueError):
+                    pass
+                message = error_msg or '分析失败'
+            with _MASTER_LOCK:
+                conn = _master_db_conn()
+                if conn:
+                    try:
+                        cols = {c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()}
+                        fields = {
+                            'status': analysis_status,
+                            'progress': 100,
+                            'message': message,
+                            'error': error_msg,
+                            'item_count': item_count or 0,
+                            'block_count': block_count or 0,
+                            'candidate_item_count': candidate_item_count or 0,
+                            'updated_at': now,
+                        }
+                        if 'filtered_block_count' in cols:
+                            fields['filtered_block_count'] = filtered_block_count or 0
+                        set_clause = ', '.join(f"{k}=?" for k in fields if k in cols)
+                        if set_clause:
+                            conn.execute(
+                                f"UPDATE knowledge_documents SET {set_clause} WHERE document_id=?",
+                                tuple(fields[k] for k in fields if k in cols) + (m.group(1),))
+                            conn.commit()
+                    finally:
+                        conn.close()
             audit_event(
                 account_id=employee['id'], account_name=employee.get('display_name') or employee.get('username'),
                 role=employee.get('role'), action='doc', target_type='personal_document', target_id=m.group(1),
@@ -1592,8 +1630,8 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 fields = {
                     'document_id': doc_id, 'folder_id': str(folder_id), 'file_name': filename,
                     'document_dir': doc_dir_rel, 'source_path': '%s/%s' % (doc_dir_rel, filename),
-                    'markdown_path': '', 'status': 'success', 'progress': 100,
-                    'message': '通过服务器上传', 'created_at': now, 'updated_at': now,
+                    'markdown_path': '', 'status': 'pending', 'progress': 0,
+                    'message': '等待服务器分析', 'created_at': now, 'updated_at': now,
                     'owner_id': owner_id, 'owner_name': owner_name,
                     'content_text': content_text,
                 }
@@ -2799,16 +2837,36 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             # 优先检查服务器是否已有共享分析结果（个人库→团队库同步时已复制分析、
             # 或本机分析回写）：避免 Worker 尚未处理/不可达时把完成状态覆盖成 pending。
             analysis = kb_db.get_team_analysis(doc_id)
-            if analysis and (analysis.get('status') or '').lower() == 'success' and analysis.get('payload'):
+            if analysis:
+                analysis_status = (analysis.get('status') or '').lower()
+                if analysis_status == 'success' and analysis.get('payload'):
+                    return self._send(200, {
+                        'documentId': doc_id,
+                        'status': 'success',
+                        'progress': 100,
+                        'message': analysis.get('message') or '分析完成',
+                        'item_count': analysis.get('item_count') or 0,
+                        'candidate_item_count': analysis.get('candidate_item_count') or 0,
+                        'block_count': analysis.get('block_count') or 0,
+                        'filtered_block_count': analysis.get('filtered_block_count') or 0,
+                    })
+                # 缓存了 error 状态时，把 payload 里的 error 信息透传给客户端。
+                payload = analysis.get('payload') or {}
+                if isinstance(payload, str):
+                    try:
+                        payload = json.loads(payload)
+                    except (TypeError, ValueError):
+                        payload = {}
+                error_msg = payload.get('error') or analysis.get('message') or '分析失败'
                 return self._send(200, {
                     'documentId': doc_id,
-                    'status': 'success',
+                    'status': analysis_status or 'error',
                     'progress': 100,
-                    'message': analysis.get('message') or '分析完成',
-                    'item_count': analysis.get('item_count') or 0,
-                    'candidate_item_count': analysis.get('candidate_item_count') or 0,
-                    'block_count': analysis.get('block_count') or 0,
-                    'filtered_block_count': analysis.get('filtered_block_count') or 0,
+                    'message': error_msg,
+                    'item_count': 0,
+                    'block_count': 0,
+                    'candidate_item_count': 0,
+                    'filtered_block_count': 0,
                 })
             try:
                 import urllib.request
@@ -2817,9 +2875,6 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     st = json.loads(resp.read().decode('utf-8'))
                 return self._send(200, st)
             except Exception as e:
-                # Worker 不可达时回退：直接看服务器是否已有分析结果
-                if analysis:
-                    return self._send(200, {'documentId': doc_id, 'status': 'success', 'progress': 100, 'message': '分析完成'})
                 return self._send(200, {'documentId': doc_id, 'status': 'unknown', 'progress': 0, 'message': 'Worker 不可达: %s' % e})
 
         # ==================== 团队库分析共享：读取分析结果 ====================
@@ -2845,20 +2900,40 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             doc, err = self._personal_doc_owner_check(m.group(1), employee)
             if err is not None:
                 return
-            # 本地（个人库/团队同步文档）已有分析结果时，直接返回 success，
+            # 本地（个人库/团队同步文档）已有分析结果时，直接返回缓存状态，
             # 不再代理到 Worker。否则 Worker 不认识 team-<id>-<user> 文档，
             # 会误报 pending / 0 条，导致客户端轮询把正确状态覆盖成「等待处理」。
             local_analysis = _master_get_analysis(m.group(1))
-            if local_analysis and (local_analysis.get('status') or '').lower() == 'success':
+            if local_analysis:
+                local_status = (local_analysis.get('status') or '').lower()
+                if local_status == 'success':
+                    return self._send(200, {
+                        'documentId': m.group(1),
+                        'status': 'success',
+                        'progress': 100,
+                        'message': local_analysis.get('message') or '分析完成',
+                        'item_count': local_analysis.get('item_count') or 0,
+                        'block_count': local_analysis.get('block_count') or 0,
+                        'candidate_item_count': local_analysis.get('candidate_item_count') or 0,
+                        'filtered_block_count': local_analysis.get('filtered_block_count') or 0,
+                    })
+                # 缓存了 error 状态时，把 payload 里的 error 信息透传给客户端。
+                payload = local_analysis.get('payload') or {}
+                if isinstance(payload, str):
+                    try:
+                        payload = json.loads(payload)
+                    except (TypeError, ValueError):
+                        payload = {}
+                error_msg = payload.get('error') or local_analysis.get('message') or '分析失败'
                 return self._send(200, {
                     'documentId': m.group(1),
-                    'status': 'success',
+                    'status': local_status or 'error',
                     'progress': 100,
-                    'message': local_analysis.get('message') or '分析完成',
-                    'item_count': local_analysis.get('item_count') or 0,
-                    'block_count': local_analysis.get('block_count') or 0,
-                    'candidate_item_count': local_analysis.get('candidate_item_count') or 0,
-                    'filtered_block_count': local_analysis.get('filtered_block_count') or 0,
+                    'message': error_msg,
+                    'item_count': 0,
+                    'block_count': 0,
+                    'candidate_item_count': 0,
+                    'filtered_block_count': 0,
                 })
             try:
                 import urllib.request
@@ -2867,8 +2942,6 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     st = json.loads(resp.read().decode('utf-8'))
                 return self._send(200, st)
             except Exception as e:
-                if local_analysis:
-                    return self._send(200, {'documentId': m.group(1), 'status': 'success', 'progress': 100, 'message': '分析完成'})
                 return self._send(200, {'documentId': m.group(1), 'status': 'unknown', 'progress': 0, 'message': 'Worker 不可达: %s' % e})
 
         # ==================== 个人库分析读取（owner 隔离）====================

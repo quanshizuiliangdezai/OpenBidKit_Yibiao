@@ -313,16 +313,16 @@ function createKbTeamService({ kbAuthService, app }) {
       : `/api/documents/${documentId}/analysis`;
   }
 
-  async function saveAnalysis(documentId, payload, libraryType) {
+  async function saveAnalysis(documentId, payload, libraryType, status = 'success') {
     // 分析回写 payload 可能达数 MB（markdown + blocks + items），
     // 上传 + 服务端 json.dumps 落库耗时远超默认 10s，这里放宽到 120s，避免被 abort。
-    const { ok, status, data } = await api(_analysisPath(documentId, libraryType), {
+    const { ok, status: httpStatus, data } = await api(_analysisPath(documentId, libraryType), {
       method: 'POST',
-      body: { status: 'success', payload },
+      body: { status, payload },
       timeoutMs: 120000,
     });
     if (!ok) {
-      const msg = data?.error || `保存分析结果失败（${status}）`;
+      const msg = data?.error || `保存分析结果失败（${httpStatus}）`;
       throw new Error(msg);
     }
     return data?.data || data || { success: true };
