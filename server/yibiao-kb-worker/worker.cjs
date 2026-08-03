@@ -38,7 +38,7 @@ function readModelConfig() {
   try {
     const db = new Database(KB_DB, { readonly: true, fileMustExist: true });
     row = db.prepare('SELECT base_url, api_key, analysis_model, qa_model, embedding_model, '
-                     + 'file_parser_provider, mineru_token FROM model_config WHERE id=1').get();
+                     + 'file_parser_provider, pdf_image_parser_provider, mineru_token FROM model_config WHERE id=1').get();
     db.close();
   } catch (e) {
     console.warn('[worker] 读取 model_config 失败，使用默认值:', e.message);
@@ -65,13 +65,19 @@ function readModelConfig() {
       const envProvider = (process.env.KB_FILE_PARSER_PROVIDER || '').trim();
       const envToken = (process.env.KB_MINERU_TOKEN || '').trim();
       const dbProvider = (row && row.file_parser_provider) || 'local';
+      const dbPdfImageProvider = (row && row.pdf_image_parser_provider) || dbProvider || 'local';
       const dbToken = (row && row.mineru_token) || '';
       const fileParserProvider = envProvider || dbProvider || 'local';
+      // 环境变量优先整体覆盖（保留旧行为：KB_FILE_PARSER_PROVIDER 一键切换全局）；
+      // 未设环境变量时，office 端用 file_parser_provider，pdf/图片端用独立的 pdf_image_parser_provider。
+      const fileParserPdfImageProvider = envProvider || dbPdfImageProvider || 'local';
       const fileParserToken = envToken || dbToken || '';
+      const validProviders = ['local', 'mineru-accurate-api', 'mineru-agent-api'];
       return {
         file_parser: {
-          provider: ['local', 'mineru-accurate-api', 'mineru-agent-api'].includes(fileParserProvider)
-            ? fileParserProvider : 'local',
+          provider: validProviders.includes(fileParserProvider) ? fileParserProvider : 'local',
+          office_provider: validProviders.includes(fileParserProvider) ? fileParserProvider : 'local',
+          pdf_image_provider: validProviders.includes(fileParserPdfImageProvider) ? fileParserPdfImageProvider : 'local',
           mineru_token: fileParserToken,
         },
       };

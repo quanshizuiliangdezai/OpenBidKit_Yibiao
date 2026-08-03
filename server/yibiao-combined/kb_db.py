@@ -146,6 +146,7 @@ def init_db():
             base_url        TEXT NOT NULL DEFAULT 'http://127.0.0.1:15005/v1',
             api_key         TEXT,
             file_parser_provider TEXT NOT NULL DEFAULT 'local',
+            pdf_image_parser_provider TEXT NOT NULL DEFAULT 'mineru-agent-api',
             mineru_token    TEXT,
             updated_at      TEXT NOT NULL
         );
@@ -1512,6 +1513,8 @@ def _ensure_model_config_row():
                 conn.execute("ALTER TABLE model_config ADD COLUMN file_parser_provider TEXT NOT NULL DEFAULT 'local'")
             if 'mineru_token' not in cols:
                 conn.execute("ALTER TABLE model_config ADD COLUMN mineru_token TEXT")
+            if 'pdf_image_parser_provider' not in cols:
+                conn.execute("ALTER TABLE model_config ADD COLUMN pdf_image_parser_provider TEXT NOT NULL DEFAULT 'mineru-agent-api'")
         except Exception:
             pass
         if not row:
@@ -1535,7 +1538,7 @@ def get_model_config():
         try:
             row = conn.execute(
                 "SELECT base_url, api_key, analysis_model, qa_model, embedding_model, "
-                "file_parser_provider, mineru_token, updated_at "
+                "file_parser_provider, pdf_image_parser_provider, mineru_token, updated_at "
                 "FROM model_config WHERE id=1").fetchone()
         finally:
             conn.close()
@@ -1543,7 +1546,7 @@ def get_model_config():
         return {
             'base_url': 'http://127.0.0.1:15005/v1', 'api_key': None,
             'analysis_model': 'sensenova-6.7-flash-lite', 'qa_model': 'sensenova-6.7-flash-lite',
-            'embedding_model': None, 'file_parser_provider': 'local', 'mineru_token': None,
+            'embedding_model': None, 'file_parser_provider': 'local', 'pdf_image_parser_provider': 'local', 'mineru_token': None,
             'updated_at': None,
         }
     return {
@@ -1553,13 +1556,14 @@ def get_model_config():
         'qa_model': row['qa_model'],
         'embedding_model': row['embedding_model'],
         'file_parser_provider': row['file_parser_provider'] or 'local',
+        'pdf_image_parser_provider': row['pdf_image_parser_provider'] or 'local',
         'mineru_token': row['mineru_token'],
         'updated_at': row['updated_at'],
     }
 
 
 def save_model_config(base_url, api_key, analysis_model, qa_model, embedding_model,
-                      file_parser_provider='local', mineru_token=None):
+                      file_parser_provider='local', pdf_image_parser_provider=None, mineru_token=None):
     """更新全局模型配置（upsert id=1）。"""
     _ensure_model_config_row()
     with _lock:
@@ -1567,9 +1571,9 @@ def save_model_config(base_url, api_key, analysis_model, qa_model, embedding_mod
         try:
             conn.execute(
                 "UPDATE model_config SET base_url=?, api_key=?, analysis_model=?, qa_model=?, "
-                "embedding_model=?, file_parser_provider=?, mineru_token=?, updated_at=? WHERE id=1",
+                "embedding_model=?, file_parser_provider=?, pdf_image_parser_provider=?, mineru_token=?, updated_at=? WHERE id=1",
                 (base_url, api_key, analysis_model, qa_model, embedding_model,
-                 file_parser_provider or 'local', mineru_token,
+                 file_parser_provider or 'local', pdf_image_parser_provider or 'local', mineru_token,
                  datetime.datetime.now().isoformat()))
             conn.commit()
         finally:

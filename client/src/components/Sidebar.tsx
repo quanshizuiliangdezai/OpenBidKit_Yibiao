@@ -137,7 +137,7 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
       </nav>
 
       <div className="sidebar-footer">
-        {collapsed ? wrapTooltip('使用文档', renderUserGuideButton()) : renderUserGuideButton()}
+        {auth.isAdmin ? (collapsed ? wrapTooltip('使用文档', renderUserGuideButton()) : renderUserGuideButton()) : null}
         {collapsed ? wrapTooltip('设置', renderSettingsButton(activeSection, onSectionChange)) : renderSettingsButton(activeSection, onSectionChange)}
         {renderUserCard(auth.employee, async () => {
           const ok = await confirm({

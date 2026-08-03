@@ -21,6 +21,11 @@ const mineruAgentSupportedExtensions = new Set([
 const mineruAccurateSupportedExtensions = new Set([
   '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.png', '.jpg', '.jpeg', '.jp2', '.webp', '.gif', '.bmp', '.html',
 ]);
+// 归入「云端 OCR」类的扩展名（用户明确：pdf/ppt/pptx/图片/html 走 MinerU，其余走本地）；
+// 分流时走 pdf_image_provider（云端解析方式）。
+const cloudParserExtensions = new Set([
+  '.pdf', '.ppt', '.pptx', '.png', '.jpg', '.jpeg', '.jp2', '.webp', '.gif', '.bmp', '.tiff', '.tif', '.html', '.htm',
+]);
 const duplicateCheckSupportedExtensions = new Set(['.doc', '.docx', '.wps', '.pdf', '.md', '.markdown', '.xls', '.xlsx']);
 const remoteImageTimeoutMs = 10000;
 const markdownImagePattern = /!\[(?<alt>[^\]]*)\]\((?<target><[^>]+>|[^)\s]+)(?<title>\s+"[^"]*")?\)/gi;
@@ -48,13 +53,22 @@ function getSelectableExtensions(provider) {
 }
 
 function resolveFileParser(config, filePath) {
-  const requestedProvider = config.components?.file_parser?.provider || 'local';
+  const fp = config.components?.file_parser || {};
   const ext = path.extname(filePath).toLowerCase();
+  // 双 provider 分流：Office 类（docx/xls/txt/md/wps 等）走 office_provider，
+  // PDF/图片类走 pdf_image_provider；两者任一缺失时回退到旧的单一 provider，保证向后兼容。
+  const officeProvider = fp.office_provider || fp.provider || 'local';
+  const pdfImageProvider = fp.pdf_image_provider || fp.provider || 'local';
+  const isCloudParser = cloudParserExtensions.has(ext);
+  const requestedProvider = isCloudParser ? pdfImageProvider : officeProvider;
+
   const requestedSupported = getSupportedExtensions(requestedProvider).has(ext);
   if (requestedSupported) {
     return { provider: requestedProvider, requestedProvider, ext, supported: true, fallbackToLocal: false };
   }
 
+  // 请求的 provider 不支持该扩展名，但本地解析支持（例如 office_provider 设为 mineru 但传了 txt）：
+  // 自动回退到本地解析。
   if (requestedProvider !== 'local' && localSupportedExtensions.has(ext)) {
     return { provider: 'local', requestedProvider, ext, supported: true, fallbackToLocal: true };
   }

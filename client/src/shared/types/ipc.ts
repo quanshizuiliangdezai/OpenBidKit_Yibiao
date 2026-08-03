@@ -604,12 +604,13 @@ export interface YibiaoBridge {
         qa_model?: string;
         embedding_model?: string;
         file_parser_provider?: string;
+        pdf_image_parser_provider?: string;
         has_mineru_token?: boolean;
         has_api_key?: boolean;
         updated_at?: string | null;
       };
     }>;
-    saveGlobal: (cfg: { base_url?: string; api_key?: string; analysis_model?: string; qa_model?: string; embedding_model?: string | null; file_parser_provider?: string; mineru_token?: string }) => Promise<{ success?: boolean; status?: number; error?: string; [key: string]: unknown }>;
+    saveGlobal: (cfg: { base_url?: string; api_key?: string; analysis_model?: string; qa_model?: string; embedding_model?: string | null; file_parser_provider?: string; pdf_image_parser_provider?: string; mineru_token?: string }) => Promise<{ success?: boolean; status?: number; error?: string; [key: string]: unknown }>;
     testMineruToken: (payload: { mineru_token: string }) => Promise<{ success?: boolean; status?: number; error?: string; message?: string }>;
     listModelsGlobal: () => Promise<{ success: boolean; models: string[]; error?: string; message?: string }>;
   };

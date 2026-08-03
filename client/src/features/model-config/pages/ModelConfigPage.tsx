@@ -2,6 +2,14 @@ import { useEffect, useState } from 'react';
 import { useToast } from '../../../shared/ui';
 import { useAuth } from '../../../shared/auth/AuthContext';
 
+// 解析方式原始值 → 中文标签（服务器只读区展示用，避免直接显示 local / mineru-*）
+const PARSER_LABELS: Record<string, string> = {
+  local: '本地解析',
+  'mineru-agent-api': 'MinerU-Agent（免 Token）',
+  'mineru-accurate-api': 'MinerU 精准解析（需 Token）',
+};
+const parserLabel = (v?: string): string => PARSER_LABELS[v || 'local'] || '本地解析';
+
 const CpuIcon = ({ className }: { className?: string }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <rect x="4" y="4" width="16" height="16" rx="2" />
@@ -102,6 +110,7 @@ export default function ModelConfigPage() {
   const [savingGlobal, setSavingGlobal] = useState(false);
   const [globalEmbedding, setGlobalEmbedding] = useState('');
   const [fileParserProvider, setFileParserProvider] = useState<'local' | 'mineru-accurate-api' | 'mineru-agent-api'>('local');
+  const [pdfImageParserProvider, setPdfImageParserProvider] = useState<'local' | 'mineru-accurate-api' | 'mineru-agent-api'>('local');
   const [mineruToken, setMineruToken] = useState('');
   const [showMineruToken, setShowMineruToken] = useState(false);
   const [testingMineruToken, setTestingMineruToken] = useState(false);
@@ -110,6 +119,7 @@ export default function ModelConfigPage() {
     analysis_model?: string;
     embedding_model?: string;
     file_parser_provider?: string;
+    pdf_image_parser_provider?: string;
     has_mineru_token?: boolean;
   }>({});
 
@@ -140,10 +150,12 @@ export default function ModelConfigPage() {
           analysis_model: res.data.analysis_model || '',
           embedding_model: res.data.embedding_model || '',
           file_parser_provider: res.data.file_parser_provider || 'local',
+          pdf_image_parser_provider: res.data.pdf_image_parser_provider || 'local',
           has_mineru_token: Boolean(res.data.has_mineru_token),
         });
         setGlobalEmbedding(res.data.embedding_model || '');
         setFileParserProvider((res.data.file_parser_provider as 'local' | 'mineru-accurate-api' | 'mineru-agent-api') || 'local');
+        setPdfImageParserProvider((res.data.pdf_image_parser_provider as 'local' | 'mineru-accurate-api' | 'mineru-agent-api') || 'local');
       }
     } catch {
       /* 忽略读取失败 */
@@ -232,6 +244,7 @@ export default function ModelConfigPage() {
         qa_model: model.trim(),
         embedding_model: globalEmbedding || null,
         file_parser_provider: fileParserProvider,
+        pdf_image_parser_provider: pdfImageParserProvider,
         mineru_token: mineruToken.trim() ? mineruToken.trim() : '__UNCHANGED__',
       });
       if (res?.success) showToast('已应用到服务器（个人库 + 团队库分析 + 问答生效）', 'success');
@@ -361,8 +374,8 @@ export default function ModelConfigPage() {
 
                 <label className="model-config-field">
                   <div className="model-config-field-head">
-                    <span className="model-config-field-label">文件解析方式</span>
-                    <span className="model-config-field-hint">扫描件 / 图片 / Office 等需 MinerU 云端 OCR；本地解析仅支持有文字层的 PDF/Word/Excel</span>
+                    <span className="model-config-field-label">本地可解析格式 · 解析方式</span>
+                    <span className="model-config-field-hint">Word / Excel / TXT / MD 等本地可解析（默认本地，无 OCR）</span>
                   </div>
                   <div className="model-config-input-wrap">
                     <span className="input-icon"><ServerIcon /></span>
@@ -377,7 +390,25 @@ export default function ModelConfigPage() {
                   </div>
                 </label>
 
-                {fileParserProvider === 'mineru-accurate-api' && (
+                <label className="model-config-field">
+                  <div className="model-config-field-head">
+                    <span className="model-config-field-label">PDF / PPT / 图片 / HTML · 解析方式</span>
+                    <span className="model-config-field-hint">无文字层 PDF、扫描件、图片、PPT、HTML 走云端 OCR（默认 MinerU-Agent 免 Token）</span>
+                  </div>
+                  <div className="model-config-input-wrap">
+                    <span className="input-icon"><ServerIcon /></span>
+                    <select
+                      value={pdfImageParserProvider}
+                      onChange={(event) => setPdfImageParserProvider(event.target.value as 'local' | 'mineru-accurate-api' | 'mineru-agent-api')}
+                    >
+                      <option value="local">本地解析（仅含文字层时可用）</option>
+                      <option value="mineru-agent-api">MinerU-Agent（免 Token，云端 OCR）</option>
+                      <option value="mineru-accurate-api">MinerU 精准解析（需 Token，质量更高）</option>
+                    </select>
+                  </div>
+                </label>
+
+                {(fileParserProvider === 'mineru-accurate-api' || pdfImageParserProvider === 'mineru-accurate-api') && (
                   <label className="model-config-field">
                     <div className="model-config-field-head">
                       <div>
@@ -465,16 +496,24 @@ export default function ModelConfigPage() {
                   <div className="model-config-server-item">
                     <div className="model-config-server-item-head">
                       <span className="model-config-server-item-icon url"><LinkIcon /></span>
-                      <span className="model-config-server-label">文件解析方式</span>
+                      <span className="model-config-server-label">本地可解析格式 · 解析方式</span>
                     </div>
-                    <span className={serverConfig.file_parser_provider && serverConfig.file_parser_provider !== 'local' ? 'model-config-server-value' : 'model-config-server-value empty'}>
-                      {serverConfig.file_parser_provider === 'mineru-accurate-api' ? 'MinerU 精准解析（需 Token）'
-                        : serverConfig.file_parser_provider === 'mineru-agent-api' ? 'MinerU-Agent（免 Token）'
-                          : serverConfig.file_parser_provider || '本地解析'}
+                    <span className="model-config-server-value">
+                      {parserLabel(serverConfig.file_parser_provider)}
                     </span>
                   </div>
 
-                  {serverConfig.file_parser_provider === 'mineru-accurate-api' && (
+                  <div className="model-config-server-item">
+                    <div className="model-config-server-item-head">
+                      <span className="model-config-server-item-icon url"><LinkIcon /></span>
+                      <span className="model-config-server-label">PDF/PPT/图片/HTML · 解析方式</span>
+                    </div>
+                    <span className="model-config-server-value">
+                      {parserLabel(serverConfig.pdf_image_parser_provider)}
+                    </span>
+                  </div>
+
+                  {(serverConfig.file_parser_provider === 'mineru-accurate-api' || serverConfig.pdf_image_parser_provider === 'mineru-accurate-api') && (
                     <div className="model-config-server-item">
                       <div className="model-config-server-item-head">
                         <span className="model-config-server-item-icon model"><BrainIcon /></span>

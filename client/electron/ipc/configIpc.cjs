@@ -46,6 +46,7 @@ function registerConfigIpc({ configStore, aiService, kbAuthService, onDeveloperM
         qa_model: cfg.qa_model,
         embedding_model: cfg.embedding_model,
         file_parser_provider: cfg.file_parser_provider || 'local',
+        pdf_image_parser_provider: cfg.pdf_image_parser_provider || 'local',
         mineru_token: cfg.mineru_token === undefined ? '__UNCHANGED__' : cfg.mineru_token,
       },
     });
