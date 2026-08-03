@@ -1515,6 +1515,9 @@ def _ensure_model_config_row():
                 conn.execute("ALTER TABLE model_config ADD COLUMN mineru_token TEXT")
             if 'pdf_image_parser_provider' not in cols:
                 conn.execute("ALTER TABLE model_config ADD COLUMN pdf_image_parser_provider TEXT NOT NULL DEFAULT 'mineru-agent-api'")
+            # DDL 必须显式提交：本函数仅在配置行已存在时不走下面的 commit 分支，
+            # 否则 ALTER 会随连接关闭被回滚（实测导致字段丢失）。
+            conn.commit()
         except Exception:
             pass
         if not row:
