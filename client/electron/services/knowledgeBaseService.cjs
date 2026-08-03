@@ -2475,6 +2475,55 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         return getLocalDocumentStatus(documentId);
       }
       if (!analysis || !analysis.payload) return null;
+
+      // 服务器返回 error 时，把错误状态同步到本地，避免 hydrateFromServerPayload
+      // 无条件把状态写成 success 导致「失败」变「完成」。
+      const serverStatus = String(analysis.status || 'success').toLowerCase();
+      if (serverStatus === 'error') {
+        try {
+          const payloadObj = typeof analysis.payload === 'string' ? JSON.parse(analysis.payload) : analysis.payload;
+          const errorMsg = (payloadObj && (payloadObj.error || payloadObj.message)) || analysis.message || '分析失败';
+          let existing = null;
+          try { existing = knowledgeBaseStore.getDocument(documentId); } catch { existing = null; }
+          if (!existing) {
+            const effectiveFolderId = knowledgeBaseStore.ensureFolder(folderId, '导入文档');
+            knowledgeBaseStore.createDocument({
+              id: documentId,
+              folder_id: effectiveFolderId,
+              file_name: (payloadObj && payloadObj.file_name) || String(documentId),
+              document_dir: path.join('folders', effectiveFolderId, 'documents', documentId).replace(/\\/g, '/'),
+              source_path: path.join('folders', effectiveFolderId, 'documents', documentId, 'source').replace(/\\/g, '/'),
+              markdown_path: path.join('folders', effectiveFolderId, 'documents', documentId, 'content.md').replace(/\\/g, '/'),
+              status: 'error',
+              progress: 100,
+              message: errorMsg,
+              item_count: 0,
+              block_count: 0,
+              filtered_block_count: 0,
+              candidate_item_count: 0,
+              discarded_block_count: 0,
+              system_discarded_after_retry_count: 0,
+              error: errorMsg,
+              created_at: now(),
+              updated_at: now(),
+            });
+          } else {
+            knowledgeBaseStore.updateDocument(documentId, {
+              status: 'error',
+              progress: 100,
+              message: errorMsg,
+              error: errorMsg,
+              item_count: 0,
+              block_count: 0,
+            });
+          }
+          return getLocalDocumentStatus(documentId);
+        } catch (err) {
+          debugLog(documentId, 'hydrate:error-writeback-failed', { message: err?.message || String(err) });
+          return null;
+        }
+      }
+
       try {
         const effectiveFolderId = knowledgeBaseStore.ensureFolder(folderId, '导入文档');
         let existing = null;

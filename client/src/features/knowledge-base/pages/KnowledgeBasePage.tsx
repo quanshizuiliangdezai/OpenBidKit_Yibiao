@@ -52,17 +52,18 @@ function adaptServerDocument(
   server: KbTeamDocument,
   localStatus: LocalDocPartial | null,
 ): KnowledgeDocument {
+  const srv = server as Record<string, unknown>;
   return {
     id: String(server.id),
     folder_id: String(server.folder_id || ''),
     file_name: String(server.title || server.file_name || server.name || server.original_name || '未知文档'),
-    status: localStatus?.status || 'pending',
-    progress: localStatus?.progress || 0,
-    message: localStatus?.message || '未分析',
-    item_count: localStatus?.item_count || 0,
-    block_count: localStatus?.block_count || 0,
-    filtered_block_count: localStatus?.filtered_block_count || 0,
-    candidate_item_count: localStatus?.candidate_item_count || 0,
+    status: (srv.status as KnowledgeDocumentStatus) || localStatus?.status || 'pending',
+    progress: (srv.progress as number) || localStatus?.progress || 0,
+    message: (srv.message as string) || localStatus?.message || '未分析',
+    item_count: (srv.item_count as number) ?? localStatus?.item_count ?? 0,
+    block_count: (srv.block_count as number) ?? localStatus?.block_count ?? 0,
+    filtered_block_count: (srv.filtered_block_count as number) ?? localStatus?.filtered_block_count ?? 0,
+    candidate_item_count: (srv.candidate_item_count as number) ?? localStatus?.candidate_item_count ?? 0,
     created_at: server.created_at || '',
     updated_at: server.created_at || '',
     uploaded_by_name: server.uploaded_by_name,
@@ -70,7 +71,7 @@ function adaptServerDocument(
   };
 }
 
-// 个人库文档适配：master.sqlite 保存元数据，实际分析状态以本地 store 为准（与团队库一致）
+// 个人库文档适配：master.sqlite 保存元数据，分析状态以服务器为准，本地 store 作为离线缓存补充。
 function adaptPersonalDocument(
   server: KbTeamDocument,
   localStatus: LocalDocPartial | null,
@@ -80,13 +81,13 @@ function adaptPersonalDocument(
     id: String(server.id),
     folder_id: String(server.folder_id || ''),
     file_name: ((srv.title || server.name || server.original_name || '未知文档') as string),
-    status: localStatus?.status || (srv.status as KnowledgeDocumentStatus) || ('pending' as KnowledgeDocumentStatus),
-    progress: localStatus?.progress || (srv.progress as number) || 0,
-    message: localStatus?.message || (srv.message as string) || '未分析',
-    item_count: localStatus?.item_count || (srv.item_count as number) || 0,
-    block_count: localStatus?.block_count || (srv.block_count as number) || 0,
-    filtered_block_count: localStatus?.filtered_block_count || (srv.filtered_block_count as number) || 0,
-    candidate_item_count: localStatus?.candidate_item_count || (srv.candidate_item_count as number) || 0,
+    status: (srv.status as KnowledgeDocumentStatus) || localStatus?.status || ('pending' as KnowledgeDocumentStatus),
+    progress: (srv.progress as number) || localStatus?.progress || 0,
+    message: (srv.message as string) || localStatus?.message || '未分析',
+    item_count: (srv.item_count as number) ?? localStatus?.item_count ?? 0,
+    block_count: (srv.block_count as number) ?? localStatus?.block_count ?? 0,
+    filtered_block_count: (srv.filtered_block_count as number) ?? localStatus?.filtered_block_count ?? 0,
+    candidate_item_count: (srv.candidate_item_count as number) ?? localStatus?.candidate_item_count ?? 0,
     created_at: server.created_at || '',
     updated_at: ((srv.updated_at || server.created_at || '') as string),
     uploaded_by_name: ((srv.owner_name || server.uploaded_by_name || srv.uploaded_by) as string | undefined),
