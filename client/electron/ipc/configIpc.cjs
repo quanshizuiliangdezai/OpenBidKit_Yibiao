@@ -52,6 +52,16 @@ function registerConfigIpc({ configStore, aiService, kbAuthService, onDeveloperM
     if (!ok) return { success: false, status, error: data?.error || '保存模型配置失败' };
     return data;
   });
+  // 测试 MinerU Token 是否可用（accurate-api 需要）
+  ipcMain.handle('config:test-mineru-token', async (_event, { mineru_token }) => {
+    if (!kbAuthService) return { success: false, error: 'kbAuthService 未初始化' };
+    const { ok, status, data } = await kbAuthService.apiFetch('/api/admin/test-mineru-token', {
+      method: 'POST',
+      body: { mineru_token: mineru_token || '' },
+    });
+    if (!ok) return { success: false, status, error: data?.error || '测试 MinerU Token 失败' };
+    return data;
+  });
   // 拉取服务端代理的 sub2api 模型列表
   ipcMain.handle('config:list-models-global', async () => {
     if (!kbAuthService) return { success: false, models: [] };

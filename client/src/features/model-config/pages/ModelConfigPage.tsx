@@ -104,6 +104,7 @@ export default function ModelConfigPage() {
   const [fileParserProvider, setFileParserProvider] = useState<'local' | 'mineru-accurate-api' | 'mineru-agent-api'>('local');
   const [mineruToken, setMineruToken] = useState('');
   const [showMineruToken, setShowMineruToken] = useState(false);
+  const [testingMineruToken, setTestingMineruToken] = useState(false);
   const [serverConfig, setServerConfig] = useState<{
     base_url?: string;
     analysis_model?: string;
@@ -199,6 +200,21 @@ export default function ModelConfigPage() {
       showToast(error instanceof Error ? error.message : '连接测试失败', 'error');
     } finally {
       setTesting(false);
+    }
+  };
+
+  const testMineruTokenConnection = async () => {
+    const token = mineruToken.trim();
+    if (!token) { showToast('请先填写 MinerU Token', 'info'); return; }
+    setTestingMineruToken(true);
+    try {
+      const result = await window.yibiao?.config.testMineruToken({ mineru_token: token });
+      if (result?.success) showToast(result.message || 'Token 可用', 'success');
+      else showToast(result?.message || result?.error || 'Token 验证失败', 'error');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Token 验证失败', 'error');
+    } finally {
+      setTestingMineruToken(false);
     }
   };
 
@@ -361,29 +377,42 @@ export default function ModelConfigPage() {
                   </div>
                 </label>
 
-                <label className="model-config-field">
-                  <div className="model-config-field-head">
-                    <span className="model-config-field-label">MinerU Token</span>
-                    <span className="model-config-field-hint">仅 mineru-accurate-api 需要；留空 = 沿用现有 Token</span>
-                  </div>
-                  <div className="model-config-input-wrap model-config-key-wrap">
-                    <span className="input-icon"><KeyIcon /></span>
-                    <input
-                      type={showMineruToken ? 'text' : 'password'}
-                      value={mineruToken}
-                      onChange={(event) => setMineruToken(event.target.value)}
-                      placeholder="mineru-..."
-                    />
-                    <button
-                      type="button"
-                      className="model-config-key-toggle"
-                      onClick={() => setShowMineruToken((prev) => !prev)}
-                      tabIndex={-1}
-                    >
-                      {showMineruToken ? '隐藏' : '显示'}
-                    </button>
-                  </div>
-                </label>
+                {fileParserProvider === 'mineru-accurate-api' && (
+                  <label className="model-config-field">
+                    <div className="model-config-field-head">
+                      <div>
+                        <span className="model-config-field-label">MinerU Token</span>
+                        <span className="model-config-field-hint">精准解析需要；留空 = 沿用现有 Token</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="model-config-mineru-test-btn"
+                        onClick={() => void testMineruTokenConnection()}
+                        disabled={testingMineruToken}
+                        tabIndex={-1}
+                      >
+                        {testingMineruToken ? '测试中…' : '测试 Token'}
+                      </button>
+                    </div>
+                    <div className="model-config-input-wrap model-config-key-wrap">
+                      <span className="input-icon"><KeyIcon /></span>
+                      <input
+                        type={showMineruToken ? 'text' : 'password'}
+                        value={mineruToken}
+                        onChange={(event) => setMineruToken(event.target.value)}
+                        placeholder="mineru-..."
+                      />
+                      <button
+                        type="button"
+                        className="model-config-key-toggle"
+                        onClick={() => setShowMineruToken((prev) => !prev)}
+                        tabIndex={-1}
+                      >
+                        {showMineruToken ? '隐藏' : '显示'}
+                      </button>
+                    </div>
+                  </label>
+                )}
               </div>
             </section>
 
@@ -445,15 +474,17 @@ export default function ModelConfigPage() {
                     </span>
                   </div>
 
-                  <div className="model-config-server-item">
-                    <div className="model-config-server-item-head">
-                      <span className="model-config-server-item-icon model"><BrainIcon /></span>
-                      <span className="model-config-server-label">MinerU Token</span>
+                  {serverConfig.file_parser_provider === 'mineru-accurate-api' && (
+                    <div className="model-config-server-item">
+                      <div className="model-config-server-item-head">
+                        <span className="model-config-server-item-icon model"><BrainIcon /></span>
+                        <span className="model-config-server-label">MinerU Token</span>
+                      </div>
+                      <span className={serverConfig.has_mineru_token ? 'model-config-server-value' : 'model-config-server-value empty'}>
+                        {serverConfig.has_mineru_token ? '已配置' : '（未配置）'}
+                      </span>
                     </div>
-                    <span className={serverConfig.has_mineru_token ? 'model-config-server-value' : 'model-config-server-value empty'}>
-                      {serverConfig.has_mineru_token ? '已配置' : '（未配置）'}
-                    </span>
-                  </div>
+                  )}
                 </div>
 
                 <div className="model-config-server-footer">

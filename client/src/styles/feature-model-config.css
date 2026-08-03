@@ -125,6 +125,12 @@
   flex-wrap: wrap;
 }
 
+.model-config-field-head > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .model-config-field-label {
   font-size: 13px;
   font-weight: 700;
@@ -246,6 +252,30 @@
 .model-config-key-toggle:hover {
   color: var(--yb-primary);
   background: rgba(33, 116, 253, 0.08);
+}
+
+.model-config-mineru-test-btn {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.08);
+  border: 1px solid rgba(33, 116, 253, 0.2);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease;
+}
+
+.model-config-mineru-test-btn:hover:not(:disabled) {
+  color: #fff;
+  background: var(--yb-primary);
+  border-color: var(--yb-primary);
+}
+
+.model-config-mineru-test-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .model-config-hint-card {

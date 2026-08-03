@@ -1516,13 +1516,13 @@ def _ensure_model_config_row():
             pass
         if not row:
             now = datetime.datetime.now().isoformat()
-        conn.execute(
-            "INSERT INTO model_config (id, analysis_model, qa_model, embedding_model, base_url, api_key, "
-            "file_parser_provider, mineru_token, updated_at) "
-            "VALUES (1, 'sensenova-6.7-flash-lite', 'sensenova-6.7-flash-lite', NULL, "
-            "'http://127.0.0.1:15005/v1', NULL, 'local', NULL, ?)",
-            (now,))
-        conn.commit()
+            conn.execute(
+                "INSERT INTO model_config (id, analysis_model, qa_model, embedding_model, base_url, api_key, "
+                "file_parser_provider, mineru_token, updated_at) "
+                "VALUES (1, 'sensenova-6.7-flash-lite', 'sensenova-6.7-flash-lite', NULL, "
+                "'http://127.0.0.1:15005/v1', NULL, 'local', NULL, ?)",
+                (now,))
+            conn.commit()
     finally:
         conn.close()
 

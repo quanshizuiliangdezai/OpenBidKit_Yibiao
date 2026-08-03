@@ -1017,6 +1017,50 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 detail='更新全局模型配置', ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '模型配置已保存'})
 
+        # ==================== 测试 MinerU Token（管理员）====================
+        if path == '/api/admin/test-mineru-token':
+            admin = self._is_admin()
+            if not admin:
+                return self._send(403, {'error': '需要管理员权限'})
+            token = (data.get('mineru_token') or '').strip()
+            if not token:
+                return self._send(400, {'error': 'MinerU Token 不能为空'})
+            try:
+                import urllib.request
+                import urllib.error
+                payload = json.dumps({
+                    'files': [{'name': 'test.pdf', 'data_id': 'test', 'is_ocr': True}],
+                    'model_version': 'vlm',
+                    'language': 'ch',
+                    'enable_table': True,
+                    'enable_formula': True,
+                }).encode('utf-8')
+                req = urllib.request.Request(
+                    'https://mineru.net/api/v4/file-urls/batch',
+                    data=payload,
+                    headers={
+                        'Authorization': 'Bearer ' + token,
+                        'Content-Type': 'application/json',
+                    },
+                    method='POST')
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    body = json.loads(resp.read().decode('utf-8'))
+                if isinstance(body, dict) and body.get('code') == 0:
+                    return self._send(200, {'success': True, 'message': 'Token 可用'})
+                else:
+                    msg = body.get('msg') if isinstance(body, dict) else str(body)
+                    return self._send(200, {'success': False, 'message': 'Token 无效：%s' % (msg or '未知错误')})
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode('utf-8', 'replace')
+                try:
+                    err_json = json.loads(err_body)
+                    msg = err_json.get('msg') or err_json.get('message') or err_body
+                except Exception:
+                    msg = err_body or e.reason
+                return self._send(200, {'success': False, 'message': 'Token 验证失败：HTTP %s，%s' % (e.code, msg)})
+            except Exception as e:
+                return self._send(200, {'success': False, 'message': 'Token 验证失败：%s' % str(e)})
+
         # ==================== 代理 sub2api 模型列表（服务端持 key）====================
         if path == '/api/models':
             employee = self._auth()
