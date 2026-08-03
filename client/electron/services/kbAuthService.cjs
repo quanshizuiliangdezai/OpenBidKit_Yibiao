@@ -99,9 +99,9 @@ function createKbAuthService({ app }) {
     if (state.token) reqHeaders.Authorization = `Bearer ${state.token}`;
     const init = { method, headers: reqHeaders };
     if (body !== null) {
-      // 调用方已显式指定 Content-Type（例如手动构造的 multipart body）时直接透传，不做任何序列化。
-      const hasExplicitContentType = Boolean(reqHeaders['Content-Type'] || reqHeaders['content-type']);
-      if (hasExplicitContentType && (Buffer.isBuffer(body) || body instanceof Uint8Array)) {
+      // 二进制 body（Buffer / Uint8Array）一律原样透传，不做 JSON 序列化，也不强行改 Content-Type。
+      // 调用方（如 MinerU PDF 测试）会自行拼好 multipart body 并显式设置 Content-Type / Content-Length。
+      if (Buffer.isBuffer(body) || body instanceof Uint8Array) {
         init.body = body;
       } else {
         // 可靠判断 FormData：Node 中 require('undici').FormData 与 globalThis.FormData 不是同一个构造函数，
