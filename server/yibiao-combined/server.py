@@ -94,8 +94,11 @@ def _mineru_parse_pdf(file_bytes, filename, provider, token):
             return False, 'MinerU 响应缺少 batch_id/file_url'
         file_url = file_urls[0]
         try:
+            # urllib 在带 data 的 PUT 请求会默认添加 Content-Type: application/x-www-form-urlencoded，
+            # 但 MinerU 预签名 URL 签名时未包含该头，会导致 OSS 返回 SignatureDoesNotMatch(403)。
+            # 显式置空 Content-Type 使其与签名一致（与 curl / Node fetch 默认行为对齐）。
             ureq = urllib.request.Request(file_url, data=file_bytes,
-                                          headers={'Content-Type': 'application/pdf'}, method='PUT')
+                                          headers={'Content-Type': ''}, method='PUT')
             with urllib.request.urlopen(ureq, timeout=180) as resp:
                 if resp.status >= 300:
                     return False, '上传文件到 MinerU 失败：HTTP %s' % resp.status
@@ -163,8 +166,10 @@ def _mineru_parse_pdf(file_bytes, filename, provider, token):
     if not task_id or not file_url:
         return False, 'MinerU-Agent 响应缺少 task_id/file_url'
     try:
+        # 必须显式覆盖 urllib 默认的 application/x-www-form-urlencoded Content-Type，
+        # 否则 OSS 预签名签名不匹配，返回 403 SignatureDoesNotMatch。
         ureq = urllib.request.Request(file_url, data=file_bytes,
-                                      headers={'Content-Type': 'application/pdf'}, method='PUT')
+                                      headers={'Content-Type': ''}, method='PUT')
         with urllib.request.urlopen(ureq, timeout=180) as resp:
             if resp.status >= 300:
                 return False, '上传文件到 MinerU-Agent 失败：HTTP %s' % resp.status
