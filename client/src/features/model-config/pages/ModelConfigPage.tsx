@@ -215,16 +215,30 @@ export default function ModelConfigPage() {
     }
   };
 
-  const testMineruTokenConnection = async () => {
+  const testMineruParseConnection = async () => {
+    const provider = pdfImageParserProvider;
+    if (provider === 'local') {
+      showToast('当前「PDF/PPT/图片/HTML」解析方式为本地解析，未启用 MinerU，无需此测试', 'info');
+      return;
+    }
     const token = mineruToken.trim();
-    if (!token) { showToast('请先填写 MinerU Token', 'info'); return; }
+    if (provider === 'mineru-accurate-api' && !token) {
+      showToast('请先填写 MinerU Token（精准解析需要）', 'info');
+      return;
+    }
     setTestingMineruToken(true);
     try {
-      const result = await window.yibiao?.config.testMineruToken({ mineru_token: token });
-      if (result?.success) showToast(result.message || 'Token 可用', 'success');
-      else showToast(result?.message || result?.error || 'Token 验证失败', 'error');
+      const result = await window.yibiao?.config.testMineruParse({ provider, mineru_token: token });
+      if (!result) { showToast('解析测试无返回', 'error'); return; }
+      if (result.canceled) return; // 用户取消选择文件
+      if (result.success) {
+        const preview = (result.markdown || '').replace(/\s+/g, ' ').slice(0, 120);
+        showToast(`解析成功（${result.char_count || 0} 字）${preview ? '：' + preview + '…' : ''}`, 'success');
+      } else {
+        showToast(result.message || result.error || '解析失败', 'error');
+      }
     } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Token 验证失败', 'error');
+      showToast(error instanceof Error ? error.message : '解析测试失败', 'error');
     } finally {
       setTestingMineruToken(false);
     }
@@ -418,11 +432,11 @@ export default function ModelConfigPage() {
                       <button
                         type="button"
                         className="model-config-mineru-test-btn"
-                        onClick={() => void testMineruTokenConnection()}
+                        onClick={() => void testMineruParseConnection()}
                         disabled={testingMineruToken}
                         tabIndex={-1}
                       >
-                        {testingMineruToken ? '测试中…' : '测试 Token'}
+                        {testingMineruToken ? '解析中…' : '测试解析（上传 PDF）'}
                       </button>
                     </div>
                     <div className="model-config-input-wrap model-config-key-wrap">
@@ -537,6 +551,7 @@ export default function ModelConfigPage() {
               <InfoIcon />
               <span>
                 「获取模型」按上方 Base URL + Key 拉取可用模型；「测试连接」验证可达性与鉴权；
+                「测试解析（上传 PDF）」会弹出文件选择框，用你选中的真实 PDF 走一遍 MinerU 云端解析，验证 Token 与解析链路可用；
                 「应用到服务器」将分析 / 问答 / 语义检索模型下发到服务器，对成员个人库与团队库的文档分析立即生效。
               </span>
             </div>

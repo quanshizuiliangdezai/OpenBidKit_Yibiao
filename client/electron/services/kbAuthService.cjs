@@ -91,7 +91,7 @@ function createKbAuthService({ app }) {
 
   // 带鉴权的 REST 请求封装，供阶段④知识库调用复用。
   // 返回 { ok, status, data }；非 2xx 时 ok=false 且 data 可能为服务器错误对象。
-  async function apiFetch(apiPath, { method = 'GET', body = null, headers = {} } = {}) {
+  async function apiFetch(apiPath, { method = 'GET', body = null, headers = {}, timeoutMs = null } = {}) {
     const state = read();
     const base = (state.serverUrl || DEFAULT_SERVER_URL).replace(/\/+$/, '');
     const url = `${base}${apiPath.startsWith('/') ? apiPath : `/${apiPath}`}`;
@@ -108,7 +108,7 @@ function createKbAuthService({ app }) {
     }
     let res;
     try {
-      res = await fetchWithTimeout(url, init);
+      res = await fetchWithTimeout(url, init, timeoutMs || DEFAULT_FETCH_TIMEOUT_MS);
     } catch (networkError) {
       // Node.js fetch 失败时默认消息是 "fetch failed"，没有 URL/method，这里补全便于排查
       const message = networkError?.message || String(networkError);

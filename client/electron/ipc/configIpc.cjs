@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { ipcMain, shell } = require('electron');
+const { ipcMain, shell, dialog } = require('electron');
+const { FormData } = require('undici');
 
 function registerConfigIpc({ configStore, aiService, kbAuthService, onDeveloperModeChange, onConfigChanged }) {
   ipcMain.handle('config:load', () => configStore.load());
@@ -53,14 +54,37 @@ function registerConfigIpc({ configStore, aiService, kbAuthService, onDeveloperM
     if (!ok) return { success: false, status, error: data?.error || '保存模型配置失败' };
     return data;
   });
-  // 测试 MinerU Token 是否可用（accurate-api 需要）
-  ipcMain.handle('config:test-mineru-token', async (_event, { mineru_token }) => {
+  // 测试 MinerU 解析：弹出文件选择框让用户上传 PDF，再上传到服务器走真实 MinerU 解析
+  ipcMain.handle('config:test-mineru-parse', async (_event, { provider, mineru_token }) => {
     if (!kbAuthService) return { success: false, error: 'kbAuthService 未初始化' };
-    const { ok, status, data } = await kbAuthService.apiFetch('/api/admin/test-mineru-token', {
-      method: 'POST',
-      body: { mineru_token: mineru_token || '' },
+    const result = await dialog.showOpenDialog({
+      title: '选择用于测试的 PDF 文档',
+      properties: ['openFile'],
+      filters: [
+        { name: 'PDF 文档', extensions: ['pdf'] },
+        { name: '所有文件', extensions: ['*'] },
+      ],
     });
-    if (!ok) return { success: false, status, error: data?.error || '测试 MinerU Token 失败' };
+    if (result.canceled || !result.filePaths || !result.filePaths.length) {
+      return { canceled: true };
+    }
+    const filePath = result.filePaths[0];
+    let fileBuf;
+    try {
+      fileBuf = fs.readFileSync(filePath);
+    } catch (e) {
+      return { success: false, error: '读取文件失败：' + (e?.message || String(e)) };
+    }
+    const fd = new FormData();
+    fd.append('file', new Blob([fileBuf], { type: 'application/pdf' }), path.basename(filePath));
+    fd.append('provider', provider || 'mineru-agent-api');
+    fd.append('mineru_token', mineru_token || '');
+    const { ok, status, data } = await kbAuthService.apiFetch('/api/admin/test-mineru-parse', {
+      method: 'POST',
+      body: fd,
+      timeoutMs: 600000,
+    });
+    if (!ok) return { success: false, status, error: data?.error || '解析测试失败' };
     return data;
   });
   // 拉取服务端代理的 sub2api 模型列表

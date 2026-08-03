@@ -50,6 +50,7 @@ const bridge = {
     loadGlobal: () => ipcRenderer.invoke('config:load-global'),
     saveGlobal: (cfg) => ipcRenderer.invoke('config:save-global', cfg),
     listModelsGlobal: () => ipcRenderer.invoke('config:list-models-global'),
+    testMineruParse: (payload) => ipcRenderer.invoke('config:test-mineru-parse', payload),
   },
   license: {
     getStatus: () => ipcRenderer.invoke('license:get-status'),

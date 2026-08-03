@@ -23,6 +23,7 @@ import datetime
 import tempfile
 import zipfile
 import threading
+import time
 from urllib.parse import urlparse, parse_qs, quote
 import kb_db
 
@@ -60,6 +61,138 @@ def _trigger_worker_analysis(document_id, library_type='team'):
             log('[worker] 已触发分析 doc=%s -> %s' % (document_id, resp.status))
     except Exception as e:
         log('[worker] 触发分析失败 doc=%s: %s' % (document_id, e))
+
+
+def _mineru_parse_pdf(file_bytes, filename, provider, token):
+    """调用 MinerU 云端解析 PDF，返回 (success: bool, markdown_or_error: str)。"""
+    import urllib.request
+    import urllib.error
+    import io as _io
+    if provider == 'mineru-accurate-api':
+        if not token:
+            return False, '未提供 MinerU Token（精准解析需要；可在上方填写或先在「应用到服务器」保存 Token）'
+        payload = json.dumps({
+            'files': [{'name': filename, 'data_id': 'test_' + uuid.uuid4().hex[:8], 'is_ocr': True}],
+            'model_version': 'vlm', 'language': 'ch',
+            'enable_table': True, 'enable_formula': True,
+        }).encode('utf-8')
+        try:
+            req = urllib.request.Request(
+                'https://mineru.net/api/v4/file-urls/batch', data=payload,
+                headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'}, method='POST')
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = json.loads(resp.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            return False, '申请 MinerU 上传链接失败：HTTP %s，%s' % (e.code, e.read().decode('utf-8', 'replace')[:300])
+        except Exception as e:
+            return False, '申请 MinerU 上传链接失败：%s' % str(e)
+        if not isinstance(body, dict) or body.get('code') != 0:
+            return False, 'MinerU 返回错误：%s' % (body.get('msg') if isinstance(body, dict) else str(body))
+        batch_id = (body.get('data') or {}).get('batch_id')
+        file_urls = (body.get('data') or {}).get('file_urls') or []
+        if not batch_id or not file_urls:
+            return False, 'MinerU 响应缺少 batch_id/file_url'
+        file_url = file_urls[0]
+        try:
+            ureq = urllib.request.Request(file_url, data=file_bytes,
+                                          headers={'Content-Type': 'application/pdf'}, method='PUT')
+            with urllib.request.urlopen(ureq, timeout=180) as resp:
+                if resp.status >= 300:
+                    return False, '上传文件到 MinerU 失败：HTTP %s' % resp.status
+        except Exception as e:
+            return False, '上传文件到 MinerU 失败：%s' % str(e)
+        deadline = time.time() + 540
+        while time.time() < deadline:
+            try:
+                preq = urllib.request.Request(
+                    'https://mineru.net/api/v4/extract-results/batch/%s' % batch_id,
+                    headers={'Authorization': 'Bearer ' + token, 'Accept': '*/*'})
+                with urllib.request.urlopen(preq, timeout=30) as resp:
+                    pres = json.loads(resp.read().decode('utf-8'))
+            except Exception as e:
+                return False, '轮询 MinerU 精准解析失败：%s' % str(e)
+            items = ((pres.get('data') or {}).get('extract_result') or [])
+            item = next((c for c in items if c.get('file_name') == filename), items[0] if items else None)
+            state = item.get('state') if item else None
+            if state == 'done':
+                zip_url = item.get('full_zip_url')
+                if not zip_url:
+                    return False, 'MinerU 精准解析完成但未返回 full_zip_url'
+                try:
+                    zreq = urllib.request.Request(zip_url)
+                    with urllib.request.urlopen(zreq, timeout=180) as resp:
+                        zip_bytes = resp.read()
+                except Exception as e:
+                    return False, '下载 MinerU 精准解析结果失败：%s' % str(e)
+                try:
+                    zf = zipfile.ZipFile(_io.BytesIO(zip_bytes))
+                    full = None
+                    for n in zf.namelist():
+                        if re.search(r'(^|[/\\])full\.md$', n, re.IGNORECASE):
+                            full = n
+                            break
+                    if full is None:
+                        md_entries = [n for n in zf.namelist() if n.lower().endswith('.md')]
+                        if not md_entries:
+                            return False, 'MinerU 精准解析结果中未找到 Markdown 文件'
+                        full = md_entries[0]
+                    return True, zf.read(full).decode('utf-8', 'replace')
+                except Exception as e:
+                    return False, '解析 MinerU 精准解析结果 zip 失败：%s' % str(e)
+            if state == 'failed':
+                return False, 'MinerU 精准解析失败：%s' % (item.get('err_msg') or '未知错误')
+            time.sleep(5)
+        return False, 'MinerU 精准解析轮询超时（>9分钟），请稍后重试'
+    # mineru-agent-api（免 Token）
+    payload = json.dumps({
+        'file_name': filename, 'language': 'ch',
+        'enable_table': True, 'is_ocr': True, 'enable_formula': True,
+    }).encode('utf-8')
+    try:
+        req = urllib.request.Request(
+            'https://mineru.net/api/v1/agent/parse/file', data=payload,
+            headers={'Content-Type': 'application/json'}, method='POST')
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = json.loads(resp.read().decode('utf-8'))
+    except Exception as e:
+        return False, '申请 MinerU-Agent 上传链接失败：%s' % str(e)
+    if not isinstance(body, dict) or body.get('code') != 0:
+        return False, 'MinerU-Agent 返回错误：%s' % (body.get('msg') if isinstance(body, dict) else str(body))
+    task_id = (body.get('data') or {}).get('task_id')
+    file_url = (body.get('data') or {}).get('file_url')
+    if not task_id or not file_url:
+        return False, 'MinerU-Agent 响应缺少 task_id/file_url'
+    try:
+        ureq = urllib.request.Request(file_url, data=file_bytes,
+                                      headers={'Content-Type': 'application/pdf'}, method='PUT')
+        with urllib.request.urlopen(ureq, timeout=180) as resp:
+            if resp.status >= 300:
+                return False, '上传文件到 MinerU-Agent 失败：HTTP %s' % resp.status
+    except Exception as e:
+        return False, '上传文件到 MinerU-Agent 失败：%s' % str(e)
+    deadline = time.time() + 300
+    while time.time() < deadline:
+        try:
+            preq = urllib.request.Request('https://mineru.net/api/v1/agent/parse/%s' % task_id)
+            with urllib.request.urlopen(preq, timeout=30) as resp:
+                pres = json.loads(resp.read().decode('utf-8'))
+        except Exception as e:
+            return False, '轮询 MinerU-Agent 失败：%s' % str(e)
+        data = (pres.get('data') or {})
+        if data.get('state') == 'done':
+            md_url = data.get('markdown_url')
+            if not md_url:
+                return False, 'MinerU-Agent 解析完成但未返回 markdown_url'
+            try:
+                mreq = urllib.request.Request(md_url)
+                with urllib.request.urlopen(mreq, timeout=60) as resp:
+                    return True, resp.read().decode('utf-8', 'replace')
+            except Exception as e:
+                return False, '下载 MinerU-Agent Markdown 失败：%s' % str(e)
+        if data.get('state') == 'failed':
+            return False, 'MinerU-Agent 解析失败：%s' % (data.get('err_msg') or '未知错误')
+        time.sleep(3)
+    return False, 'MinerU-Agent 解析轮询超时（>5分钟），请稍后重试'
 
 
 # kb_db 配置（import 后覆盖模块级变量，再 init）
@@ -1019,6 +1152,41 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 role='admin', action='admin', target_type='model_config', target_id='1',
                 detail='更新全局模型配置', ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '模型配置已保存'})
+
+        # ==================== 测试 MinerU 解析（上传 PDF，管理员）====================
+        # 用真实 PDF 走一遍 MinerU 云端解析，验证 Token / 解析链路是否可用。
+        if path == '/api/admin/test-mineru-parse':
+            admin = self._is_admin()
+            if not admin:
+                return self._send(403, {'error': '需要管理员权限'})
+            if 'multipart/form-data' not in ctype:
+                return self._send(400, {'error': '上传需使用 multipart/form-data'})
+            fields, files = self._parse_multipart()
+            f = files.get('file')
+            if not f:
+                return self._send(400, {'error': '缺少 PDF 文件'})
+            provider = (fields.get('provider') or 'mineru-agent-api').strip()
+            if provider not in ('mineru-accurate-api', 'mineru-agent-api'):
+                provider = 'mineru-agent-api'
+            token = (fields.get('mineru_token') or '').strip()
+            fname = f['filename'] or 'test.pdf'
+            if not fname.lower().endswith('.pdf'):
+                return self._send(400, {'error': '仅支持 PDF 文件用于解析测试'})
+            # 精准解析需要 Token：前端未传则回退到服务器已保存的 Token
+            if not token and provider == 'mineru-accurate-api':
+                saved = kb_db.get_model_config().get('mineru_token')
+                if saved:
+                    token = saved
+            success, md = _mineru_parse_pdf(f['data'], fname, provider, token)
+            if not success:
+                return self._send(200, {'success': False, 'message': md, 'provider': provider})
+            return self._send(200, {
+                'success': True,
+                'message': 'MinerU 解析成功',
+                'provider': provider,
+                'char_count': len(md),
+                'markdown': md.strip()[:3000],
+            })
 
         # ==================== 测试 MinerU Token（管理员）====================
         if path == '/api/admin/test-mineru-token':
