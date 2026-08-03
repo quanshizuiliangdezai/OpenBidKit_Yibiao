@@ -11,16 +11,22 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { Agent } = require('undici');
 
 const DEFAULT_SERVER_URL = 'http://59.49.48.147:15004';
 const AUTH_FILE_NAME = 'kb_auth.json';
 const DEFAULT_FETCH_TIMEOUT_MS = 10000;
 
+// 直连 Agent：绕过系统代理（Clash/V2Ray 等），直接 TCP 连接知识库服务器。
+// 国内服务器不需要走代理，且代理不稳定时会导致 "fetch failed"。
+const directAgent = new Agent();
+
 async function fetchWithTimeout(url, init = {}, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { ...init, signal: controller.signal });
+    // 使用直连 Agent 绕过系统代理（Clash/V2Ray），避免 "fetch failed"
+    const res = await fetch(url, { ...init, signal: controller.signal, dispatcher: directAgent });
     return res;
   } finally {
     clearTimeout(timeoutId);
