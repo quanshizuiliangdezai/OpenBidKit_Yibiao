@@ -53,13 +53,17 @@ function adaptServerDocument(
   localStatus: LocalDocPartial | null,
 ): KnowledgeDocument {
   const srv = server as Record<string, unknown>;
+  // 团队库列表 API 在分析进行中只返回 pending/0（状态以 kb_analysis 为准，而 kb_analysis
+  // 完成前无记录）；本地 store + hydrateTeamAnalysis（走 getAnalysisStatus 查 worker）才是
+  // 真实进度来源，故 localStatus 优先于 API 返回的 srv.status/progress。
+  const effectiveStatus = (localStatus?.status as KnowledgeDocumentStatus) || (srv.status as KnowledgeDocumentStatus) || 'pending';
   return {
     id: String(server.id),
     folder_id: String(server.folder_id || ''),
     file_name: String(server.title || server.file_name || server.name || server.original_name || '未知文档'),
-    status: (srv.status as KnowledgeDocumentStatus) || localStatus?.status || 'pending',
-    progress: (srv.progress as number) || localStatus?.progress || 0,
-    message: (srv.message as string) || localStatus?.message || '等待同步',
+    status: effectiveStatus,
+    progress: (localStatus?.progress as number) ?? (srv.progress as number) ?? 0,
+    message: (localStatus?.message as string) || (srv.message as string) || '等待同步',
     item_count: (srv.item_count as number) ?? localStatus?.item_count ?? 0,
     block_count: (srv.block_count as number) ?? localStatus?.block_count ?? 0,
     filtered_block_count: (srv.filtered_block_count as number) ?? localStatus?.filtered_block_count ?? 0,

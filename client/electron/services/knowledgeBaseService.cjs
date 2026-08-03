@@ -2474,14 +2474,19 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         debugLog(docId, 'hydrate:preserve-error');
         return getLocalDocumentStatus(documentId);
       }
-      // 分析进行中（payload 尚未生成）时返回进行中状态，
-      // 避免 return null 导致 UI 回退显示「等待处理」。
-      if (!analysis) return null;
-      if (!analysis.payload) {
-        const rawStatus = String(analysis.status || '').toLowerCase();
-        if (rawStatus === 'running' || rawStatus === 'processing' || rawStatus === 'pending' || rawStatus === 'queued') {
-          debugLog(docId, 'hydrate:analysis-in-progress', { status: analysis.status, progress: analysis.progress });
-          return { status: 'processing', progress: analysis.progress || 0, message: '分析中…' };
+      // 已完成分析（带 payload）走下方 serverStatus 写回逻辑；
+      // 未完成（kb_analysis 尚无记录或 payload 为空）时向 worker 拉取实时进度
+      // （含真实百分比），避免回退成「等待处理」且显示真实进度。
+      if (!(analysis && analysis.payload)) {
+        try {
+          const st = await svc.getAnalysisStatus(documentId);
+          const raw = String(st.status || '').toLowerCase();
+          if (raw === 'running' || raw === 'processing' || raw === 'pending' || raw === 'queued' || raw === 'unknown') {
+            debugLog(docId, 'hydrate:analysis-in-progress', { status: st.status, progress: st.progress });
+            return { status: 'processing', progress: Number(st.progress) || 0, message: st.message || '分析中…' };
+          }
+        } catch (err) {
+          debugLog(docId, 'hydrate:status-failed', { message: err?.message || String(err) });
         }
         return null;
       }
