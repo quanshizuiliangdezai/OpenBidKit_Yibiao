@@ -40,6 +40,11 @@ def _conn():
     conn.row_factory = sqlite3.Row
     # 多线程并发写时，遇锁自动等待而非立即抛 database is locked
     conn.execute("PRAGMA busy_timeout=5000")
+    # WAL 模式：读写互不阻塞，并发上传/检索不会互卡（8T 级库必需）
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        pass
     # 启用外键级联：删除文件夹时自动级联删子文件夹与文档行
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
@@ -185,6 +190,9 @@ def init_db():
     _migrate_owner_id_to_nullable()
     # 回收站软删列 + 全文检索列（向后兼容旧库）
     _migrate_recycle_and_fulltext_columns()
+    # 8T 级性能优化：建高频过滤列索引 + 团队库 FTS5 全文索引（trigram，兼容中文子串）
+    _ensure_kb_indexes()
+    _rebuild_team_fts_if_needed()
     _ensure_admin()
 
 
@@ -1352,62 +1360,220 @@ def upload_document(folder_id, owner_id, title, file_name, mime_type, data):
             conn.close()
 
 
-def list_documents(folder_id=None, include_deleted=False):
-    """folder_id=None 时返回所有文档（无参数调用）。默认过滤已进回收站的文档。"""
+def list_documents(folder_id=None, include_deleted=False, page=None, limit=None):
+    """folder_id=None 时返回所有文档（无参数调用）。默认过滤已进回收站的文档。
+
+    8T 级优化：支持分页（page 从 1 起，limit 上限 1000）。未分页的全库列举（folder=None）
+    加 5000 安全上限，避免一次返回 80 万行巨型 JSON 撑爆服务端/客户端。
+    """
+    base = ("SELECT d.id,d.folder_id,d.owner_id,d.title,d.file_name,d.file_size,d.mime_type,"
+            "d.created_at,d.deleted_at,COALESCE(e.display_name,e.username) AS uploaded_by_name,"
+            "d.owner_id AS uploaded_by "
+            "FROM knowledge_documents d LEFT JOIN employees e ON e.id=d.owner_id")
+    if not include_deleted:
+        base += " WHERE (d.deleted_at IS NULL OR d.deleted_at='')"
     with _lock:
         conn = _conn()
         try:
-            base = ("SELECT d.id,d.folder_id,d.owner_id,d.title,d.file_name,d.file_size,d.mime_type,"
-                    "d.created_at,d.deleted_at,COALESCE(e.display_name,e.username) AS uploaded_by_name,"
-                    "d.owner_id AS uploaded_by "
-                    "FROM knowledge_documents d LEFT JOIN employees e ON e.id=d.owner_id")
-            if not include_deleted:
-                base += " WHERE (d.deleted_at IS NULL OR d.deleted_at='')"
-            if folder_id is None:
-                q = base + " ORDER BY d.title" if include_deleted else base + " ORDER BY d.title"
-            else:
+            if folder_id is not None:
                 q = (base + " AND d.folder_id=?" if not include_deleted
                      else base + " WHERE d.folder_id=?") + " ORDER BY d.title"
                 rows = conn.execute(q, (int(folder_id),)).fetchall()
                 return [dict(r) for r in rows]
-            rows = conn.execute(q).fetchall()
+            # 全库列举
+            if limit:
+                try:
+                    limit = max(1, min(int(limit), 1000))
+                except (TypeError, ValueError):
+                    limit = 1000
+                try:
+                    page = max(0, int(page) - 1) if page else 0
+                except (TypeError, ValueError):
+                    page = 0
+                q = base + " ORDER BY d.title LIMIT ? OFFSET ?"
+                rows = conn.execute(q, (limit, page * limit)).fetchall()
+            else:
+                # 无分页：安全上限，避免超大库一次返回巨量 JSON
+                q = base + " ORDER BY d.title LIMIT 5000"
+                rows = conn.execute(q).fetchall()
             return [dict(r) for r in rows]
         finally:
             conn.close()
 
 
-def search_documents(keyword):
-    """按文件名/标题模糊搜索（回收站外）。"""
+# ============================================================
+# 8T 级性能优化：FTS5 全文索引（trigram 分词，兼容中文子串）
+# ============================================================
+def ensure_fts(conn, rowid_col='id', cols=('title', 'file_name', 'content_text')):
+    """为 knowledge_documents 建 FTS5(trigram) 全文索引表 kb_fts + 同步触发器。幂等。
+
+    把标题/文件名/正文的全文检索从 O(N) 的 LIKE 全表扫描降到索引查找。
+    团队库 knowledge_documents 主键为 INTEGER id，可直接用外部内容表（content=knowledge_documents），
+    索引按内容表 rowid 关联、几乎不额外占存储。个人库主键为 TEXT document_id（无整数 rowid），
+    不支持外部内容，个人库检索走下面的 LIMIT 截断兜底（见 server._personal_search）。
+    """
+    col_defs = ', '.join(cols)
+    new_cols = ', '.join('new.' + c for c in cols)
+    old_cols = ', '.join('old.' + c for c in cols)
+    try:
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS kb_fts USING fts5("
+            "%s, content='knowledge_documents', content_rowid='%s', tokenize='trigram')"
+            % (col_defs, rowid_col)
+        )
+    except Exception:
+        return False
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS kb_fts_ai AFTER INSERT ON knowledge_documents BEGIN "
+        "INSERT INTO kb_fts(rowid, %s) VALUES (new.%s, %s); END"
+        % (col_defs, rowid_col, new_cols))
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS kb_fts_ad AFTER DELETE ON knowledge_documents BEGIN "
+        "INSERT INTO kb_fts(kb_fts, rowid, %s) VALUES('delete', old.%s, %s); END"
+        % (col_defs, rowid_col, old_cols))
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS kb_fts_au AFTER UPDATE ON knowledge_documents BEGIN "
+        "INSERT INTO kb_fts(kb_fts, rowid, %s) VALUES('delete', old.%s, %s); "
+        "INSERT INTO kb_fts(rowid, %s) VALUES (new.%s, %s); END"
+        % (col_defs, rowid_col, old_cols, col_defs, rowid_col, new_cols))
+    return True
+
+
+def fts_match_ids(conn, keyword, rowid_col='id', limit=None):
+    """用 FTS5 trigram 返回匹配的关键字 rowid 列表；返回 None 表示应回退 LIKE
+    （FTS 不可用 / 空索引 / 关键词 < 3 字符，trigram 至少需要 3 字符）。"""
+    kw = (keyword or '').strip()
+    if len(kw) < 3:
+        return None
+    try:
+        cnt = conn.execute("SELECT count(*) FROM kb_fts").fetchone()[0]
+        if cnt == 0:
+            total = conn.execute("SELECT count(*) FROM knowledge_documents").fetchone()[0]
+            if total > 0:
+                return None  # 索引尚未建立（如批量导入未触发触发器），回退 LIKE 保证正确
+        q = '"' + kw.replace('"', '""') + '"'
+        if limit:
+            rows = conn.execute("SELECT rowid FROM kb_fts WHERE kb_fts MATCH ? LIMIT ?", (q, limit)).fetchall()
+        else:
+            rows = conn.execute("SELECT rowid FROM kb_fts WHERE kb_fts MATCH ?", (q,)).fetchall()
+        return [r[0] for r in rows]
+    except Exception:
+        return None
+
+
+def _ensure_kb_indexes():
+    """为团队库高频过滤列建索引（文件夹/回收站/时间/owner），加速列举与扫描过滤。"""
+    try:
+        conn = _conn()
+        try:
+            for sql in [
+                'CREATE INDEX IF NOT EXISTS idx_kb_docs_folder ON knowledge_documents(folder_id)',
+                'CREATE INDEX IF NOT EXISTS idx_kb_docs_deleted ON knowledge_documents(deleted_at)',
+                'CREATE INDEX IF NOT EXISTS idx_kb_docs_created ON knowledge_documents(created_at)',
+                'CREATE INDEX IF NOT EXISTS idx_kb_docs_owner ON knowledge_documents(owner_id)',
+                'CREATE INDEX IF NOT EXISTS idx_kb_folders_parent ON knowledge_folders(parent_id)',
+                'CREATE INDEX IF NOT EXISTS idx_kb_folders_owner ON knowledge_folders(owner_id)',
+            ]:
+                try:
+                    conn.execute(sql)
+                except Exception:
+                    pass
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print('[kb-auth] 团队库索引创建跳过: %s' % e, flush=True)
+
+
+def _rebuild_team_fts_if_needed(threshold=200000):
+    """启动兜底：若 FTS 空而文档数<=threshold，自动一次性重建；超过阈值则跳过（避免 8T 库启动卡死），
+    由管理员调用 /api/admin/rebuild-fts 手动触发。正常经 App 上传的文档会由触发器增量建索引。"""
+    try:
+        conn = _conn()
+        try:
+            ensure_fts(conn)
+            total = conn.execute("SELECT count(*) FROM knowledge_documents").fetchone()[0]
+            fts_cnt = conn.execute("SELECT count(*) FROM kb_fts").fetchone()[0]
+            if fts_cnt == 0 and 0 < total <= threshold:
+                conn.execute("INSERT INTO kb_fts(kb_fts) VALUES('rebuild')")
+                conn.execute(
+                    "INSERT INTO kb_fts(rowid, title, file_name, content_text) "
+                    "SELECT id, title, file_name, COALESCE(content_text,'') FROM knowledge_documents")
+                conn.commit()
+                print('[kb-auth] 团队库 FTS 索引已重建，文档数=%d' % total, flush=True)
+            elif fts_cnt == 0 and total > threshold:
+                print('[kb-auth] 团队库文档数=%d 超过自动重建阈值，跳过（请用 /api/admin/rebuild-fts 手动触发）' % total, flush=True)
+        finally:
+            conn.close()
+    except Exception as e:
+        print('[kb-auth] FTS 初始化跳过: %s' % e, flush=True)
+
+
+def rebuild_team_fts():
+    """手动重建团队库 FTS 索引（供 /api/admin/rebuild-fts 调用）。返回索引后的文档数。"""
+    conn = _conn()
+    try:
+        ensure_fts(conn)
+        conn.execute("INSERT INTO kb_fts(kb_fts) VALUES('rebuild')")
+        conn.execute(
+            "INSERT INTO kb_fts(rowid, title, file_name, content_text) "
+            "SELECT id, title, file_name, COALESCE(content_text,'') FROM knowledge_documents")
+        conn.commit()
+        return conn.execute("SELECT count(*) FROM kb_fts").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def search_documents(keyword, limit=500):
+    """按文件名/标题模糊搜索（回收站外）。优先 FTS5，缺索引时回退 LIKE。"""
+    pattern = '%{}%'.format(keyword.replace('%', '').replace('_', ''))
+    base_sel = ("SELECT d.id,d.folder_id,d.owner_id,d.title,d.file_name,d.file_size,d.mime_type,d.created_at,"
+                "COALESCE(e.display_name,e.username) AS uploaded_by_name,d.owner_id AS uploaded_by "
+                "FROM knowledge_documents d LEFT JOIN employees e ON e.id=d.owner_id "
+                "WHERE (d.deleted_at IS NULL OR d.deleted_at='')")
     with _lock:
         conn = _conn()
         try:
-            pattern = '%{}%'.format(keyword.replace('%', '').replace('_', ''))
-            rows = conn.execute(
-                "SELECT d.id,d.folder_id,d.owner_id,d.title,d.file_name,d.file_size,d.mime_type,d.created_at,"
-                "COALESCE(e.display_name,e.username) AS uploaded_by_name,d.owner_id AS uploaded_by "
-                "FROM knowledge_documents d LEFT JOIN employees e ON e.id=d.owner_id "
-                "WHERE (d.deleted_at IS NULL OR d.deleted_at='') AND (d.title LIKE ? OR d.file_name LIKE ?) "
-                "ORDER BY d.title",
-                (pattern, pattern)).fetchall()
+            ensure_fts(conn)
+            ids = fts_match_ids(conn, keyword, limit=limit * 4)
+            if ids is not None:
+                if not ids:
+                    return []
+                ph = ','.join('?' * len(ids))
+                rows = conn.execute(base_sel + " AND d.id IN (%s)" % ph, tuple(ids)).fetchall()
+                # 名字模式：仅保留标题/文件名命中的（FTS 可能命中正文）
+                low = keyword.lower()
+                rows = [r for r in rows
+                        if low in (r['title'] or '').lower() or low in (r['file_name'] or '').lower()]
+                return [dict(r) for r in rows][:limit]
+            q = base_sel + " AND (d.title LIKE ? OR d.file_name LIKE ?) ORDER BY d.title LIMIT ?"
+            rows = conn.execute(q, (pattern, pattern, limit)).fetchall()
             return [dict(r) for r in rows]
         finally:
             conn.close()
 
 
-def search_documents_fulltext(keyword):
-    """全文检索：标题/文件名/抽取正文（content_text）模糊匹配。"""
+def search_documents_fulltext(keyword, limit=500):
+    """全文检索：标题/文件名/抽取正文（content_text）模糊匹配。优先 FTS5，缺索引时回退 LIKE。"""
+    pattern = '%{}%'.format(keyword.replace('%', '').replace('_', ''))
+    base_sel = ("SELECT d.id,d.folder_id,d.owner_id,d.title,d.file_name,d.file_size,d.mime_type,d.created_at,"
+                "COALESCE(e.display_name,e.username) AS uploaded_by_name,d.owner_id AS uploaded_by "
+                "FROM knowledge_documents d LEFT JOIN employees e ON e.id=d.owner_id "
+                "WHERE (d.deleted_at IS NULL OR d.deleted_at='')")
     with _lock:
         conn = _conn()
         try:
-            pattern = '%{}%'.format(keyword.replace('%', '').replace('_', ''))
-            rows = conn.execute(
-                "SELECT d.id,d.folder_id,d.owner_id,d.title,d.file_name,d.file_size,d.mime_type,d.created_at,"
-                "COALESCE(e.display_name,e.username) AS uploaded_by_name,d.owner_id AS uploaded_by "
-                "FROM knowledge_documents d LEFT JOIN employees e ON e.id=d.owner_id "
-                "WHERE (d.deleted_at IS NULL OR d.deleted_at='') AND "
-                "(d.title LIKE ? OR d.file_name LIKE ? OR COALESCE(d.content_text,'') LIKE ?) "
-                "ORDER BY d.title",
-                (pattern, pattern, pattern)).fetchall()
+            ensure_fts(conn)
+            ids = fts_match_ids(conn, keyword, limit=limit)
+            if ids is not None:
+                if not ids:
+                    return []
+                ph = ','.join('?' * len(ids))
+                rows = conn.execute(base_sel + " AND d.id IN (%s) ORDER BY d.title" % ph, tuple(ids)).fetchall()
+                return [dict(r) for r in rows]
+            q = base_sel + (" AND (d.title LIKE ? OR d.file_name LIKE ? OR COALESCE(d.content_text,'') LIKE ?) "
+                            "ORDER BY d.title LIMIT ?")
+            rows = conn.execute(q, (pattern, pattern, pattern, limit)).fetchall()
             return [dict(r) for r in rows]
         finally:
             conn.close()

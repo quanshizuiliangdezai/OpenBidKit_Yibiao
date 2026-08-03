@@ -449,7 +449,8 @@ def build_incremental_zip(ids):
             rows = fconn.execute('SELECT document_id, folder_id FROM knowledge_documents').fetchall()
         finally:
             fconn.close()
-        with zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED) as z:
+        # 8T 级优化：知识库文件本身已压缩，ZIP_STORED 避免二次压缩，增量打包更快
+        with zipfile.ZipFile(out_path, 'w', zipfile.ZIP_STORED) as z:
             z.write(filtered_db, 'knowledge.sqlite')
             for doc_id, folder_id in rows:
                 src = os.path.join(MASTER_KB, 'folders', folder_id, 'documents', doc_id)
@@ -1669,6 +1670,17 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 updated_at    TEXT NOT NULL
             )
         ''')
+        # 8T 级优化：个人库高频过滤列索引（扫描过滤更快；一次性建，IF NOT EXISTS 幂等）
+        for _idx in [
+            'CREATE INDEX IF NOT EXISTS idx_pm_docs_owner ON knowledge_documents(owner_id)',
+            'CREATE INDEX IF NOT EXISTS idx_pm_docs_folder ON knowledge_documents(folder_id)',
+            'CREATE INDEX IF NOT EXISTS idx_pm_docs_deleted ON knowledge_documents(deleted_at)',
+            'CREATE INDEX IF NOT EXISTS idx_pm_docs_created ON knowledge_documents(created_at)',
+        ]:
+            try:
+                conn.execute(_idx)
+            except Exception:
+                pass
         conn.commit()
 
     def _personal_folders(self, employee):
@@ -1706,8 +1718,12 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         finally:
             conn.close()
 
-    def _personal_documents(self, folder_id, employee):
-        """从 master.sqlite 读取当前用户的文档列表（folder_id 为空 = 全部）。"""
+    def _personal_documents(self, folder_id, employee, page=None, limit=None):
+        """从 master.sqlite 读取当前用户的文档列表（folder_id 为空 = 全部）。
+
+        8T 级优化：支持分页（page 从 1 起，limit 上限 1000）；未分页的全库列举加 5000 安全上限，
+        避免一次返回巨量 JSON。
+        """
         conn = _master_db_conn()
         if conn is None:
             return []
@@ -1733,6 +1749,20 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 q += (" AND " if conditions else " WHERE ") + "folder_id=?"
                 args.append(str(folder_id))
             q += " ORDER BY created_at DESC"
+            # 分页 / 安全上限
+            if limit:
+                try:
+                    limit = max(1, min(int(limit), 1000))
+                except (TypeError, ValueError):
+                    limit = 1000
+                try:
+                    page = max(0, int(page) - 1) if page else 0
+                except (TypeError, ValueError):
+                    page = 0
+                q += " LIMIT ? OFFSET ?"
+                args.extend([limit, page * limit])
+            else:
+                q += " LIMIT 5000"
             rows = conn.execute(q, tuple(args)).fetchall()
             out = []
             for r in rows:
@@ -2162,7 +2192,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                      "WHERE (deleted_at IS NULL OR deleted_at='') AND file_name LIKE ?" + owner_filter + " ORDER BY created_at DESC")
                 rows = conn.execute(q, (pattern,) + tuple(args)).fetchall()
             return [{'id': r[0], 'folder_id': r[1], 'title': r[2], 'owner_id': r[3], 'created_at': r[4]}
-                    for r in rows]
+                    for r in rows][:1000]
         finally:
             conn.close()
 
@@ -2294,9 +2324,12 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         finally:
             conn.close()
 
-    def _qa_team_corpus(self, max_chars=30000):
-        """团队库 QA 语料：返回所有未删除文档的 {id,title,file_name,content_text,created_at}。
-        仅供客户端 RAG 向量化使用（只读）。content_text 截断到 max_chars。"""
+    def _qa_team_corpus(self, q=None, limit=200, max_chars=30000):
+        """团队库 QA 语料。8T 级优化：
+        - 带 q：按 FTS/关键词 Top-K 召回（返回正文，截断到 max_chars），供本地向量化；
+        - 不带 q：不再整库搬运正文（会撑爆浏览器），仅返回轻量元数据（content_text=''）并硬性截断到
+          limit；小库（总数<=limit）仍返回完整正文以兼容旧客户端。
+        客户端应优先用 /api/kb-qa/team 做服务端召回。"""
         import sqlite3 as _sql
         conn = _sql.connect(kb_db.DB_PATH)
         try:
@@ -2305,32 +2338,74 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             cols = [c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()]
             if 'content_text' not in cols:
                 return []
+            q = (q or '').strip()
+            if q:
+                kb_db.ensure_fts(conn)
+                ids = kb_db.fts_match_ids(conn, q, limit=limit)
+                if ids is None:
+                    pattern = '%' + q.replace('%', '').replace('_', '') + '%'
+                    rows = conn.execute(
+                        "SELECT id,folder_id,title,file_name,mime_type,COALESCE(content_text,'') AS content_text,created_at "
+                        "FROM knowledge_documents WHERE (deleted_at IS NULL OR deleted_at='') "
+                        "AND (title LIKE ? OR file_name LIKE ? OR COALESCE(content_text,'') LIKE ?) "
+                        "ORDER BY created_at DESC LIMIT ?", (pattern, pattern, pattern, limit)).fetchall()
+                elif not ids:
+                    return []
+                else:
+                    ph = ','.join('?' * len(ids))
+                    rows = conn.execute(
+                        "SELECT id,folder_id,title,file_name,mime_type,COALESCE(content_text,'') AS content_text,created_at "
+                        "FROM knowledge_documents WHERE id IN (%s) ORDER BY created_at DESC" % ph, tuple(ids)).fetchall()
+                out = []
+                for r in rows:
+                    text = (r['content_text'] or '')
+                    if max_chars and len(text) > max_chars:
+                        text = text[:max_chars]
+                    out.append({
+                        'id': r['id'], 'folder_id': r['folder_id'],
+                        'title': r['title'] or r['file_name'], 'file_name': r['file_name'],
+                        'mime_type': r['mime_type'], 'created_at': r['created_at'], 'content_text': text,
+                    })
+                return out
+            # 不带 q：先看总量判断是否小库
+            total = conn.execute(
+                "SELECT count(*) FROM knowledge_documents WHERE (deleted_at IS NULL OR deleted_at='')").fetchone()[0]
+            if total <= limit:
+                rows = conn.execute(
+                    "SELECT id,folder_id,title,file_name,mime_type,COALESCE(content_text,'') AS content_text,created_at "
+                    "FROM knowledge_documents WHERE (deleted_at IS NULL OR deleted_at='') ORDER BY created_at DESC").fetchall()
+                out = []
+                for r in rows:
+                    text = (r['content_text'] or '')
+                    if max_chars and len(text) > max_chars:
+                        text = text[:max_chars]
+                    out.append({
+                        'id': r['id'], 'folder_id': r['folder_id'],
+                        'title': r['title'] or r['file_name'], 'file_name': r['file_name'],
+                        'mime_type': r['mime_type'], 'created_at': r['created_at'], 'content_text': text,
+                    })
+                return out
+            # 大库：仅元数据，避免整库搬运
             rows = conn.execute(
-                "SELECT id, folder_id, title, file_name, mime_type, COALESCE(content_text,'') AS content_text, created_at "
-                "FROM knowledge_documents "
-                "WHERE (deleted_at IS NULL OR deleted_at='') "
-                "ORDER BY created_at DESC"
-            ).fetchall()
+                "SELECT id,folder_id,title,file_name,mime_type,created_at,"
+                "LENGTH(COALESCE(content_text,'')) AS content_len "
+                "FROM knowledge_documents WHERE (deleted_at IS NULL OR deleted_at='') "
+                "ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
             out = []
             for r in rows:
-                text = (r['content_text'] or '')
-                if len(text) > max_chars:
-                    text = text[:max_chars]
                 out.append({
-                    'id': r['id'],
-                    'folder_id': r['folder_id'],
-                    'title': r['title'] or r['file_name'],
-                    'file_name': r['file_name'],
-                    'mime_type': r['mime_type'],
-                    'created_at': r['created_at'],
-                    'content_text': text,
+                    'id': r['id'], 'folder_id': r['folder_id'],
+                    'title': r['title'] or r['file_name'], 'file_name': r['file_name'],
+                    'mime_type': r['mime_type'], 'created_at': r['created_at'],
+                    'content_len': r['content_len'], 'content_text': '',
                 })
             return out
         finally:
             conn.close()
 
-    def _qa_personal_corpus(self, employee, max_chars=30000):
-        """个人库 QA 语料：返回当前用户可见的所有未删除文档（非 admin 加 owner 过滤）。"""
+    def _qa_personal_corpus(self, employee, q=None, limit=200, max_chars=30000):
+        """个人库 QA 语料。8T 级优化同团队库：带 q 走关键词 Top-K；不带 q 大库仅返回元数据。
+        个人库主键为 TEXT document_id，不支持 FTS5 外部内容，关键词召回走 LIKE。"""
         conn = _master_db_conn()
         if conn is None:
             return []
@@ -2344,24 +2419,49 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             cols = [c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()]
             if 'content_text' not in cols:
                 return []
-            q = ("SELECT document_id,folder_id,file_name,COALESCE(content_text,'') AS content_text,created_at "
-                 "FROM knowledge_documents "
-                 "WHERE (deleted_at IS NULL OR deleted_at='')" + owner_filter +
-                 " ORDER BY created_at DESC")
-            rows = conn.execute(q, tuple(args)).fetchall()
+            q = (q or '').strip()
+            base_where = "WHERE (deleted_at IS NULL OR deleted_at='')" + owner_filter
+            if q:
+                pattern = '%' + q.replace('%', '').replace('_', '') + '%'
+                rows = conn.execute(
+                    "SELECT document_id,folder_id,file_name,COALESCE(content_text,'') AS content_text,created_at "
+                    "FROM knowledge_documents " + base_where +
+                    " AND (file_name LIKE ? OR COALESCE(content_text,'') LIKE ?) ORDER BY created_at DESC LIMIT ?",
+                    tuple(args) + (pattern, pattern, limit)).fetchall()
+                out = []
+                for r in rows:
+                    text = (r['content_text'] or '')
+                    if max_chars and len(text) > max_chars:
+                        text = text[:max_chars]
+                    out.append({'id': r['document_id'], 'folder_id': r['folder_id'],
+                                'title': r['file_name'], 'file_name': r['file_name'],
+                                'created_at': r['created_at'], 'content_text': text})
+                return out
+            total = conn.execute(
+                "SELECT count(*) FROM knowledge_documents " + base_where, tuple(args)).fetchone()[0]
+            if total <= limit:
+                rows = conn.execute(
+                    "SELECT document_id,folder_id,file_name,COALESCE(content_text,'') AS content_text,created_at "
+                    "FROM knowledge_documents " + base_where + " ORDER BY created_at DESC", tuple(args)).fetchall()
+                out = []
+                for r in rows:
+                    text = (r['content_text'] or '')
+                    if max_chars and len(text) > max_chars:
+                        text = text[:max_chars]
+                    out.append({'id': r['document_id'], 'folder_id': r['folder_id'],
+                                'title': r['file_name'], 'file_name': r['file_name'],
+                                'created_at': r['created_at'], 'content_text': text})
+                return out
+            rows = conn.execute(
+                "SELECT document_id,folder_id,file_name,created_at,"
+                "LENGTH(COALESCE(content_text,'')) AS content_len "
+                "FROM knowledge_documents " + base_where + " ORDER BY created_at DESC LIMIT ?",
+                tuple(args) + (limit,)).fetchall()
             out = []
             for r in rows:
-                text = (r['content_text'] or '')
-                if len(text) > max_chars:
-                    text = text[:max_chars]
-                out.append({
-                    'id': r['document_id'],
-                    'folder_id': r['folder_id'],
-                    'title': r['file_name'],
-                    'file_name': r['file_name'],
-                    'created_at': r['created_at'],
-                    'content_text': text,
-                })
+                out.append({'id': r['document_id'], 'folder_id': r['folder_id'],
+                            'title': r['file_name'], 'file_name': r['file_name'],
+                            'created_at': r['created_at'], 'content_len': r['content_len'], 'content_text': ''})
             return out
         finally:
             conn.close()
@@ -3057,6 +3157,16 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             finally:
                 conn.close()
             return self._send(200, {'success': True, 'data': rows})
+        # ==================== 手动重建团队库 FTS 全文索引（管理员）====================
+        if path == '/api/admin/rebuild-fts':
+            if not self._is_admin():
+                return self._send(403, {'error': '需要管理员权限'})
+            try:
+                n = kb_db.rebuild_team_fts()
+                return self._send(200, {'success': True, 'indexed': n,
+                                        'message': '团队库 FTS 全文索引已重建'})
+            except Exception as e:
+                return self._send(500, {'error': '重建 FTS 失败: %s' % e})
         m = re.match(r'^/api/documents/(\d+)/file$', path)
         if m:
             employee = self._auth()
@@ -3219,11 +3329,25 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             kw = self._query_param('q')
             if kw:
                 mode = self._query_param('mode') or 'name'
+                try:
+                    s_limit = int(self._query_param('limit') or 500)
+                except (TypeError, ValueError):
+                    s_limit = 500
                 if mode == 'content':
-                    return self._send(200, {'data': kb_db.search_documents_fulltext(kw)})
-                return self._send(200, {'data': kb_db.search_documents(kw)})
+                    return self._send(200, {'data': kb_db.search_documents_fulltext(kw, limit=s_limit)})
+                return self._send(200, {'data': kb_db.search_documents(kw, limit=s_limit)})
             if not folder:
-                return self._send(200, {'data': kb_db.list_documents(None)})
+                page_p = self._query_param('page')
+                limit_p = self._query_param('limit')
+                try:
+                    s_limit = int(limit_p) if limit_p else None
+                except (TypeError, ValueError):
+                    s_limit = None
+                try:
+                    s_page = int(page_p) if page_p else (1 if s_limit else None)
+                except (TypeError, ValueError):
+                    s_page = 1 if s_limit else None
+                return self._send(200, {'data': kb_db.list_documents(None, page=s_page, limit=s_limit)})
             return self._send(200, {'data': kb_db.list_documents(folder)})
         # ==================== /api/personal/* （需登录会话，个人库/主库）====================
         if path == '/api/personal/folders':
@@ -3240,7 +3364,17 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             if kw:
                 mode = self._query_param('mode') or 'name'
                 return self._send(200, {'data': self._personal_search(kw, mode, employee)})
-            return self._send(200, {'data': self._personal_documents(folder, employee)})
+            page_p = self._query_param('page')
+            limit_p = self._query_param('limit')
+            try:
+                p_limit = int(limit_p) if limit_p else None
+            except (TypeError, ValueError):
+                p_limit = None
+            try:
+                p_page = int(page_p) if page_p else (1 if p_limit else None)
+            except (TypeError, ValueError):
+                p_page = 1 if p_limit else None
+            return self._send(200, {'data': self._personal_documents(folder, employee, page=p_page, limit=p_limit)})
         # ==================== /api/kb-qa/* 知识库问答召回 ====================
         if path == '/api/kb-qa/team':
             employee = self._auth()
@@ -3272,13 +3406,23 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             employee = self._auth()
             if not employee:
                 return self._send(401, {'error': '未登录或会话已过期'})
-            docs = self._qa_team_corpus()
+            cq = self._query_param('q')
+            try:
+                climit = min(int(self._query_param('limit') or 200), 1000)
+            except (TypeError, ValueError):
+                climit = 200
+            docs = self._qa_team_corpus(q=cq, limit=climit)
             return self._send(200, {'success': True, 'data': docs})
         if path == '/api/personal/kb-qa/corpus':
             employee = self._auth()
             if not employee:
                 return self._send(401, {'error': '未登录或会话已过期'})
-            docs = self._qa_personal_corpus(employee)
+            cq = self._query_param('q')
+            try:
+                climit = min(int(self._query_param('limit') or 200), 1000)
+            except (TypeError, ValueError):
+                climit = 200
+            docs = self._qa_personal_corpus(employee, q=cq, limit=climit)
             return self._send(200, {'success': True, 'data': docs})
         if path.startswith('/api/personal/documents/') and path.endswith('/file'):
             employee = self._auth()
@@ -3573,6 +3717,17 @@ if __name__ == '__main__':
     os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
     log('yibiao-combined single-port starting on :%d (sync=/sync/*, kb=/)' % PORT)
     srv = ThreadingHTTPServer(('', PORT), CombinedHandler)
+
+    # 8T 级优化：启动时一次性为个人库（master.sqlite）建立高频过滤列索引，
+    # 避免首次个人库请求在海量数据上懒建索引导致该请求长时间阻塞。
+    try:
+        _mconn = _master_db_conn()
+        if _mconn is not None:
+            CombinedHandler._ensure_owner_cols(_mconn)
+            _mconn.close()
+            log('[init] 个人库 master.sqlite 索引/列已就绪')
+    except Exception as _e:
+        log('[warn] 个人库启动索引建立失败: %s' % _e)
 
     def _purge_loop():
         while True:

@@ -252,7 +252,9 @@ def copy_doc_files(src_kb, dst_kb, folder_id, document_id):
 def rebuild_master_zip():
     if os.path.exists(MASTER_ZIP):
         os.remove(MASTER_ZIP)
-    with zipfile.ZipFile(MASTER_ZIP, 'w', zipfile.ZIP_DEFLATED) as z:
+    # 8T 级优化：知识库文件（PDF/DOCX/zip 等）本身已压缩，再用 DEFLATE 是纯浪费 CPU，
+    # 且会让整库重新打包耗时数小时。改用 ZIP_STORED（仅存储不压缩），重建速度提升一个数量级。
+    with zipfile.ZipFile(MASTER_ZIP, 'w', zipfile.ZIP_STORED) as z:
         z.write(MASTER_DB, 'knowledge.sqlite')
         for root, _dirs, files in os.walk(MASTER_KB):
             for f in files:
