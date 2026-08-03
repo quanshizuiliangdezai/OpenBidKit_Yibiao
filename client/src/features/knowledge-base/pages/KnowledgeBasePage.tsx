@@ -60,8 +60,7 @@ function adaptServerDocument(
   return {
     id: String(server.id),
     folder_id: String(server.folder_id || ''),
-    // 优先使用 file_name（原始文件名，通常带扩展名），title 可能被改写/去扩展名；都没有再兜底。
-    file_name: String(server.file_name || server.title || server.name || server.original_name || '未知文档'),
+    file_name: String(server.title || server.file_name || server.name || server.original_name || '未知文档'),
     status: effectiveStatus,
     progress: (localStatus?.progress as number) ?? (srv.progress as number) ?? 0,
     message: (localStatus?.message as string) || (srv.message as string) || '等待同步',
@@ -85,8 +84,7 @@ function adaptPersonalDocument(
   return {
     id: String(server.id),
     folder_id: String(server.folder_id || ''),
-    // 个人库 master.sqlite 没有 title 列，优先 file_name；服务端若返回 title 也作为兜底。
-    file_name: ((srv.file_name || srv.title || server.name || server.original_name || '未知文档') as string),
+    file_name: ((srv.title || server.name || server.original_name || '未知文档') as string),
     status: (srv.status as KnowledgeDocumentStatus) || localStatus?.status || ('pending' as KnowledgeDocumentStatus),
     progress: (srv.progress as number) || localStatus?.progress || 0,
     message: (srv.message as string) || localStatus?.message || '等待同步',
