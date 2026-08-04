@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { Agent } = require('undici');
 const { getGeneratedImagesDir } = require('../utils/paths.cjs');
 const { createDeveloperLogger } = require('../utils/developerLog.cjs');
 const { createAiRequestQueue } = require('../utils/aiRequestQueue.cjs');
@@ -24,6 +25,10 @@ const {
 const textTokenStatsStore = require('./textTokenStatsStore.cjs');
 
 const AI_REQUEST_TIMEOUT_MS = 600000;
+
+// 直连 Agent：绕过系统代理（Clash/V2Ray 等），避免 AI 请求被拦截导致 "fetch failed"。
+// Node.js 原生 fetch（undici）支持 dispatcher 选项，用空 Agent 直连目标服务器。
+const directAgent = new Agent();
 
 // 金龙中转站废弃模型映射：使用这些模型时自动切换到替代模型
 const JINLONG_DEPRECATED_MODEL_MAP = {
@@ -416,7 +421,7 @@ function createAiResponseDataError(message, responseData) {
 async function downloadImage(url) {
   let response = null;
   try {
-    response = await fetch(url);
+    response = await fetch(url, { dispatcher: directAgent });
   } catch (error) {
     throw markAiRequestError(error, { retryable: true });
   }
@@ -457,6 +462,7 @@ async function fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, 
         headers: createHeaders(apiKey),
         body: JSON.stringify(body),
         signal: options.signal,
+        dispatcher: directAgent,
       });
     } catch (error) {
       throw markAiRequestError(error, { retryable: true });
@@ -866,6 +872,7 @@ async function fetchChatCompletion(app, config, body, options = {}) {
       headers: createHeaders(config.api_key),
       body: JSON.stringify(body),
       signal: options.signal || controller.signal,
+      dispatcher: directAgent,
     });
   } catch (error) {
     throw markAiRequestError(error, { retryable: true });
@@ -1249,6 +1256,7 @@ async function requestGoogleImageData(baseUrl, imageConfig, requestBody, request
       headers: createGoogleHeaders(imageConfig.api_key),
       body: JSON.stringify(requestBody),
       signal: options.signal,
+      dispatcher: directAgent,
     });
   } catch (error) {
     throw markAiRequestError(error, { retryable: true });
@@ -1822,6 +1830,7 @@ async function embedTextsWithConfig(config, texts) {
         method: 'POST',
         headers: createHeaders(resolved.api_key),
         body: JSON.stringify({ model: resolved.model_name, input }),
+        dispatcher: directAgent,
       });
     } catch (error) {
       // 仅网络错误可重试；4xx 走 ensureOk 后不可重试
@@ -2105,6 +2114,7 @@ function createAiService({ app, configStore }) {
             response = await fetch(`${trimBaseUrl(config.base_url)}/models`, {
               method: 'GET',
               headers: createHeaders(config.api_key),
+              dispatcher: directAgent,
             });
           } catch (error) {
             throw markAiRequestError(error, { retryable: true });
