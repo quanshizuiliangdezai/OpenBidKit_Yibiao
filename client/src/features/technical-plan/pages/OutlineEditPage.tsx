@@ -444,9 +444,37 @@ function OutlineEditPage({
   const loadKnowledgeIndex = async () => {
     try {
       setLoadingKnowledge(true);
-      const data = await window.yibiao?.knowledgeBase.list();
-      setKnowledgeIndex(data || emptyKnowledgeIndex);
-      setExpandedKnowledgeFolderIds(getInitialExpandedKnowledgeFolders(data || emptyKnowledgeIndex));
+      const localData = (await window.yibiao?.knowledgeBase.list()) || emptyKnowledgeIndex;
+
+      // 与服务器活跃文档取交集：本地库（knowledgeBase.list）会累积重传/删除后残留的
+      // 历史孤儿文档，导致「参考知识库」弹窗的可用文档越堆越多。这里只保留服务器上
+      // 仍存在（团队库 kb.sqlite + 个人库 master.sqlite）的文档，与服务器保持一致。
+      let documents = localData.documents;
+      try {
+        const [teamRes, personalRes] = await Promise.allSettled([
+          window.yibiao?.kbTeam.getTree?.() ?? Promise.resolve(null),
+          window.yibiao?.kbPersonal.getTree?.() ?? Promise.resolve(null),
+        ]);
+        const serverIds = new Set<string>();
+        for (const res of [teamRes, personalRes]) {
+          if (res.status === 'fulfilled' && res.value?.success) {
+            const docs = (res.value.data?.documents as Array<{ id?: string | number }>) || [];
+            docs.forEach((d) => {
+              if (d.id != null) serverIds.add(String(d.id));
+            });
+          }
+        }
+        // 仅当至少成功拉到一个库的活跃列表时才过滤，避免离线/未登录时清空可用文档
+        if (serverIds.size > 0) {
+          documents = localData.documents.filter((d) => serverIds.has(String(d.id)));
+        }
+      } catch {
+        /* 服务器取交集失败则保留本地列表（离线兜底） */
+      }
+
+      const data: KnowledgeBaseIndex = { folders: localData.folders, documents };
+      setKnowledgeIndex(data);
+      setExpandedKnowledgeFolderIds(getInitialExpandedKnowledgeFolders(data));
     } catch (error) {
       showToast(error instanceof Error ? error.message : '读取知识库失败', 'error');
       setKnowledgeIndex(emptyKnowledgeIndex);
