@@ -3722,6 +3722,12 @@
   border: 1px solid rgba(228, 233, 240, 0.88);
   border-radius: 24px;
   box-shadow: var(--yb-shadow);
+  transition: padding 0.22s ease, gap 0.22s ease;
+}
+
+.outline-wizard-panel.is-collapsed {
+  gap: 0;
+  padding: 14px 18px;
 }
 
 .outline-wizard-header {
@@ -3735,6 +3741,51 @@
   display: flex;
   align-items: center;
   gap: 14px;
+}
+
+.outline-wizard-title.outline-wizard-collapse-toggle {
+  margin: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.outline-wizard-collapse-toggle .outline-wizard-icon {
+  flex-shrink: 0;
+}
+
+.outline-wizard-chevron {
+  width: 20px;
+  height: 20px;
+  margin-left: 6px;
+  color: var(--yb-text-soft);
+  fill: currentColor;
+  transition: transform 0.22s ease, color 0.18s ease;
+}
+
+.outline-wizard-chevron.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+.outline-wizard-collapse-toggle:hover .outline-wizard-chevron {
+  color: var(--yb-primary);
+}
+
+.outline-wizard-inline-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--yb-primary);
+  font-size: 13px;
+  font-weight: 800;
+  background: rgba(33, 116, 253, 0.08);
+  border: 1px solid rgba(33, 116, 253, 0.16);
+  border-radius: 999px;
+  white-space: nowrap;
 }
 
 .outline-wizard-icon {

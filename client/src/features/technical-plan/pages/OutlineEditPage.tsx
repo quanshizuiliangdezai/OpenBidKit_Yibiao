@@ -363,6 +363,7 @@ function OutlineEditPage({
   const sortIdMapRef = useRef<Record<string, string>>({});
   const { showToast } = useToast();
   const [wizardMode, setWizardMode] = useState(false);
+  const [wizardCollapsed, setWizardCollapsed] = useState(false);
   const activeOutlineData = sorting ? draftOutlineData : outlineData;
   const selectedItem = activeOutlineData && selectedItemId ? findOutlineItem(activeOutlineData.outline, selectedItemId) : null;
   const taskRunning = task?.status === 'running';
@@ -1272,9 +1273,15 @@ function OutlineEditPage({
       </section>
 
       {wizardMode && (
-        <section className="outline-wizard-panel">
+        <section className={`outline-wizard-panel${wizardCollapsed ? ' is-collapsed' : ''}`}>
           <div className="outline-wizard-header">
-            <div className="outline-wizard-title">
+            <button
+              type="button"
+              className="outline-wizard-title outline-wizard-collapse-toggle"
+              onClick={() => setWizardCollapsed((prev) => !prev)}
+              aria-expanded={!wizardCollapsed}
+              aria-label={wizardCollapsed ? '展开分步向导' : '折叠分步向导'}
+            >
               <div className="outline-wizard-icon">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm-1 15.93V6.09a.5.5 0 0 1 .76-.43l7.49 5.92a.5.5 0 0 1 0 .84l-7.49 5.92a.5.5 0 0 1-.76-.43Z" />
@@ -1284,8 +1291,18 @@ function OutlineEditPage({
                 <strong>分步生成向导</strong>
                 <span>{wizardStatusText}</span>
               </div>
-            </div>
+              <svg className={`outline-wizard-chevron${wizardCollapsed ? ' is-collapsed' : ''}`} viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6.71 9.29a1 1 0 0 1 1.42 0l4.88 4.88 4.88-4.88a1 1 0 1 1 1.42 1.42l-5.59 5.59a1 1 0 0 1-1.42 0l-5.59-5.59a1 1 0 0 1 0-1.42Z" />
+              </svg>
+            </button>
             <div className="outline-wizard-actions-global">
+              {wizardCollapsed && wizardActive && !wizardDone && (
+                <span className="outline-wizard-inline-status">
+                  {runningWizardStep
+                    ? `${WIZARD_STEP_LABELS[runningWizardStep]} · ${Math.max(0, Math.min(99, task?.progress || 0))}%`
+                    : `待执行：${WIZARD_STEP_LABELS[effectiveWizardSteps[wizardCurrentIndex]]}`}
+                </span>
+              )}
               {wizardDone && (
                 <button type="button" className="outline-wizard-btn outline-wizard-btn-secondary" disabled={generating} onClick={() => runWizardStep(effectiveWizardSteps[0], { restart: true })}>
                   重新分步生成
@@ -1302,60 +1319,62 @@ function OutlineEditPage({
             </div>
           </div>
 
-          <ol className="outline-wizard-steps">
-            {effectiveWizardSteps.map((step, index) => {
-              const isDone = index < wizardCurrentIndex;
-              const isCurrent = index === wizardCurrentIndex;
-              const isRunning = runningWizardStep === step;
-              const isFailed = failedWizardStep === step;
-              const isPending = index > wizardCurrentIndex;
-              const isCurrentExecutable = isCurrent && !runningWizardStep;
-              const stepNumber = index + 1;
-              return (
-                <li
-                  key={step}
-                  className={`outline-wizard-step${isDone ? ' is-done' : ''}${isCurrent ? ' is-current' : ''}${isRunning ? ' is-running' : ''}${isFailed ? ' is-failed' : ''}${isPending ? ' is-pending' : ''}`}
-                >
-                  <div className="outline-wizard-step-main">
-                    <div className="outline-wizard-step-indicator" aria-label={isDone ? '已完成' : isCurrent ? '当前' : '待执行'}>
-                      {isDone ? (
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                          <path d="M20.29 6.71a1 1 0 0 0-1.42 0l-8.88 8.88-3.88-3.88a1 1 0 1 0-1.42 1.42l4.59 4.59a1 1 0 0 0 1.42 0l9.59-9.59a1 1 0 0 0 0-1.42Z" />
-                        </svg>
-                      ) : isRunning ? (
-                        <span className="outline-wizard-spinner" aria-hidden="true" />
-                      ) : (
-                        <span>{stepNumber}</span>
-                      )}
-                    </div>
-                    <div className="outline-wizard-step-body">
-                      <div className="outline-wizard-step-head">
-                        <strong>{WIZARD_STEP_LABELS[step]}</strong>
-                        {isRunning && (
-                          <span className="outline-wizard-step-progress">{Math.max(0, Math.min(99, task?.progress || 0))}%</span>
+          {!wizardCollapsed && (
+            <ol className="outline-wizard-steps">
+              {effectiveWizardSteps.map((step, index) => {
+                const isDone = index < wizardCurrentIndex;
+                const isCurrent = index === wizardCurrentIndex;
+                const isRunning = runningWizardStep === step;
+                const isFailed = failedWizardStep === step;
+                const isPending = index > wizardCurrentIndex;
+                const isCurrentExecutable = isCurrent && !runningWizardStep;
+                const stepNumber = index + 1;
+                return (
+                  <li
+                    key={step}
+                    className={`outline-wizard-step${isDone ? ' is-done' : ''}${isCurrent ? ' is-current' : ''}${isRunning ? ' is-running' : ''}${isFailed ? ' is-failed' : ''}${isPending ? ' is-pending' : ''}`}
+                  >
+                    <div className="outline-wizard-step-main">
+                      <div className="outline-wizard-step-indicator" aria-label={isDone ? '已完成' : isCurrent ? '当前' : '待执行'}>
+                        {isDone ? (
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M20.29 6.71a1 1 0 0 0-1.42 0l-8.88 8.88-3.88-3.88a1 1 0 1 0-1.42 1.42l4.59 4.59a1 1 0 0 0 1.42 0l9.59-9.59a1 1 0 0 0 0-1.42Z" />
+                          </svg>
+                        ) : isRunning ? (
+                          <span className="outline-wizard-spinner" aria-hidden="true" />
+                        ) : (
+                          <span>{stepNumber}</span>
                         )}
-                        {isDone && <span className="outline-wizard-step-badge">已完成</span>}
-                        {isFailed && <span className="outline-wizard-step-badge is-failed">失败</span>}
                       </div>
-                      <p>{WIZARD_STEP_DESCRIPTIONS[step]}</p>
-                      {isCurrentExecutable && (
-                        <div className="outline-wizard-step-action">
-                          <button
-                            type="button"
-                            className="outline-wizard-btn outline-wizard-btn-primary"
-                            disabled={generating || !projectOverview || !techRequirements}
-                            onClick={() => runWizardStep(step, { restart: false })}
-                          >
-                            {isFailed ? '重试此步' : '执行此步'}
-                          </button>
+                      <div className="outline-wizard-step-body">
+                        <div className="outline-wizard-step-head">
+                          <strong>{WIZARD_STEP_LABELS[step]}</strong>
+                          {isRunning && (
+                            <span className="outline-wizard-step-progress">{Math.max(0, Math.min(99, task?.progress || 0))}%</span>
+                          )}
+                          {isDone && <span className="outline-wizard-step-badge">已完成</span>}
+                          {isFailed && <span className="outline-wizard-step-badge is-failed">失败</span>}
                         </div>
-                      )}
+                        <p>{WIZARD_STEP_DESCRIPTIONS[step]}</p>
+                        {isCurrentExecutable && (
+                          <div className="outline-wizard-step-action">
+                            <button
+                              type="button"
+                              className="outline-wizard-btn outline-wizard-btn-primary"
+                              disabled={generating || !projectOverview || !techRequirements}
+                              onClick={() => runWizardStep(step, { restart: false })}
+                            >
+                              {isFailed ? '重试此步' : '执行此步'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
         </section>
       )}
 
