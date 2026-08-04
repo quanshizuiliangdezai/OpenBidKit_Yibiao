@@ -124,6 +124,7 @@ export const appMenuItems: AppMenuItem[] = [
     id: 'plugin-manager',
     label: '插件管理',
     description: '安装和管理插件，扩展软件功能',
+    requiredPermission: 'plugin_manage',
   },
   {
     id: 'model-config',
