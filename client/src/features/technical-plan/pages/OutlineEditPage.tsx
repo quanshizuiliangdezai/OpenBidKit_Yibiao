@@ -19,6 +19,14 @@ const WIZARD_STEP_LABELS: Record<OutlineWizardStep, string> = {
   word: '字数调整与二审',
 };
 
+const WIZARD_STEP_DESCRIPTIONS: Record<OutlineWizardStep, string> = {
+  extract: '从现有技术方案中解析原目录结构，作为扩充基础。',
+  main: '基于招标文件要求生成完整的一级、二级目录骨架。',
+  knowledge: '结合参考知识库自动补充相关章节与要点。',
+  review: '对目录完整性、相关性、逻辑性进行 AI 审核。',
+  word: '根据字数要求进行扩写或精简，并做最终检查。',
+};
+
 function getWizardSteps(isExpansion: boolean, expansionMode: OutlineExpansionMode): OutlineWizardStep[] {
   if (!isExpansion) {
     return ['main', 'knowledge', 'review', 'word'];
@@ -1237,9 +1245,12 @@ function OutlineEditPage({
           <p>{isExpansionWorkflow ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。` : `当前一级目录生成方式：${outlineModeLabels[outlineMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
         </div>
         <div className="outline-command-actions">
-          <label className="outline-wizard-switch" title="分步向导：将目录生成拆分为多步，逐步确认与重试">
+          <label className={`outline-wizard-switch${wizardMode ? ' is-active' : ''}`} title="分步向导：将目录生成拆分为多步，逐步确认与重试">
             <input type="checkbox" checked={wizardMode} onChange={(event) => setWizardMode(event.target.checked)} />
-            <span>分步向导</span>
+            <span className="outline-wizard-switch-track" aria-hidden="true">
+              <span className="outline-wizard-switch-thumb" />
+            </span>
+            <span className="outline-wizard-switch-label">分步向导</span>
           </label>
           <button
             type="button"
@@ -1262,54 +1273,89 @@ function OutlineEditPage({
 
       {wizardMode && (
         <section className="outline-wizard-panel">
-          <div className="analysis-result-head">
-            <strong>分步生成向导</strong>
-            <span>{wizardStatusText}</span>
+          <div className="outline-wizard-header">
+            <div className="outline-wizard-title">
+              <div className="outline-wizard-icon">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm-1 15.93V6.09a.5.5 0 0 1 .76-.43l7.49 5.92a.5.5 0 0 1 0 .84l-7.49 5.92a.5.5 0 0 1-.76-.43Z" />
+                </svg>
+              </div>
+              <div>
+                <strong>分步生成向导</strong>
+                <span>{wizardStatusText}</span>
+              </div>
+            </div>
+            <div className="outline-wizard-actions-global">
+              {wizardDone && (
+                <button type="button" className="outline-wizard-btn outline-wizard-btn-secondary" disabled={generating} onClick={() => runWizardStep(effectiveWizardSteps[0], { restart: true })}>
+                  重新分步生成
+                </button>
+              )}
+              {wizardActive && !wizardDone && (
+                <button type="button" className="outline-wizard-btn outline-wizard-btn-secondary" disabled={generating} onClick={() => runWizardStep(effectiveWizardSteps[0], { restart: true })}>
+                  重新开始
+                </button>
+              )}
+              <button type="button" className="outline-wizard-btn outline-wizard-btn-ghost" onClick={() => setWizardMode(false)}>
+                退出向导
+              </button>
+            </div>
           </div>
+
           <ol className="outline-wizard-steps">
             {effectiveWizardSteps.map((step, index) => {
-              const stateClass = index < wizardCurrentIndex
-                ? 'is-done'
-                : index === wizardCurrentIndex
-                  ? (runningWizardStep ? 'is-running' : 'is-current')
-                  : 'is-pending';
-              const isCurrentExecutable = index === wizardCurrentIndex && !runningWizardStep;
+              const isDone = index < wizardCurrentIndex;
+              const isCurrent = index === wizardCurrentIndex;
+              const isRunning = runningWizardStep === step;
+              const isFailed = failedWizardStep === step;
+              const isPending = index > wizardCurrentIndex;
+              const isCurrentExecutable = isCurrent && !runningWizardStep;
+              const stepNumber = index + 1;
               return (
-                <li key={step} className={`outline-wizard-step ${stateClass}`}>
-                  <span className="step-index">{index + 1}</span>
-                  <span className="step-label">{WIZARD_STEP_LABELS[step]}</span>
-                  {runningWizardStep === step && (
-                    <span className="step-progress">{Math.max(0, Math.min(99, task?.progress || 0))}%</span>
-                  )}
-                  {isCurrentExecutable && (
-                    <button
-                      type="button"
-                      className="primary-action"
-                      disabled={generating || !projectOverview || !techRequirements}
-                      onClick={() => runWizardStep(step, { restart: false })}
-                    >
-                      {failedWizardStep === step ? '重试此步' : '执行此步'}
-                    </button>
-                  )}
+                <li
+                  key={step}
+                  className={`outline-wizard-step${isDone ? ' is-done' : ''}${isCurrent ? ' is-current' : ''}${isRunning ? ' is-running' : ''}${isFailed ? ' is-failed' : ''}${isPending ? ' is-pending' : ''}`}
+                >
+                  <div className="outline-wizard-step-main">
+                    <div className="outline-wizard-step-indicator" aria-label={isDone ? '已完成' : isCurrent ? '当前' : '待执行'}>
+                      {isDone ? (
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M20.29 6.71a1 1 0 0 0-1.42 0l-8.88 8.88-3.88-3.88a1 1 0 1 0-1.42 1.42l4.59 4.59a1 1 0 0 0 1.42 0l9.59-9.59a1 1 0 0 0 0-1.42Z" />
+                        </svg>
+                      ) : isRunning ? (
+                        <span className="outline-wizard-spinner" aria-hidden="true" />
+                      ) : (
+                        <span>{stepNumber}</span>
+                      )}
+                    </div>
+                    <div className="outline-wizard-step-body">
+                      <div className="outline-wizard-step-head">
+                        <strong>{WIZARD_STEP_LABELS[step]}</strong>
+                        {isRunning && (
+                          <span className="outline-wizard-step-progress">{Math.max(0, Math.min(99, task?.progress || 0))}%</span>
+                        )}
+                        {isDone && <span className="outline-wizard-step-badge">已完成</span>}
+                        {isFailed && <span className="outline-wizard-step-badge is-failed">失败</span>}
+                      </div>
+                      <p>{WIZARD_STEP_DESCRIPTIONS[step]}</p>
+                      {isCurrentExecutable && (
+                        <div className="outline-wizard-step-action">
+                          <button
+                            type="button"
+                            className="outline-wizard-btn outline-wizard-btn-primary"
+                            disabled={generating || !projectOverview || !techRequirements}
+                            onClick={() => runWizardStep(step, { restart: false })}
+                          >
+                            {isFailed ? '重试此步' : '执行此步'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </li>
               );
             })}
           </ol>
-          <div className="outline-wizard-actions">
-            {wizardActive && (
-              <button type="button" className="outline-config-action" disabled={generating} onClick={() => runWizardStep(effectiveWizardSteps[0], { restart: true })}>
-                重新开始
-              </button>
-            )}
-            {wizardDone && (
-              <button type="button" className="outline-config-action" disabled={generating} onClick={() => runWizardStep(effectiveWizardSteps[0], { restart: true })}>
-                重新分步生成
-              </button>
-            )}
-            <button type="button" className="outline-config-action" onClick={() => setWizardMode(false)}>
-              退出向导模式
-            </button>
-          </div>
         </section>
       )}
 
