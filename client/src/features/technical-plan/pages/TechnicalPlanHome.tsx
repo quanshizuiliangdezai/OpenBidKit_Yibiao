@@ -318,7 +318,7 @@ function updateOutlineItemContent(items: OutlineItem[], itemId: string, content:
 }
 
 function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }: TechnicalPlanHomeProps) {
-  const { hydrated, state, setState } = useTechnicalPlanWorkflow();
+  const { hydrated, state, setState } = useTechnicalPlanWorkflow(workflowKind);
   const { showToast } = useToast();
   const { confirm } = useConfirmDialog();
   const [tenderMarkdown, setTenderMarkdown] = useState('');

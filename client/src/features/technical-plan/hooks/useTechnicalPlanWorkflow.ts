@@ -36,8 +36,11 @@ const initialState: TechnicalPlanState = {
   outlineData: null,
 };
 
-export function useTechnicalPlanWorkflow() {
-  const [state, setState] = useState<TechnicalPlanState>(initialState);
+export function useTechnicalPlanWorkflow(initialWorkflowKind: TechnicalPlanState['workflowKind']) {
+  const [state, setState] = useState<TechnicalPlanState>({
+    ...initialState,
+    workflowKind: initialWorkflowKind,
+  });
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
@@ -47,7 +50,12 @@ export function useTechnicalPlanWorkflow() {
       try {
         const cachedState = await technicalPlanStorage.load();
         if (mounted && cachedState) {
-          setState({ ...initialState, ...cachedState, outlineExpansionMode: cachedState.outlineExpansionMode || 'ai-complement' });
+          setState({
+            ...initialState,
+            ...cachedState,
+            workflowKind: initialWorkflowKind,
+            outlineExpansionMode: cachedState.outlineExpansionMode || 'ai-complement',
+          });
         }
       } catch (error) {
         console.warn('技术方案缓存读取失败', error);
@@ -63,7 +71,7 @@ export function useTechnicalPlanWorkflow() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [initialWorkflowKind]);
 
   return {
     hydrated,
