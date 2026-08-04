@@ -4,12 +4,27 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, SaveOutlineRequest, TechnicalPlanWorkflowKind } from '../types';
+import type { BackgroundTaskState, OutlineWizardState, OutlineWizardStep, SaveOutlineRequest, TechnicalPlanWorkflowKind } from '../types';
 import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base/types';
 import type { OutlineData, OutlineExpansionMode, OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
+
+const WIZARD_STEP_LABELS: Record<OutlineWizardStep, string> = {
+  extract: '提取原方案目录',
+  main: '生成主目录',
+  knowledge: '知识库增强',
+  review: '最终审核',
+  word: '字数调整与二审',
+};
+
+function getWizardSteps(isExpansion: boolean, expansionMode: OutlineExpansionMode): OutlineWizardStep[] {
+  if (!isExpansion) {
+    return ['main', 'knowledge', 'review', 'word'];
+  }
+  return expansionMode === 'original-only' ? ['extract'] : ['extract', 'main', 'knowledge', 'review', 'word'];
+}
 
 interface OutlineEditPageProps {
   workflowKind: TechnicalPlanWorkflowKind;
@@ -22,6 +37,7 @@ interface OutlineEditPageProps {
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
   contentTaskStatus?: BackgroundTaskState['status'];
+  outlineWizard?: OutlineWizardState | null;
   onOutlineConfigChange: (config: { referenceKnowledgeDocumentIds: string[]; outlineExpansionMode: OutlineExpansionMode; wordControlOptions: OutlineWordControlOptions }) => Promise<void>;
   onOutlineSaved: (request: SaveOutlineRequest) => Promise<void>;
   onSortGuardChange?: (guard: OutlineSortGuard | null) => void;
@@ -290,6 +306,7 @@ function OutlineEditPage({
   outlineWordControlSnapshot,
   referenceKnowledgeDocumentIds,
   outlineData,
+  outlineWizard,
   task,
   contentTaskStatus,
   onOutlineConfigChange,
@@ -329,6 +346,7 @@ function OutlineEditPage({
   const logListRef = useRef<HTMLDivElement | null>(null);
   const sortIdMapRef = useRef<Record<string, string>>({});
   const { showToast } = useToast();
+  const [wizardMode, setWizardMode] = useState(false);
   const activeOutlineData = sorting ? draftOutlineData : outlineData;
   const selectedItem = activeOutlineData && selectedItemId ? findOutlineItem(activeOutlineData.outline, selectedItemId) : null;
   const taskRunning = task?.status === 'running';
@@ -549,6 +567,12 @@ function OutlineEditPage({
       return;
     }
 
+    if (wizardMode) {
+      await runWizardStep(effectiveWizardSteps[0], { restart: wizardActive });
+      showToast('分步生成向导已启动', 'success');
+      return;
+    }
+
     try {
       const wordControlOptions = getNormalizedWordControlOptions();
       const startedNow = Date.now();
@@ -581,6 +605,58 @@ function OutlineEditPage({
       setStartingOutline(false);
       setLocalStartAt(null);
       showToast(error instanceof Error ? error.message : '启动目录生成任务失败', 'error');
+    }
+  };
+
+  const wizardActive = outlineWizard?.active === true;
+  const effectiveWizardSteps = outlineWizard
+    ? getWizardSteps(outlineWizard.workflowKind === 'existing-plan-expansion', outlineWizard.outlineExpansionMode)
+    : getWizardSteps(isExpansionWorkflow, isExpansionWorkflow ? (draftOutlineExpansionMode || outlineExpansionMode) : 'ai-complement');
+  const wizardCurrentIndex = outlineWizard ? outlineWizard.completedSteps.length : 0;
+  const wizardDone = Boolean(outlineWizard) && !wizardActive && (outlineWizard?.completedSteps.length || 0) >= effectiveWizardSteps.length;
+  const runningWizardStep = task?.status === 'running' && effectiveWizardSteps[wizardCurrentIndex] ? effectiveWizardSteps[wizardCurrentIndex] : null;
+  const failedWizardStep = task?.status === 'error' && effectiveWizardSteps[wizardCurrentIndex] ? effectiveWizardSteps[wizardCurrentIndex] : null;
+  const wizardStatusText = !outlineWizard
+    ? '未开始'
+    : wizardDone
+      ? '已完成'
+      : runningWizardStep
+        ? '进行中'
+        : failedWizardStep
+          ? '失败，可重试'
+          : wizardActive
+            ? `待执行：${WIZARD_STEP_LABELS[effectiveWizardSteps[wizardCurrentIndex]]}`
+            : '未开始';
+
+  const runWizardStep = async (step: OutlineWizardStep, options: { restart?: boolean } = {}) => {
+    if (!projectOverview || !techRequirements) {
+      showToast('请先完成招标文件解析', 'info');
+      return;
+    }
+    const wordControlOptions = getNormalizedWordControlOptions();
+    const nextOutlineExpansionMode = isExpansionWorkflow ? (draftOutlineExpansionMode || outlineExpansionMode) : 'ai-complement';
+    const isFirst = effectiveWizardSteps[0] === step;
+    try {
+      setStartingOutline(true);
+      await onOutlineConfigChange({
+        referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
+        outlineExpansionMode: nextOutlineExpansionMode,
+        wordControlOptions,
+      });
+      await window.yibiao?.tasks.startOutlineGenerationStep({
+        wizardStep: step,
+        wizardRestart: Boolean(options.restart),
+        ...(isFirst ? {
+          reference_knowledge_document_ids: draftKnowledgeDocumentIds,
+          outline_expansion_mode: nextOutlineExpansionMode,
+          word_control_options: wordControlOptions,
+          debug_force_outline_agent_repair: developerMode && draftForceOutlineAgentRepair,
+        } : {}),
+      });
+      showToast(`已开始「${WIZARD_STEP_LABELS[step]}」`, 'success');
+    } catch (error) {
+      setStartingOutline(false);
+      showToast(error instanceof Error ? error.message : '启动分步生成失败', 'error');
     }
   };
 
@@ -1110,6 +1186,10 @@ function OutlineEditPage({
           <p>{isExpansionWorkflow ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。` : `生成前选择参考知识库；当前参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
         </div>
         <div className="outline-command-actions">
+          <label className="outline-wizard-switch" title="分步向导：将目录生成拆分为多步，逐步确认与重试">
+            <input type="checkbox" checked={wizardMode} onChange={(event) => setWizardMode(event.target.checked)} />
+            <span>分步向导</span>
+          </label>
           <button
             type="button"
             className="outline-config-action"
@@ -1128,6 +1208,59 @@ function OutlineEditPage({
           </button>
         </div>
       </section>
+
+      {wizardMode && (
+        <section className="outline-wizard-panel">
+          <div className="analysis-result-head">
+            <strong>分步生成向导</strong>
+            <span>{wizardStatusText}</span>
+          </div>
+          <ol className="outline-wizard-steps">
+            {effectiveWizardSteps.map((step, index) => {
+              const stateClass = index < wizardCurrentIndex
+                ? 'is-done'
+                : index === wizardCurrentIndex
+                  ? (runningWizardStep ? 'is-running' : 'is-current')
+                  : 'is-pending';
+              const isCurrentExecutable = index === wizardCurrentIndex && !runningWizardStep;
+              return (
+                <li key={step} className={`outline-wizard-step ${stateClass}`}>
+                  <span className="step-index">{index + 1}</span>
+                  <span className="step-label">{WIZARD_STEP_LABELS[step]}</span>
+                  {runningWizardStep === step && (
+                    <span className="step-progress">{Math.max(0, Math.min(99, task?.progress || 0))}%</span>
+                  )}
+                  {isCurrentExecutable && (
+                    <button
+                      type="button"
+                      className="primary-action"
+                      disabled={generating || !projectOverview || !techRequirements}
+                      onClick={() => runWizardStep(step, { restart: false })}
+                    >
+                      {failedWizardStep === step ? '重试此步' : '执行此步'}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+          <div className="outline-wizard-actions">
+            {wizardActive && (
+              <button type="button" className="outline-config-action" disabled={generating} onClick={() => runWizardStep(effectiveWizardSteps[0], { restart: true })}>
+                重新开始
+              </button>
+            )}
+            {wizardDone && (
+              <button type="button" className="outline-config-action" disabled={generating} onClick={() => runWizardStep(effectiveWizardSteps[0], { restart: true })}>
+                重新分步生成
+              </button>
+            )}
+            <button type="button" className="outline-config-action" onClick={() => setWizardMode(false)}>
+              退出向导模式
+            </button>
+          </div>
+        </section>
+      )}
 
       <section className="outline-generation-workspace">
         <aside className="outline-progress-panel">

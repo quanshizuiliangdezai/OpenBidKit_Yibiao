@@ -173,6 +173,7 @@ const bridge = {
     startBidSectionExtraction: (payload) => ipcRenderer.invoke('tasks:start-bid-section-extraction', payload),
     startBidAnalysis: (payload) => ipcRenderer.invoke('tasks:start-bid-analysis', payload),
     startOutlineGeneration: (payload) => ipcRenderer.invoke('tasks:start-outline-generation', payload),
+    startOutlineGenerationStep: (payload) => ipcRenderer.invoke('tasks:start-outline-step', payload),
     startGlobalFactsGeneration: (payload) => ipcRenderer.invoke('tasks:start-global-facts-generation', payload),
     startContentGeneration: (payload) => ipcRenderer.invoke('tasks:start-content-generation', payload),
     pauseContentGeneration: () => ipcRenderer.invoke('tasks:pause-content-generation'),

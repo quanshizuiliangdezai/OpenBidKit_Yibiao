@@ -17,6 +17,7 @@ const tenderOriginalMarkdownRelativePath = path.join('technical-plan', 'tender-o
 const tenderSourceFilesDirRelativePath = path.join('technical-plan', 'tender-files').replace(/\\/g, '/');
 const originalPlanMarkdownRelativePath = path.join('technical-plan', 'original-plan.md').replace(/\\/g, '/');
 const originalOutlineRuntimeFileName = 'original-outline-runtime.json';
+const outlineWizardRuntimeFileName = 'outline-wizard-runtime.json';
 const defaultOutlineWordControlOptions = Object.freeze({
   enabled: false,
   minimumWords: 0,
@@ -58,6 +59,7 @@ const initialState = {
   contentIllustrationPlan: undefined,
   contentGenerationRuntime: undefined,
   outlineData: null,
+  outlineWizard: null,
 };
 
 const taskFieldTypes = {
@@ -380,6 +382,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
   const tenderSourceFilesDir = path.join(path.dirname(tenderMarkdownPath), 'tender-files');
   const originalPlanMarkdownPath = getTechnicalPlanOriginalPlanMarkdownPath(app);
   const originalOutlineRuntimePath = path.join(path.dirname(originalPlanMarkdownPath), originalOutlineRuntimeFileName);
+  const outlineWizardRuntimePath = path.join(path.dirname(originalPlanMarkdownPath), outlineWizardRuntimeFileName);
   const illustrationsDir = getTechnicalPlanIllustrationsDir(app);
   const generatedIllustrationsDir = getTechnicalPlanGeneratedIllustrationsDir(app);
 
@@ -714,6 +717,43 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     } catch {
       clearOriginalOutlineRuntime();
       return null;
+    }
+  }
+
+  function clearOutlineWizardRuntime() {
+    if (!fs.existsSync(outlineWizardRuntimePath)) {
+      return;
+    }
+    fs.rmSync(outlineWizardRuntimePath, { force: true });
+  }
+
+  function readOutlineWizardRuntime() {
+    if (!fs.existsSync(outlineWizardRuntimePath)) {
+      return null;
+    }
+    try {
+      const runtime = safeJsonParse(fs.readFileSync(outlineWizardRuntimePath, 'utf-8'), null);
+      if (!runtime || typeof runtime !== 'object' || Array.isArray(runtime)) {
+        clearOutlineWizardRuntime();
+        return null;
+      }
+      return runtime;
+    } catch {
+      clearOutlineWizardRuntime();
+      return null;
+    }
+  }
+
+  function saveOutlineWizardRuntime(runtime) {
+    const targetDir = path.dirname(outlineWizardRuntimePath);
+    const tempPath = path.join(targetDir, `outline-wizard-runtime-${Date.now()}.tmp.json`);
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(tempPath, `${JSON.stringify(runtime || {}, null, 2)}\n`, 'utf-8');
+    try {
+      fs.renameSync(tempPath, outlineWizardRuntimePath);
+    } catch (error) {
+      if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true });
+      throw error;
     }
   }
 
@@ -1454,6 +1494,14 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       if (hasOwn(partial, field)) saveTask(type, partial[field]);
     }
 
+    if (hasOwn(partial, 'outlineWizard')) {
+      if (partial.outlineWizard) {
+        saveOutlineWizardRuntime(partial.outlineWizard);
+      } else {
+        clearOutlineWizardRuntime();
+      }
+    }
+
     if (hasOwn(partial, 'outlineData')) {
       if (partial.outlineData === null) {
         db.prepare('DELETE FROM technical_plan_outline_nodes').run();
@@ -1548,6 +1596,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       contentGenerationSections: loadContentSections(outlineData),
       contentGenerationPlans: loadContentPlans(),
       outlineData,
+      outlineWizard: readOutlineWizardRuntime(),
     };
   }
 

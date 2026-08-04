@@ -737,6 +737,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           return {
             ...prev,
             outlineGenerationTask: trimTaskLogs(technicalPlan.outlineGenerationTask) || latestTask,
+            outlineWizard: hasOwnField(technicalPlan, 'outlineWizard') ? technicalPlan.outlineWizard : prev.outlineWizard,
             outlineMode: technicalPlan.outlineMode ?? prev.outlineMode,
             outlineExpansionMode: technicalPlan.outlineExpansionMode ?? prev.outlineExpansionMode,
             outlineWordControlOptions: technicalPlan.outlineWordControlOptions ?? prev.outlineWordControlOptions,
@@ -1184,6 +1185,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           outlineData={state.outlineData}
+          outlineWizard={state.outlineWizard}
           task={state.outlineGenerationTask}
           contentTaskStatus={state.contentGenerationTask?.status}
           onOutlineConfigChange={saveOutlineConfig}

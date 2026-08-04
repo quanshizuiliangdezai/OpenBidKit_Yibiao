@@ -7,7 +7,22 @@ export type BidAnalysisTaskStatus = 'idle' | 'running' | 'success' | 'error';
 export type BidSectionMode = 'single' | 'multiple';
 export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error';
 export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'global-facts-generation' | 'content-generation';
-export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
+export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error' | 'wizard-step-done';
+
+export type OutlineWizardStep = 'extract' | 'main' | 'knowledge' | 'review' | 'word';
+
+export interface OutlineWizardState {
+  active: boolean;
+  completedSteps: OutlineWizardStep[];
+  currentStep: OutlineWizardStep | null;
+  workflowKind: TechnicalPlanWorkflowKind;
+  outlineExpansionMode: OutlineExpansionMode;
+  wordControlOptions: OutlineWordControlOptions;
+  referenceKnowledgeDocumentIds: string[];
+  originalOnly: boolean;
+  oldOutline: OutlineData | null;
+  groups: unknown[];
+}
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
 export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'section-word-adjusting' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'final-section-word-adjusting' | 'total-word-adjusting' | 'illustration-planning' | 'illustration-generating' | 'done';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
@@ -330,4 +345,5 @@ export interface TechnicalPlanState {
   contentIllustrationPlan?: ContentIllustrationPlanState;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   outlineData: OutlineData | null;
+  outlineWizard?: OutlineWizardState | null;
 }

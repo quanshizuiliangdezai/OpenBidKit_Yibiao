@@ -3,7 +3,7 @@ const { runBidSectionExtractionTask } = require('./bidSectionExtractionTask.cjs'
 const { runBidAnalysisTask } = require('./bidAnalysisTask.cjs');
 const { runContentGenerationTask } = require('./contentGenerationTask.cjs');
 const { runGlobalFactsTask } = require('./globalFactsTask.cjs');
-const { runOutlineGenerationTask } = require('./outlineGenerationTask.cjs');
+const { runOutlineGenerationTask, runOutlineWizardStep } = require('./outlineGenerationTask.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
 
 const taskDefinitions = {
@@ -301,6 +301,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         'outlineWordControlOptions',
         'outlineWordControlSnapshot',
         'referenceKnowledgeDocumentIds',
+        'outlineWizard',
       ]);
       if (task.status === 'success' || state.outlineData === null || hasOwn(eventPatch, 'outlineData')) {
         copyPatchFields(patch, state, [
@@ -879,6 +880,16 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         outlineExpansionMode: payload?.outline_expansion_mode === 'original-only' ? 'original-only' : 'ai-complement',
         outlineWordControlOptions: payload?.word_control_options,
         referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids) ? payload.reference_knowledge_document_ids : [],
+      });
+    },
+    startOutlineGenerationStep(payload) {
+      const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
+      return startManagedTask('outline-generation', payload, runOutlineWizardStep, {
+        outlineMode: 'aligned',
+        outlineExpansionMode: payload?.outline_expansion_mode === 'original-only' ? 'original-only' : 'ai-complement',
+        outlineWordControlOptions: payload?.word_control_options,
+        referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids) ? payload.reference_knowledge_document_ids : [],
+        outlineWizard: technicalPlan.outlineWizard || null,
       });
     },
     startGlobalFactsGeneration(payload) {
