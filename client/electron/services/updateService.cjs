@@ -36,15 +36,15 @@ function compareVersions(a, b) {
 }
 
 function normalizeUpdateChannel(value) {
-  if (value === 'cloudflare' || value === 'atomgit') {
+  if (value === 'cloudflare' || value === 'atomgit' || value === 'github') {
     return value;
   }
-  return 'atomgit';
+  return 'github';
 }
 
 function getUpdateChannel(configStore) {
   if (!configStore) {
-    return 'atomgit';
+    return 'github';
   }
   const config = configStore.load();
   return normalizeUpdateChannel(config.update_channel);
