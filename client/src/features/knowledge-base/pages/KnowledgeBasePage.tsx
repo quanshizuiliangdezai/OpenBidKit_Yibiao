@@ -982,6 +982,14 @@ function KnowledgeBasePage() {
           return doc;
         }),
       }));
+      // 实时轮询：对所有处于非终态（分析中/排队/等待）的文档启动轮询，
+      // 不再仅限于本次会话上传/同步的文档，确保任何人、任何时间传入的文档状态与进度都实时刷新。
+      for (const doc of documents) {
+        const s = (doc.status || 'pending') as KnowledgeDocumentStatus;
+        if (s !== 'success' && s !== 'error') {
+          startTeamAnalysisPolling(doc.id, doc.folder_id ?? '');
+        }
+      }
       setActiveFolderId((currentId) => (
         folders.some((folder) => folder.id === currentId) ? currentId : folders[0]?.id || ''
       ));
@@ -1043,6 +1051,13 @@ function KnowledgeBasePage() {
           return doc;
         }),
       }));
+      // 实时轮询：对所有非终态个人库文档启动轮询（team- 同步副本分析已随同步复制，跳过）。
+      for (const doc of documents) {
+        const s = (doc.status || 'pending') as KnowledgeDocumentStatus;
+        if (s !== 'success' && s !== 'error' && !String(doc.id).startsWith('team-')) {
+          startPersonalAnalysisPolling(doc.id, doc.folder_id ?? '');
+        }
+      }
       setActiveFolderId((currentId) => (
         folders.some((folder: KnowledgeFolder) => folder.id === currentId) ? currentId : folders[0]?.id || ''
       ));
