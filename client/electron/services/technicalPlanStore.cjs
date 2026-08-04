@@ -288,7 +288,7 @@ function getBidAnalysisTaskIdsForConfig(mode, selectedTaskIds) {
 }
 
 function isValidOutlineMode(value) {
-  return value === 'aligned';
+  return value === 'aligned' || value === 'response-file';
 }
 
 function isValidOutlineExpansionMode(value) {
@@ -1647,9 +1647,9 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     return loadTechnicalPlan();
   }
 
-  function saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineExpansionMode, wordControlOptions } = {}) {
+  function saveOutlineConfig({ referenceKnowledgeDocumentIds, outlineMode, outlineExpansionMode, wordControlOptions } = {}) {
     return updateTechnicalPlan({
-      outlineMode: 'aligned',
+      outlineMode: isValidOutlineMode(outlineMode) ? outlineMode : 'aligned',
       outlineExpansionMode: isValidOutlineExpansionMode(outlineExpansionMode) ? outlineExpansionMode : 'ai-complement',
       outlineWordControlOptions: normalizeOutlineWordControlOptions(wordControlOptions),
       referenceKnowledgeDocumentIds,
