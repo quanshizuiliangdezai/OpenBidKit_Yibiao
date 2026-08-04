@@ -215,6 +215,7 @@ const bridge = {
     listPending: () => ipcRenderer.invoke('kb-auth:list-pending'),
     review: (payload) => ipcRenderer.invoke('kb-auth:review', payload),
     resetPassword: (payload) => ipcRenderer.invoke('kb-auth:reset-password', payload),
+    verifyAdminPassword: (payload) => ipcRenderer.invoke('kb-auth:verify-admin-password', payload),
     setStatus: (payload) => ipcRenderer.invoke('kb-auth:set-status', payload),
     deleteEmployee: (payload) => ipcRenderer.invoke('kb-auth:delete-employee', payload),
     updateEmployee: (payload) => ipcRenderer.invoke('kb-auth:update-employee', payload),
