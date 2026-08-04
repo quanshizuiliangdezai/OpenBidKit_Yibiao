@@ -63,6 +63,20 @@ def _trigger_worker_analysis(document_id, library_type='team'):
         log('[worker] 触发分析失败 doc=%s: %s' % (document_id, e))
 
 
+def _cancel_worker_analysis(document_id):
+    """通知 Worker 取消某文档的分析（fire-and-forget，失败仅记日志）。"""
+    try:
+        import urllib.request
+        payload = json.dumps({'documentId': document_id}).encode('utf-8')
+        req = urllib.request.Request(
+            WORKER_URL + '/cancel', data=payload,
+            headers={'Content-Type': 'application/json'}, method='POST')
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            log('[worker] 已通知取消分析 doc=%s -> %s' % (document_id, resp.status))
+    except Exception as e:
+        log('[worker] 通知取消分析失败 doc=%s: %s' % (document_id, e))
+
+
 def _mineru_parse_pdf(file_bytes, filename, provider, token):
     """调用 MinerU 云端解析 PDF，返回 (success: bool, markdown_or_error: str)。"""
     import urllib.request
@@ -1138,6 +1152,15 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             pdf_image_parser_provider = (data.get('pdf_image_parser_provider') or 'local').strip() or 'local'
             if pdf_image_parser_provider not in ('local', 'mineru-accurate-api', 'mineru-agent-api'):
                 pdf_image_parser_provider = 'local'
+            analysis_concurrency_raw = data.get('analysis_concurrency')
+            try:
+                analysis_concurrency = int(analysis_concurrency_raw) if analysis_concurrency_raw is not None else 3
+            except (ValueError, TypeError):
+                analysis_concurrency = 3
+            if analysis_concurrency < 1:
+                analysis_concurrency = 1
+            if analysis_concurrency > 20:
+                analysis_concurrency = 20
             if not base_url:
                 return self._send(400, {'error': 'base_url 不能为空'})
             # api_key 为空串或 null 时清除；否则更新。前端若传 '__UNCHANGED__' 表示保留原值
@@ -1152,7 +1175,8 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             elif mineru_token is not None:
                 mineru_token = mineru_token.strip() or None
             kb_db.save_model_config(base_url, api_key, analysis_model, qa_model, embedding_model,
-                                    file_parser_provider, pdf_image_parser_provider, mineru_token)
+                                    file_parser_provider, pdf_image_parser_provider, mineru_token,
+                                    analysis_concurrency)
             audit_event(
                 account_id=admin['id'], account_name=admin.get('display_name') or admin.get('username'),
                 role='admin', action='admin', target_type='model_config', target_id='1',
@@ -2116,7 +2140,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 conn.close()
 
     def _personal_delete_document(self, doc_id, employee):
-        """个人库软删文档（进回收站）。"""
+        """个人库物理删除文档：删分析记录、文档记录、磁盘文件（不进回收站）。"""
         doc_id = str(doc_id)
         with _MASTER_LOCK:
             conn = _master_db_conn()
@@ -2125,16 +2149,29 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             try:
                 self._ensure_deleted_col(conn)
                 row = conn.execute(
-                    "SELECT document_id, owner_id FROM knowledge_documents WHERE document_id=?", (doc_id,)).fetchone()
+                    "SELECT document_id, folder_id, owner_id, source_path FROM knowledge_documents WHERE document_id=?",
+                    (doc_id,)).fetchone()
                 if not row:
                     return False, '文档不存在'
                 if employee and employee.get('role') != 'admin' and row['owner_id'] is not None and row['owner_id'] != employee['id']:
                     return False, '只能删除自己上传的个人文档'
-                ts = datetime.datetime.now().isoformat()
-                by = str(employee['id']) if employee else None
-                conn.execute(
-                    "UPDATE knowledge_documents SET deleted_at=?, deleted_by=? WHERE document_id=?", (ts, by, doc_id))
+                # 删除分析记录
+                _master_delete_analysis(doc_id)
+                # 删除文档主记录
+                conn.execute("DELETE FROM knowledge_documents WHERE document_id=?", (doc_id,))
                 conn.commit()
+                # 删除物理文件/目录
+                try:
+                    doc_dir = self._personal_doc_dir(row['folder_id'], doc_id)
+                    if os.path.isdir(doc_dir):
+                        import shutil
+                        shutil.rmtree(doc_dir, ignore_errors=True)
+                    elif row['source_path']:
+                        fp = os.path.join(MASTER_KB, row['source_path'])
+                        if os.path.exists(fp):
+                            os.remove(fp)
+                except Exception:
+                    pass
                 return True, None
             finally:
                 conn.close()
@@ -3114,6 +3151,7 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                     'embedding_model': cfg['embedding_model'],
                     'file_parser_provider': cfg.get('file_parser_provider') or 'local',
                     'pdf_image_parser_provider': cfg.get('pdf_image_parser_provider') or 'local',
+                    'analysis_concurrency': cfg.get('analysis_concurrency') if cfg.get('analysis_concurrency') is not None else 3,
                     'has_mineru_token': bool(cfg.get('mineru_token')),
                     'has_api_key': bool(cfg['api_key']),
                     'updated_at': cfg['updated_at'],
@@ -3527,17 +3565,17 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
                 return self._send(404, {'error': '文档不存在'})
             if employee['role'] != 'admin' and doc['owner_id'] != employee['id']:
                 return self._send(403, {'error': '只能删除自己上传的文档'})
-            ok, err = kb_db.delete_document(m.group(1), employee['id'])
+            doc_id = m.group(1)
+            # 1) 通知 Worker 停止分析（fire-and-forget）
+            threading.Thread(target=_cancel_worker_analysis, args=(doc_id,), daemon=True).start()
+            # 2) 物理删除：分析记录、文档记录、磁盘文件
+            ok, err = kb_db._hard_delete_document(doc_id)
             if not ok:
                 return self._send(400, {'error': err})
-            try:
-                kb_db.delete_team_analysis(m.group(1))
-            except Exception:
-                pass
             audit_event(
                 account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
-                role=employee.get('role'), action='doc', target_type='document', target_id=m.group(1),
-                detail='删除文档: %s' % (doc.get('title') or doc.get('file_name') or m.group(1)),
+                role=employee.get('role'), action='doc', target_type='document', target_id=doc_id,
+                detail='删除文档: %s' % (doc.get('title') or doc.get('file_name') or doc_id),
                 ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '文档已删除'})
         m = re.match(r'^/api/personal/folders/([^/]+)$', path)
@@ -3553,13 +3591,16 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             return self._send(200, {'success': True, 'message': '文件夹已删除'})
         m = re.match(r'^/api/personal/documents/([^/]+)$', path)
         if m:
-            ok, err = self._personal_delete_document(m.group(1), employee)
+            doc_id = m.group(1)
+            # 通知 Worker 停止分析（fire-and-forget）
+            threading.Thread(target=_cancel_worker_analysis, args=(doc_id,), daemon=True).start()
+            ok, err = self._personal_delete_document(doc_id, employee)
             if not ok:
                 return self._send(400, {'error': err})
             audit_event(
                 account_id=employee['id'], account_name=employee.get('display_name') or employee['username'],
-                role=employee.get('role'), action='doc', target_type='personal_document', target_id=m.group(1),
-                detail='删除个人文档（进回收站）', ip=_client_ip(self))
+                role=employee.get('role'), action='doc', target_type='personal_document', target_id=doc_id,
+                detail='删除个人文档', ip=_client_ip(self))
             return self._send(200, {'success': True, 'message': '文档已删除'})
         m = re.match(r'^/api/admin/groups/(\d+)/members/(\d+)$', path)
         if m:

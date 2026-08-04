@@ -38,7 +38,7 @@ function readModelConfig() {
   try {
     const db = new Database(KB_DB, { readonly: true, fileMustExist: true });
     row = db.prepare('SELECT base_url, api_key, analysis_model, qa_model, embedding_model, '
-                     + 'file_parser_provider, pdf_image_parser_provider, mineru_token FROM model_config WHERE id=1').get();
+                     + 'file_parser_provider, pdf_image_parser_provider, mineru_token, analysis_concurrency FROM model_config WHERE id=1').get();
     db.close();
   } catch (e) {
     console.warn('[worker] 读取 model_config 失败，使用默认值:', e.message);
@@ -47,6 +47,7 @@ function readModelConfig() {
     base_url: (row && row.base_url) || 'http://127.0.0.1:15005/v1',
     api_key: (row && row.api_key) || '',
     model_name: (row && row.analysis_model) || 'sensenova-6.7-flash-lite',
+    analysis_concurrency: (row && row.analysis_concurrency != null) ? parseInt(row.analysis_concurrency, 10) : 3,
     // aiService 可能读取的其它字段，给安全默认值
     image_model: { provider: 'custom', model_name: '', base_url: '', api_key: '' },
     embedding_model: row && row.embedding_model ? { model_name: row.embedding_model } : null,
@@ -211,7 +212,18 @@ function makeFakeWebContents(documentId, libraryType) {
 // ---------------- 任务队列 ----------------
 const queue = [];
 let running = 0;
-const MAX_CONCURRENCY = parseInt(process.env.KB_WORKER_CONCURRENCY || '3', 10);
+const cancelledTasks = new Set();
+function getMaxConcurrency() {
+  // 优先以 model_config（管理员在「模型配置」页设置）为准；未配置时回退环境变量 / 默认 3
+  const cfg = readModelConfig();
+  const cfgVal = cfg && cfg.analysis_concurrency;
+  if (typeof cfgVal === 'number' && cfgVal > 0) return Math.min(cfgVal, 20);
+  if (process.env.KB_WORKER_CONCURRENCY) {
+    const envVal = parseInt(process.env.KB_WORKER_CONCURRENCY, 10);
+    if (!Number.isNaN(envVal) && envVal > 0) return envVal;
+  }
+  return 3;
+}
 
 async function resolveDocumentMeta(documentId, libraryType) {
   if (libraryType === 'personal') {
@@ -248,11 +260,19 @@ async function runTask(task) {
   const fakeWc = makeFakeWebContents(documentId, libraryType || 'team');
   taskStates.set(String(documentId), { status: 'pending', progress: 0, message: '排队中', updatedAt: new Date().toISOString() });
   try {
+    if (isCancelled(documentId)) {
+      taskStates.set(String(documentId), { status: 'error', progress: 0, message: '已取消', updatedAt: new Date().toISOString() });
+      return;
+    }
     // 先取元数据：个人库文件定位依赖 folder_id + file_name，必须先查 meta。
     const meta = await resolveDocumentMeta(documentId, libraryType);
     const filePath = resolveDocumentFile(documentId, libraryType, meta);
     if (!filePath) {
       taskStates.set(String(documentId), { status: 'error', progress: 0, message: '服务器未找到文档文件', updatedAt: new Date().toISOString() });
+      return;
+    }
+    if (isCancelled(documentId)) {
+      taskStates.set(String(documentId), { status: 'error', progress: 0, message: '已取消', updatedAt: new Date().toISOString() });
       return;
     }
     const folderId = meta ? meta.folder_id : 0;
@@ -265,8 +285,18 @@ async function runTask(task) {
       fs.mkdirSync(path.dirname(stagedPath), { recursive: true });
       fs.copyFileSync(filePath, stagedPath);
     }
+    if (isCancelled(documentId)) {
+      try { fs.unlinkSync(stagedPath); } catch { /* ignore */ }
+      taskStates.set(String(documentId), { status: 'error', progress: 0, message: '已取消', updatedAt: new Date().toISOString() });
+      return;
+    }
     // 用 await 版：等整条分析管线（转 MD→切块→抽取→saveAnalysis 回写服务器）真正跑完再返回。
     const finalDoc = await kbService.analyzeExternalFileAwait(documentId, stagedPath, fileName, folderId, fakeWc, libraryType || 'team');
+    if (isCancelled(documentId)) {
+      try { fs.unlinkSync(stagedPath); } catch { /* ignore */ }
+      taskStates.set(String(documentId), { status: 'error', progress: 0, message: '已取消', updatedAt: new Date().toISOString() });
+      return;
+    }
     const finalStatus = finalDoc && finalDoc.status;
     const s = pickStats(finalDoc);
     if (finalStatus === 'success') {
@@ -294,7 +324,7 @@ async function runTask(task) {
 }
 
 function pump() {
-  while (running < MAX_CONCURRENCY && queue.length > 0) {
+  while (running < getMaxConcurrency() && queue.length > 0) {
     const task = queue.shift();
     running += 1;
     runTask(task).finally(() => { running -= 1; pump(); });
@@ -307,9 +337,26 @@ function enqueue(documentId, libraryType) {
   if (existing && (existing.status === 'pending' || existing.status === 'analyzing')) {
     return { accepted: false, reason: '已在分析中' };
   }
+  cancelledTasks.delete(key);
   queue.push({ documentId: key, libraryType });
   pump();
   return { accepted: true };
+}
+
+function cancel(documentId) {
+  const key = String(documentId);
+  cancelledTasks.add(key);
+  const idx = queue.findIndex((t) => String(t.documentId) === key);
+  if (idx !== -1) queue.splice(idx, 1);
+  const st = taskStates.get(key);
+  if (st && st.status !== 'success' && st.status !== 'error') {
+    taskStates.set(key, { ...st, status: 'error', progress: 0, message: '已取消', updatedAt: new Date().toISOString() });
+  }
+  return { cancelled: true };
+}
+
+function isCancelled(documentId) {
+  return cancelledTasks.has(String(documentId));
 }
 
 // ---------------- HTTP 接口 ----------------
@@ -328,6 +375,14 @@ const server = http.createServer(async (req, res) => {
       if (!documentId) return send(400, { error: '缺少 documentId' });
       const r = enqueue(documentId, libraryType);
       return send(r.accepted ? 200 : 409, r);
+    }
+    if (req.method === 'POST' && url.pathname === '/cancel') {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      const { documentId } = JSON.parse(body || '{}');
+      if (!documentId) return send(400, { error: '缺少 documentId' });
+      const r = cancel(documentId);
+      return send(200, r);
     }
     if (req.method === 'GET' && url.pathname.startsWith('/status/')) {
       const id = url.pathname.split('/status/')[1];
@@ -392,4 +447,5 @@ server.listen(WORKER_PORT, async () => {
   const cfg = readModelConfig();
   console.log(`[worker] 模型配置 base_url=${cfg.base_url} model=${cfg.model_name}`);
   console.log(`[worker] 文件解析方式：${cfg.components?.file_parser?.provider || 'local'}（复用客户端本地解析逻辑）`);
+  console.log(`[worker] 分析并发数：${getMaxConcurrency()}`);
 });

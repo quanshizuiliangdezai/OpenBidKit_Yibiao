@@ -154,6 +154,7 @@ def init_db():
             file_parser_provider TEXT NOT NULL DEFAULT 'local',
             pdf_image_parser_provider TEXT NOT NULL DEFAULT 'mineru-agent-api',
             mineru_token    TEXT,
+            analysis_concurrency INTEGER NOT NULL DEFAULT 3,
             updated_at      TEXT NOT NULL
         );
         -- 知识库问答会话（按账号隔离，软删除，跨设备可读）
@@ -1705,6 +1706,8 @@ def _ensure_model_config_row():
                 conn.execute("ALTER TABLE model_config ADD COLUMN mineru_token TEXT")
             if 'pdf_image_parser_provider' not in cols:
                 conn.execute("ALTER TABLE model_config ADD COLUMN pdf_image_parser_provider TEXT NOT NULL DEFAULT 'mineru-agent-api'")
+            if 'analysis_concurrency' not in cols:
+                conn.execute("ALTER TABLE model_config ADD COLUMN analysis_concurrency INTEGER NOT NULL DEFAULT 3")
             # DDL 必须显式提交：本函数仅在配置行已存在时不走下面的 commit 分支，
             # 否则 ALTER 会随连接关闭被回滚（实测导致字段丢失）。
             conn.commit()
@@ -1714,9 +1717,9 @@ def _ensure_model_config_row():
             now = datetime.datetime.now().isoformat()
             conn.execute(
                 "INSERT INTO model_config (id, analysis_model, qa_model, embedding_model, base_url, api_key, "
-                "file_parser_provider, mineru_token, updated_at) "
+                "file_parser_provider, mineru_token, analysis_concurrency, updated_at) "
                 "VALUES (1, 'sensenova-6.7-flash-lite', 'sensenova-6.7-flash-lite', NULL, "
-                "'http://127.0.0.1:15005/v1', NULL, 'local', NULL, ?)",
+                "'http://127.0.0.1:15005/v1', NULL, 'local', NULL, 3, ?)",
                 (now,))
             conn.commit()
     finally:
@@ -1731,7 +1734,7 @@ def get_model_config():
         try:
             row = conn.execute(
                 "SELECT base_url, api_key, analysis_model, qa_model, embedding_model, "
-                "file_parser_provider, pdf_image_parser_provider, mineru_token, updated_at "
+                "file_parser_provider, pdf_image_parser_provider, mineru_token, analysis_concurrency, updated_at "
                 "FROM model_config WHERE id=1").fetchone()
         finally:
             conn.close()
@@ -1740,6 +1743,7 @@ def get_model_config():
             'base_url': 'http://127.0.0.1:15005/v1', 'api_key': None,
             'analysis_model': 'sensenova-6.7-flash-lite', 'qa_model': 'sensenova-6.7-flash-lite',
             'embedding_model': None, 'file_parser_provider': 'local', 'pdf_image_parser_provider': 'local', 'mineru_token': None,
+            'analysis_concurrency': 3,
             'updated_at': None,
         }
     return {
@@ -1751,12 +1755,14 @@ def get_model_config():
         'file_parser_provider': row['file_parser_provider'] or 'local',
         'pdf_image_parser_provider': row['pdf_image_parser_provider'] or 'local',
         'mineru_token': row['mineru_token'],
+        'analysis_concurrency': row['analysis_concurrency'] if row['analysis_concurrency'] is not None else 3,
         'updated_at': row['updated_at'],
     }
 
 
 def save_model_config(base_url, api_key, analysis_model, qa_model, embedding_model,
-                      file_parser_provider='local', pdf_image_parser_provider=None, mineru_token=None):
+                      file_parser_provider='local', pdf_image_parser_provider=None, mineru_token=None,
+                      analysis_concurrency=3):
     """更新全局模型配置（upsert id=1）。"""
     _ensure_model_config_row()
     with _lock:
@@ -1764,9 +1770,11 @@ def save_model_config(base_url, api_key, analysis_model, qa_model, embedding_mod
         try:
             conn.execute(
                 "UPDATE model_config SET base_url=?, api_key=?, analysis_model=?, qa_model=?, "
-                "embedding_model=?, file_parser_provider=?, pdf_image_parser_provider=?, mineru_token=?, updated_at=? WHERE id=1",
+                "embedding_model=?, file_parser_provider=?, pdf_image_parser_provider=?, mineru_token=?, "
+                "analysis_concurrency=?, updated_at=? WHERE id=1",
                 (base_url, api_key, analysis_model, qa_model, embedding_model,
                  file_parser_provider or 'local', pdf_image_parser_provider or 'local', mineru_token,
+                 int(analysis_concurrency) if analysis_concurrency is not None else 3,
                  datetime.datetime.now().isoformat()))
             conn.commit()
         finally:

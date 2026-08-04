@@ -2327,7 +2327,6 @@ function KnowledgeBasePage() {
             </div>
           )}
 
-          <button type="button" className="secondary-action is-ghost" onClick={() => void openTrash()}>回收站</button>
         </div>
       </section>
 

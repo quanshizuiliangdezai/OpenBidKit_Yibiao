@@ -114,12 +114,14 @@ export default function ModelConfigPage() {
   const [mineruToken, setMineruToken] = useState('');
   const [showMineruToken, setShowMineruToken] = useState(false);
   const [testingMineruToken, setTestingMineruToken] = useState(false);
+  const [analysisConcurrency, setAnalysisConcurrency] = useState<number>(3);
   const [serverConfig, setServerConfig] = useState<{
     base_url?: string;
     analysis_model?: string;
     embedding_model?: string;
     file_parser_provider?: string;
     pdf_image_parser_provider?: string;
+    analysis_concurrency?: number;
     has_mineru_token?: boolean;
   }>({});
 
@@ -151,11 +153,13 @@ export default function ModelConfigPage() {
           embedding_model: res.data.embedding_model || '',
           file_parser_provider: res.data.file_parser_provider || 'local',
           pdf_image_parser_provider: res.data.pdf_image_parser_provider || 'local',
+          analysis_concurrency: typeof res.data.analysis_concurrency === 'number' ? res.data.analysis_concurrency : 3,
           has_mineru_token: Boolean(res.data.has_mineru_token),
         });
         setGlobalEmbedding(res.data.embedding_model || '');
         setFileParserProvider((res.data.file_parser_provider as 'local' | 'mineru-accurate-api' | 'mineru-agent-api') || 'local');
         setPdfImageParserProvider((res.data.pdf_image_parser_provider as 'local' | 'mineru-accurate-api' | 'mineru-agent-api') || 'local');
+        setAnalysisConcurrency(typeof res.data.analysis_concurrency === 'number' ? res.data.analysis_concurrency : 3);
       }
     } catch {
       /* 忽略读取失败 */
@@ -264,6 +268,7 @@ export default function ModelConfigPage() {
         file_parser_provider: fileParserProvider,
         pdf_image_parser_provider: pdfImageParserProvider,
         mineru_token: mineruToken.trim() ? mineruToken.trim() : '__UNCHANGED__',
+        analysis_concurrency: analysisConcurrency,
       });
       if (res?.success) showToast('已应用到服务器（个人库 + 团队库分析 + 问答生效）', 'success');
       else showToast(res?.error || '应用失败', 'error');
@@ -426,6 +431,28 @@ export default function ModelConfigPage() {
                   </div>
                 </label>
 
+                <label className="model-config-field">
+                  <div className="model-config-field-head">
+                    <span className="model-config-field-label">分析并发数</span>
+                    <span className="model-config-field-hint">同时分析几个文档，1–20，数值越高占用服务器资源越多，保存后 Worker 约 30 秒内生效</span>
+                  </div>
+                  <div className="model-config-input-wrap">
+                    <span className="input-icon"><CpuIcon /></span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      step={1}
+                      value={analysisConcurrency}
+                      onChange={(event) => {
+                        const v = parseInt(event.target.value, 10);
+                        setAnalysisConcurrency(Number.isNaN(v) ? 1 : Math.max(1, Math.min(20, v)));
+                      }}
+                      placeholder="3"
+                    />
+                  </div>
+                </label>
+
                 {(fileParserProvider === 'mineru-accurate-api' || pdfImageParserProvider === 'mineru-accurate-api') && (
                   <label className="model-config-field">
                     <div className="model-config-field-head">
@@ -528,6 +555,16 @@ export default function ModelConfigPage() {
                     </div>
                     <span className="model-config-server-value">
                       {parserLabel(serverConfig.pdf_image_parser_provider)}
+                    </span>
+                  </div>
+
+                  <div className="model-config-server-item">
+                    <div className="model-config-server-item-head">
+                      <span className="model-config-server-item-icon model"><CpuIcon /></span>
+                      <span className="model-config-server-label">分析并发数</span>
+                    </div>
+                    <span className="model-config-server-value">
+                      {serverConfig.analysis_concurrency ?? 3}
                     </span>
                   </div>
 
