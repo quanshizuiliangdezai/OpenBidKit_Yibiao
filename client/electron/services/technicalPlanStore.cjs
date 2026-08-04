@@ -1349,6 +1349,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     clearOriginalOutlineRuntime();
+    clearOutlineWizardRuntime();
     clearTechnicalPlanMermaidCache();
     updateMeta({
       workflow_kind: normalizeWorkflowKind(workflowKind),
