@@ -785,8 +785,18 @@ function KnowledgeBasePage() {
   // 方案 D：启动时检查登录状态
   useEffect(() => {
     void checkAuthAndLoad();
-    window.addEventListener('focus', loadDeveloperMode);
-    document.addEventListener('visibilitychange', loadDeveloperMode);
+    // 页面重新可见时刷新列表，避免用户在后台删除/上传文档后前端仍显示旧缓存。
+    const handleWindowVisible = async () => {
+      await loadDeveloperMode();
+      if (document.visibilityState !== 'visible') return;
+      if (kbTabRef.current === 'team') {
+        void loadTeamTree();
+      } else {
+        void loadPersonalTree();
+      }
+    };
+    window.addEventListener('focus', handleWindowVisible);
+    document.addEventListener('visibilitychange', handleWindowVisible);
     const unsubscribe = window.yibiao?.knowledgeBase.onEvent((event) => {
       if (event?.type === 'toast' && event.message) {
         showToast(event.message, event.level || 'info');
@@ -812,8 +822,8 @@ function KnowledgeBasePage() {
       setAnalysisSnapshot((prev) => (prev?.document.id === document.id ? { ...prev, document } : prev));
     });
     return () => {
-      window.removeEventListener('focus', loadDeveloperMode);
-      document.removeEventListener('visibilitychange', loadDeveloperMode);
+      window.removeEventListener('focus', handleWindowVisible);
+      document.removeEventListener('visibilitychange', handleWindowVisible);
       unsubscribe?.();
     };
   }, []);
@@ -2125,11 +2135,15 @@ function KnowledgeBasePage() {
       return;
     }
 
-    // 个人库中从团队库同步的文档（team-<id>-<user>），查看条目/Markdown 前先确保已水合。
-    // 防止本地脏记录导致打开空白。
-    if (kbTab === 'personal' && String(document.id).startsWith('team-') && document.status === 'success') {
+    // 团队库文档或从团队库同步到个人库的文档，分析结果存在服务器；
+    // 查看条目/Markdown 前先尝试水合到本地，防止本地无记录导致打开报错/空白。
+    if (document.status === 'success' && (kbTab === 'team' || (kbTab === 'personal' && String(document.id).startsWith('team-')))) {
       try {
-        await window.yibiao?.knowledgeBase.hydratePersonalAnalysis(document.id, document.folder_id ?? '');
+        if (kbTab === 'team') {
+          await window.yibiao?.knowledgeBase.hydrateTeamAnalysis(document.id, document.folder_id ?? '');
+        } else {
+          await window.yibiao?.knowledgeBase.hydratePersonalAnalysis(document.id, document.folder_id ?? '');
+        }
       } catch {
         /* 水合失败继续尝试读取 */
       }
