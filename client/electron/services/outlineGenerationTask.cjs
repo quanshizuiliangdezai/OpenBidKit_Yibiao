@@ -3874,6 +3874,12 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
 
   let wizard = storedPlan.outlineWizard || null;
   const forceRestart = Boolean(payload?.wizardRestart);
+  // 防御：残留向导的工作流与当前工作流不一致（例如曾用生成技术方案跑过向导，
+  // 再切到已有方案扩写但未清向导状态），强制当作全新第一步重置，避免沿用旧
+  // workflowKind 算出错误步骤数或误判为已完成。
+  if (wizard && wizard.workflowKind !== storedPlan.workflowKind) {
+    wizard = null;
+  }
   const effectiveExpansionMode = wizard
     ? wizard.outlineExpansionMode
     : (isExpansionWorkflow ? normalizeOutlineExpansionMode(payload, storedPlan) : 'aligned');
