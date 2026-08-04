@@ -48,6 +48,7 @@ function registerConfigIpc({ configStore, aiService, kbAuthService, onDeveloperM
         file_parser_provider: cfg.file_parser_provider || 'local',
         pdf_image_parser_provider: cfg.pdf_image_parser_provider || 'local',
         mineru_token: cfg.mineru_token === undefined ? '__UNCHANGED__' : cfg.mineru_token,
+        analysis_concurrency: cfg.analysis_concurrency ?? 3,
       },
     });
     if (!ok) return { success: false, status, error: data?.error || '保存模型配置失败' };
