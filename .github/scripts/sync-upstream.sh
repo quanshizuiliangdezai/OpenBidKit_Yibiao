@@ -94,9 +94,17 @@ if [ $MERGE_EXIT -ne 0 ]; then
         fi
       done
       if [ "$SHOULD_DELETE" = true ]; then
-        git rm "$f" 2>/dev/null && log "  [DU→rm] $f"
+        git rm "$f" 2>/dev/null && log "  [DU→rm] $f" || log "  [DU→rm-skip] $f"
       else
-        git checkout --ours "$f" 2>/dev/null && git add "$f" && log "  [DU→ours] $f"
+        # 默认保留 fork 版本：若 stage 2（ours）存在则 checkout 恢复；
+        # 若不存在（ours 实际是“删除”，被 git 误判为 DU）则保持删除，
+        # 二者都不能因失败而触发 set -e 退出整个同步。
+        if git checkout --ours "$f" 2>/dev/null; then
+          git add "$f" && log "  [DU→ours] $f"
+        else
+          git rm -f "$f" 2>/dev/null || true
+          log "  [DU→keep-ours-deleted] $f (stage2 missing, keeping deletion)"
+        fi
       fi
     done
   fi
@@ -107,7 +115,17 @@ if [ $MERGE_EXIT -ne 0 ]; then
     log "Resolving UD conflicts (keep our version)..."
     echo "$UD_FILES" | while IFS= read -r f; do
       [ -z "$f" ] && continue
-      git checkout --ours "$f" 2>/dev/null && git add "$f" && log "  [UD→ours] $f"
+      # 优先 checkout --ours 恢复（stage 2 存在时成功）；
+      # 若 stage 2 不存在（我们这边其实是“删除”，被 git 误判为 UD，
+      # 如 sync-atomgit-code.yml 在 fork 已删除但上游修改），
+      # 则保持删除状态（git rm），既符合“保留我们的版本”的意图，
+      # 也避免 `git checkout --ours` 失败触发 set -e 直接退出整个同步。
+      if git checkout --ours "$f" 2>/dev/null; then
+        git add "$f" && log "  [UD→ours] $f"
+      else
+        git rm -f "$f" 2>/dev/null || true
+        log "  [UD→keep-deleted] $f (stage2 missing, keeping deletion)"
+      fi
     done
   fi
 
@@ -153,7 +171,7 @@ with open(filepath, 'w', encoding='utf-8') as fh:
 
 print(f"  Resolved: {filepath}")
 PYEOF
-      git add "$f"
+      git add "$f" || true
     done
   fi
 
