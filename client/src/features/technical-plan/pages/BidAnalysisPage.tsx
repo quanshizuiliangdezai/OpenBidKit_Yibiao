@@ -147,12 +147,28 @@ const jsonFieldLabels: Record<string, string> = {
 };
 
 function tryParseJsonObject(content: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(content);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
-  } catch {
-    return null;
+  if (!content) return null;
+  // 先尝试直接解析
+  const tryParse = (text: string) => {
+    try {
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+    } catch {
+      return null;
+    }
+  };
+  const direct = tryParse(content);
+  if (direct) return direct;
+  // 部分模型（如 deepseek-v3 等）即使设了 json_object，仍会返回 ```json\n{...}\n``` 包裹的 markdown。
+  // 剥掉代码块标记后再尝试解析。
+  const stripped = content
+    .replace(/^[\s\S]*?```(?:json)?\s*\n?/i, '')
+    .replace(/\n?```[\s\S]*$/i, '')
+    .trim();
+  if (stripped && stripped !== content) {
+    return tryParse(stripped);
   }
+  return null;
 }
 
 function formatJsonValue(value: unknown): string {
