@@ -2448,8 +2448,23 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         // 或早期版本只写了状态没写内容），继续从服务器水合，避免界面显示「完成/未分析」
         // 且查看条目/Markdown 空白。
         if (local && local.status === 'success' && local.item_count > 0) {
-          debugLog(docId, 'hydrate:local-success');
-          return getLocalDocumentStatus(documentId);
+          // 本地已有 success 且条目数>0：通常直接返回，避免每次列表加载都重复拉取服务器。
+          // 但若服务器分析条目数更多（如 Worker 重跑 / recover_missing 补漏后产出更完整结果），
+          // 仍要从服务器刷新计数与内容，否则本地陈旧记录（如早期 9 条）会一直显示，
+          // 而服务器端已是 19 条，造成「分析出来的不对」「刷新也还是旧数字」。
+          try {
+            const fresh = await svc.getAnalysis(documentId);
+            if (fresh && fresh.payload && Number(fresh.item_count || 0) > Number(local.item_count || 0)) {
+              debugLog(docId, 'hydrate:local-success-server-newer', { local: local.item_count, server: fresh.item_count });
+              // 不提前返回，落到下方 serverStatus 写回逻辑刷新本地记录
+            } else {
+              debugLog(docId, 'hydrate:local-success');
+              return getLocalDocumentStatus(documentId);
+            }
+          } catch {
+            debugLog(docId, 'hydrate:local-success-refresh-failed');
+            return getLocalDocumentStatus(documentId);
+          }
         }
         // 本地有非 success 记录时，若分析任务仍在活跃运行，必须保护本地进度，
         // 避免被服务器返回的 null/无分析覆盖成「等待处理」。

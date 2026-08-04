@@ -2137,7 +2137,10 @@ function KnowledgeBasePage() {
 
     // 团队库文档或从团队库同步到个人库的文档，分析结果存在服务器；
     // 查看条目/Markdown 前先尝试水合到本地，防止本地无记录导致打开报错/空白。
-    if (document.status === 'success' && (kbTab === 'team' || (kbTab === 'personal' && String(document.id).startsWith('team-')))) {
+    // 注意：即使文档当前状态不是 success（如分析中/等待处理）也要先水合，
+    // 否则会跳过水合直接 readMarkdown，本地无记录时抛「知识库文档不存在」。
+    const isTeamSynced = kbTab === 'team' || (kbTab === 'personal' && String(document.id).startsWith('team-'));
+    if (isTeamSynced) {
       try {
         if (kbTab === 'team') {
           await window.yibiao?.knowledgeBase.hydrateTeamAnalysis(document.id, document.folder_id ?? '');
@@ -2146,6 +2149,17 @@ function KnowledgeBasePage() {
         }
       } catch {
         /* 水合失败继续尝试读取 */
+      }
+      // 水合后若本地仍未完成（分析中/等待处理/无记录），给友好提示而非原始报错
+      const localSt = await Promise.resolve(
+        window.yibiao?.knowledgeBase?.getLocalStatus?.(document.id),
+      ).catch(() => null);
+      if (!localSt || localSt.status !== 'success') {
+        showToast('文档仍在分析中，暂不可查看，完成后会自动刷新', 'info');
+        if (viewerRequestIdRef.current === requestId) {
+          setViewerLoading(false);
+        }
+        return;
       }
     }
 
