@@ -1175,7 +1175,7 @@ function OutlineEditPage({
           </Switch.Root>
         </label>
         <div className="outline-word-control-notice">
-          开启前需先在招标文件解析中勾选并完成“响应文件要求”。
+          开启前需先在招标文件解析中完成“响应文件要求”。
         </div>
       </section>
     );
