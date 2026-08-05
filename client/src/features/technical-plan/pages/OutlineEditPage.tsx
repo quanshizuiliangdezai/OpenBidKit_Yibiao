@@ -339,6 +339,15 @@ function OutlineEditPage({
   const [draftOutlineMode, setDraftOutlineMode] = useState<OutlineMode>(outlineMode);
   const [draftOutlineExpansionMode, setDraftOutlineExpansionMode] = useState<OutlineExpansionMode>(outlineExpansionMode);
   const [draftKnowledgeDocumentIds, setDraftKnowledgeDocumentIds] = useState<string[]>(referenceKnowledgeDocumentIds);
+
+  // 当弹窗关闭时，若外部已保存的参考知识库发生变化（如切换模块后重新加载），
+  // 同步 draft，避免向导重试时把空的知识库 ID 写回数据库。
+  useEffect(() => {
+    if (!generationDialogOpen) {
+      setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
+    }
+  }, [referenceKnowledgeDocumentIds, generationDialogOpen]);
+
   const [draftMinimumWords, setDraftMinimumWords] = useState(formatWordCountDraft(outlineWordControlOptions.minimumWords));
   const [draftMaximumWords, setDraftMaximumWords] = useState(formatWordCountDraft(outlineWordControlOptions.maximumWords));
   const [draftSectionWords, setDraftSectionWords] = useState(formatWordCountDraft(outlineWordControlOptions.sectionWords));
@@ -628,15 +637,18 @@ function OutlineEditPage({
       setNowTick(startedNow);
       const nextOutlineMode = isExpansionWorkflow ? 'aligned' : draftOutlineMode;
       const nextOutlineExpansionMode = isExpansionWorkflow ? draftOutlineExpansionMode : 'ai-complement';
+      const effectiveKnowledgeDocumentIds = draftKnowledgeDocumentIds.length > 0
+        ? draftKnowledgeDocumentIds
+        : referenceKnowledgeDocumentIds;
       await onOutlineConfigChange({
-        referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
+        referenceKnowledgeDocumentIds: effectiveKnowledgeDocumentIds,
         outlineMode: nextOutlineMode,
         outlineExpansionMode: nextOutlineExpansionMode,
         wordControlOptions,
       });
       setGenerationDialogOpen(false);
       await window.yibiao?.tasks.startOutlineGeneration({
-        reference_knowledge_document_ids: draftKnowledgeDocumentIds,
+        reference_knowledge_document_ids: effectiveKnowledgeDocumentIds,
         outline_mode: nextOutlineMode,
         outline_expansion_mode: nextOutlineExpansionMode,
         word_control_options: wordControlOptions,
@@ -688,10 +700,15 @@ function OutlineEditPage({
     const wordControlOptions = getNormalizedWordControlOptions();
     const nextOutlineExpansionMode = isExpansionWorkflow ? (draftOutlineExpansionMode || outlineExpansionMode) : 'ai-complement';
     const isFirst = effectiveWizardSteps[0] === step;
+    // 弹窗关闭时 draft 可能未同步，优先用 draft；若 draft 为空则回退到已保存的 reference，
+    // 防止切换模块后重试把空知识库写回数据库。
+    const effectiveKnowledgeDocumentIds = draftKnowledgeDocumentIds.length > 0
+      ? draftKnowledgeDocumentIds
+      : referenceKnowledgeDocumentIds;
     try {
       setStartingOutline(true);
       await onOutlineConfigChange({
-        referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
+        referenceKnowledgeDocumentIds: effectiveKnowledgeDocumentIds,
         outlineMode: isExpansionWorkflow ? 'aligned' : draftOutlineMode,
         outlineExpansionMode: nextOutlineExpansionMode,
         wordControlOptions,
@@ -700,7 +717,7 @@ function OutlineEditPage({
         wizardStep: step,
         wizardRestart: Boolean(options.restart),
         ...(isFirst ? {
-          reference_knowledge_document_ids: draftKnowledgeDocumentIds,
+          reference_knowledge_document_ids: effectiveKnowledgeDocumentIds,
           outline_expansion_mode: nextOutlineExpansionMode,
           word_control_options: wordControlOptions,
           debug_force_outline_agent_repair: developerMode && draftForceOutlineAgentRepair,
@@ -715,29 +732,52 @@ function OutlineEditPage({
 
   // 分步向导自动串联：某一步成功（wizard-step-done）且仍有后续步骤时，
   // 自动启动下一步；任一步失败（error）则停留在当前步，由用户手动「重试」，不自动重试。
-  // 用 ref 记录已触发自动推进的 wizard 对象引用，避免重渲染 / 依赖变化导致重复触发。
-  const lastAutoAdvancedWizardRef = useRef<unknown>(null);
+  // 用 ref 缓存会变的方法/对象，并把依赖收敛到 task?.status，避免重渲染 / 依赖变化清除已设置的定时器。
+  const runWizardStepRef = useRef(runWizardStep);
+  runWizardStepRef.current = runWizardStep;
+  const autoAdvanceStateRef = useRef<{ lastTaskStatus: string | null; lastAdvancedKey: string }>({
+    lastTaskStatus: null,
+    lastAdvancedKey: '',
+  });
+
   useEffect(() => {
-    if (task?.status !== 'wizard-step-done') {
+    const currentStatus = task?.status || null;
+    const prevStatus = autoAdvanceStateRef.current.lastTaskStatus;
+    autoAdvanceStateRef.current.lastTaskStatus = currentStatus;
+
+    // 只在状态从非 wizard-step-done 首次变为 wizard-step-done 时触发一次。
+    // 注意：初始 lastTaskStatus 必须为 null，否则组件重新挂载时（如切换模块后切回）
+    // 若任务已完成（status 已是 wizard-step-done），会被下方的 prevStatus 判断直接拦掉，
+    // 导致后续步骤不再自动推进，只能手动重试。
+    if (currentStatus !== 'wizard-step-done') {
       return;
     }
+    if (prevStatus === 'wizard-step-done') {
+      return;
+    }
+
     if (!outlineWizard?.active) {
       return;
     }
+
     const completedCount = outlineWizard.completedSteps.length;
     const nextStep = effectiveWizardSteps[completedCount];
     if (!nextStep || completedCount >= effectiveWizardSteps.length) {
       return;
     }
-    if (lastAutoAdvancedWizardRef.current === outlineWizard) {
+
+    // 基于已完成步骤数和当前步骤生成稳定 key，避免对象引用变化导致重复或漏触发。
+    const key = `${completedCount}:${outlineWizard.currentStep ?? ''}`;
+    if (autoAdvanceStateRef.current.lastAdvancedKey === key) {
       return;
     }
-    lastAutoAdvancedWizardRef.current = outlineWizard;
+    autoAdvanceStateRef.current.lastAdvancedKey = key;
+
     const timer = window.setTimeout(() => {
-      void runWizardStep(nextStep, { restart: false });
+      void runWizardStepRef.current(nextStep, { restart: false });
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [task?.status, outlineWizard, effectiveWizardSteps, runWizardStep]);
+  }, [task?.status, outlineWizard]);
 
   const toggleDraftKnowledgeDocument = (document: KnowledgeDocument) => {
     if (document.status !== 'success' || knowledgePickingDisabled) {

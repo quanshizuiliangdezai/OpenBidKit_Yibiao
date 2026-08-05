@@ -2163,25 +2163,105 @@ function validateRequirementGroups(payload, sourceLabel = '技术评分大类') 
 function buildTopLevelOutlineFromGroups(groups) {
   return groups.map((group, index) => {
     const title = String(group.title || '').trim();
+    const requirementId = String(
+      group.requirement_id
+        || (Array.isArray(group.requirement_ids) && group.requirement_ids.join(','))
+        || `R${index + 1}`,
+    ).trim();
     return {
       id: String(index + 1),
       title,
       description: String(group.description || title).trim(),
-      source_requirement_id: String(group.requirement_id || `R${index + 1}`).trim(),
+      source_requirement_id: requirementId,
       source_requirement_title: title,
     };
   });
 }
 
+// 从评分项标题提取核心词与后缀。带括号（中/英）的标题，括号前部分为核心词，
+// 括号内为细分方向说明；无括号则整段即核心词。
+function extractCoreTitle(title) {
+  const trimmed = String(title || '').trim();
+  let parenIdx = trimmed.indexOf('（');
+  if (parenIdx <= 0) parenIdx = trimmed.indexOf('(');
+  if (parenIdx > 0) {
+    return { core: trimmed.slice(0, parenIdx).trim(), suffix: trimmed.slice(parenIdx).trim() };
+  }
+  return { core: trimmed, suffix: '' };
+}
+
+// 通用聚合：将共享同一核心词、并以括号后缀区分方向的多个评分项，合并为单个一级目录。
+// 不写死任何具体名词，仅依据「核心词相同 + 存在括号细分后缀」这一通用结构判断。
+// 返回 mergedGroups，每个元素：
+//   title: 合并后的核心词标题；
+//   description: 聚合描述；
+//   items: 原始 group 数组（合并前的评分项，保留 requirement_id / title / detail_points）；
+//   requirement_ids: 合并覆盖的原始 requirement_id 数组；
+//   merged: 是否由多个评分项合并而来。
+function mergeAlignedGroups(groups) {
+  if (!Array.isArray(groups) || groups.length <= 1) {
+    return (groups || []).map((group, index) => ({
+      title: String(group.title || '').trim(),
+      description: String(group.description || group.title || '').trim(),
+      items: [{ ...group, originalIndex: index }],
+      requirement_ids: [String(group.requirement_id || `R${index + 1}`).trim()],
+      merged: false,
+    }));
+  }
+  const buckets = new Map();
+  groups.forEach((group, index) => {
+    const { core } = extractCoreTitle(group.title);
+    const key = normalizeTitleKey(core);
+    if (!key) return;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push({ ...group, originalIndex: index, core });
+  });
+  const mergedGroups = [];
+  for (const items of buckets.values()) {
+    if (items.length === 1) {
+      const g = items[0];
+      mergedGroups.push({
+        title: String(g.title || '').trim(),
+        description: String(g.description || g.title || '').trim(),
+        items,
+        requirement_ids: [String(g.requirement_id || `R${g.originalIndex + 1}`).trim()],
+        merged: false,
+      });
+    } else {
+      const coreTitle = items.map((g) => g.core).filter(Boolean)[0] || items[0].title;
+      mergedGroups.push({
+        title: String(coreTitle).trim(),
+        description: items.map((g) => String(g.description || g.title || '').trim()).filter(Boolean).join('；'),
+        items,
+        requirement_ids: items.map((g) => String(g.requirement_id || `R${g.originalIndex + 1}`).trim()),
+        merged: true,
+      });
+    }
+  }
+  return mergedGroups;
+}
+
 function validateAlignedTopLevelMapping(outlineItems, groups, sourceLabel = '技术评分大类') {
-  if (outlineItems.length !== groups.length) throw new Error(`一级目录数量必须与${sourceLabel}数量一致`);
+  // groups 可能是原始评分项（含 requirement_id），也可能是聚合后的 mergedGroups（含 items 数组）。
+  const isMerged = Array.isArray(groups) && groups.some((g) => Array.isArray(g.items));
+  const expectedCount = Array.isArray(groups) ? groups.length : 0;
+  if (outlineItems.length !== expectedCount) throw new Error(`一级目录数量必须与${sourceLabel}数量一致`);
   outlineItems.forEach((item, index) => {
-    const expectedTitle = String(groups[index].title || '').trim();
+    const expectedGroup = groups[index];
+    const expectedTitle = String(expectedGroup?.title || '').trim();
     const actualTitle = String(item.title || '').trim();
     if (actualTitle !== expectedTitle) throw new Error(`第 ${index + 1} 个一级目录标题必须严格等于${sourceLabel}标题：${expectedTitle}`);
-    const expectedRequirementId = String(groups[index].requirement_id || '').trim();
-    const actualRequirementId = String(item.source_requirement_id || '').trim();
-    if (actualRequirementId !== expectedRequirementId) throw new Error(`第 ${index + 1} 个一级目录映射的${sourceLabel}ID不正确：${expectedRequirementId}`);
+    if (isMerged) {
+      // 合并后一级目录覆盖多个原始评分项，source_requirement_id 以逗号分隔，逐一对齐即可。
+      const actualIds = String(item.source_requirement_id || '').split(',').map((s) => s.trim()).filter(Boolean);
+      const expectedIds = (expectedGroup.requirement_ids || []).map((s) => String(s).trim()).filter(Boolean);
+      const missing = expectedIds.filter((id) => !actualIds.includes(id));
+      if (missing.length) throw new Error(`第 ${index + 1} 个一级目录映射的${sourceLabel}ID不正确：${expectedIds.join(',')}`);
+    } else {
+      const expectedRequirementId = String(expectedGroup?.requirement_id || '').trim();
+      const actualRequirementId = String(item.source_requirement_id || '').trim();
+      if (actualRequirementId !== expectedRequirementId) throw new Error(`第 ${index + 1} 个一级目录映射的${sourceLabel}ID不正确：${expectedRequirementId}`);
+    }
   });
 }
 
@@ -2933,8 +3013,16 @@ async function expansionComplementWorkflow(aiService, payload, originalOutline, 
 
 async function buildAligned(aiService, payload, outlineMode, groups, suggestions, log, existingOutline = null, progressRange = { start: OUTLINE_PROGRESS.mainChildrenStart, end: OUTLINE_PROGRESS.mainChildrenEnd }) {
   const sourceLabel = getTopLevelSourceLabel({ outlineMode });
-  const top = buildTopLevelOutlineFromGroups(groups);
-  validateAlignedTopLevelMapping(top, groups, sourceLabel);
+  const mergedGroups = mergeAlignedGroups(groups);
+  const top = mergedGroups.map((mg, index) => ({
+    id: String(index + 1),
+    title: String(mg.title || '').trim(),
+    description: String(mg.description || '').trim(),
+    source_requirement_id: (mg.requirement_ids || []).join(','),
+    source_requirement_title: String(mg.title || '').trim(),
+  }));
+  // 合并后一级目录数量不再等于原始评分项数，改用合并结构做映射校验。
+  validateAlignedTopLevelMapping(top, mergedGroups, sourceLabel);
   const childTotal = top.length;
   let completedChildren = 0;
 
@@ -2950,15 +3038,41 @@ async function buildAligned(aiService, payload, outlineMode, groups, suggestions
   }
   const getExistingKey = (item) => String(item.source_requirement_id || item.source_requirement_title || normalizeTitleKey(item.title));
 
-  const runChild = async (item, index) => {
-    const childrenResponse = await generateAlignedChildrenForGroup(aiService, payload, outlineMode, item, groups[index], suggestions, log, progressRange.start);
-    const children = childrenResponse.children || [];
+  // 为单个聚合项生成二三级目录。单评分项直接挂 AI 生成的二级+三级；
+  // 聚合多项时，每个原始评分项作为二级（细分方向），AI 生成的三级挂在其下，保持层级清晰。
+  const buildChildrenForMerged = async (mergedGroup, parentItem) => {
+    if (mergedGroup.items.length <= 1) {
+      const childrenResponse = await generateAlignedChildrenForGroup(aiService, payload, outlineMode, parentItem, mergedGroup.items[0], suggestions, log, progressRange.start);
+      return childrenResponse.children || [];
+    }
+    const children = [];
+    for (const originalGroup of mergedGroup.items) {
+      const childrenResponse = await generateAlignedChildrenForGroup(aiService, payload, outlineMode, parentItem, originalGroup, suggestions, log, progressRange.start);
+      const grandChildren = [];
+      for (const level2 of (childrenResponse.children || [])) {
+        if (level2.children?.length) grandChildren.push(...level2.children);
+      }
+      const subTitle = String(originalGroup.title || '').trim();
+      children.push({
+        id: `${parentItem.id}.${children.length + 1}`,
+        title: subTitle,
+        description: String(originalGroup.description || subTitle).trim(),
+        ...(grandChildren.length ? { children: grandChildren } : {}),
+      });
+    }
+    return children;
+  };
+
+  const runChild = async (mergedGroup, index) => {
+    const parentItem = top[index];
+    const children = await buildChildrenForMerged(mergedGroup, parentItem);
     completedChildren += 1;
     const progress = progressRange.start + Math.round((completedChildren / Math.max(childTotal, 1)) * (progressRange.end - progressRange.start));
-    log(`已完成第 ${index + 1}/${childTotal} 个${sourceLabel}的二三级目录：${item.title || '未命名章节'}。`, progress);
-    return { index, item, children };
+    log(`已完成第 ${index + 1}/${childTotal} 个${sourceLabel}的二三级目录：${parentItem.title || '未命名章节'}。`, progress);
+    return { index, item: { ...parentItem, ...(children.length ? { children } : {}) }, children };
   };
-  const runChildOrReuse = async (item, index) => {
+  const runChildOrReuse = async (mergedGroup, index) => {
+    const item = top[index];
     const existing = existingMap.get(getExistingKey(item));
     if (existing?.children?.length) {
       completedChildren += 1;
@@ -2966,21 +3080,21 @@ async function buildAligned(aiService, payload, outlineMode, groups, suggestions
       log(`已从上次进度恢复第 ${index + 1}/${childTotal} 个${sourceLabel}的二三级目录：${item.title || '未命名章节'}。`, progress);
       return { index, item: { ...item, children: cloneOutlineItems(existing.children) }, children: existing.children };
     }
-    return runChild(item, index);
+    return runChild(mergedGroup, index);
   };
 
   log(`正在先生成第 1/${childTotal} 个${sourceLabel}的二三级目录以优化提示词缓存。`, progressRange.start);
   const childResults = [];
   let buildError = null;
   try {
-    const firstResult = await runChildOrReuse(top[0], 0);
+    const firstResult = await runChildOrReuse(mergedGroups[0], 0);
     childResults.push(firstResult);
     if (childTotal > 1) {
       log(`提示词缓存预热完成，等待 5 秒后并发生成剩余${sourceLabel}目录。`, progressRange.start);
       await waitForPromptCacheWarmup();
     }
     if (childTotal > 1) {
-      const remainingTasks = top.slice(1).map((item, offset) => runChildOrReuse(item, offset + 1));
+      const remainingTasks = mergedGroups.slice(1).map((mg, offset) => runChildOrReuse(mg, offset + 1));
       const settled = await Promise.allSettled(remainingTasks);
       for (const result of settled) {
         if (result.status === 'fulfilled') {
@@ -3009,7 +3123,7 @@ async function buildAligned(aiService, payload, outlineMode, groups, suggestions
   log(`${sourceLabel}对齐目录生成完成，正在整理目录编号。`, progressRange.end);
   const outline = normalizeOutlineResponse({ outline: renumber(assembled) }, new Set());
   validateCompleteOutline(outline);
-  validateAlignedTopLevelMapping(outline.outline || [], groups, sourceLabel);
+  validateAlignedTopLevelMapping(outline.outline || [], mergedGroups, sourceLabel);
   return outline;
 }
 
@@ -3045,7 +3159,7 @@ async function responseFileWorkflow(aiService, agentService, payload, log, exist
     return recovered;
   }
   log('目录主结果生成完成，准备进入知识库补目录。', OUTLINE_PROGRESS.mainComplete);
-  return { outline, groups };
+  return { outline, groups: mergeAlignedGroups(groups) };
 }
 
 async function alignedWorkflow(aiService, agentService, payload, log, existingOutline = null) {
@@ -3105,7 +3219,7 @@ async function alignedWorkflow(aiService, agentService, payload, log, existingOu
     return recovered;
   }
   log('目录主结果生成完成，准备进入知识库补目录。', OUTLINE_PROGRESS.mainComplete);
-  return { outline, groups };
+  return { outline, groups: mergeAlignedGroups(groups) };
 }
 
 function mergeKnowledgePatches(patches) {
