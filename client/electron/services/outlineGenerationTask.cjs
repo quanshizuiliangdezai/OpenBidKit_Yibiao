@@ -1593,38 +1593,82 @@ function normalizeReviewResponse(payload) {
   return { passed, suggestions };
 }
 
-function normalizeRequirementGroupsResponse(payload) {
-  const raw = requireObject(payload, 'TechnicalRequirementGroupResponse');
-  const groups = requireArray(raw.groups, 'groups').map((group, index) => {
-    const item = requireObject(group, `groups[${index}]`);
-    return {
-      requirement_id: requireField(item.requirement_id, `groups[${index}].requirement_id`),
-      title: requireField(item.title, `groups[${index}].title`),
-      description: requireField(item.description, `groups[${index}].description`),
-      detail_points: item.detail_points === undefined || item.detail_points === null
-        ? []
-        : requireArray(item.detail_points, `groups[${index}].detail_points`).map((point) => String(point)),
-    };
+function coerceRequirementGroup(item, index, options = {}) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+
+  let requirementId = String(item.requirement_id ?? item.requirementId ?? item.id ?? '').trim();
+  let title = String(item.title ?? item.name ?? item.chapter ?? '').trim();
+  let description = String(item.description ?? item.desc ?? item.summary ?? '').trim();
+
+  let detailPoints = [];
+  const rawDetail = item.detail_points ?? item.detailPoints ?? item.points ?? item.key_points;
+  if (Array.isArray(rawDetail)) {
+    detailPoints = rawDetail.map((p) => String(p)).filter(Boolean);
+  }
+
+  if (!title && !description) return null;
+  if (!title) title = description.split(/[。；;]/)[0].trim() || '未命名目录';
+  if (!description) description = title;
+  if (!requirementId) requirementId = `R${index + 1}`;
+
+  const result = {
+    requirement_id: requirementId,
+    title,
+    description,
+    detail_points: detailPoints,
+  };
+  if (options.includeExistingRootId) {
+    result.existing_root_id = String(item.existing_root_id ?? item.existingRootId ?? '').trim();
+  }
+  return result;
+}
+
+function deduplicateRequirementGroups(groups) {
+  const seenIds = new Set();
+  const seenTitles = new Set();
+  return groups.filter((group) => {
+    const id = String(group.requirement_id || '').trim();
+    const title = String(group.title || '').trim();
+    if (!id || !title) return false;
+    const idKey = id.toLowerCase();
+    const titleKey = title.toLowerCase();
+    if (seenIds.has(idKey) || seenTitles.has(titleKey)) return false;
+    seenIds.add(idKey);
+    seenTitles.add(titleKey);
+    return true;
   });
-  return { groups };
+}
+
+function normalizeRequirementGroupsResponse(payload) {
+  let candidates = [];
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    candidates = payload.groups ?? payload.items ?? payload.requirements ?? payload.data ?? [];
+  } else if (Array.isArray(payload)) {
+    candidates = payload;
+  }
+  if (!Array.isArray(candidates)) candidates = [];
+
+  const groups = candidates
+    .map((group, index) => coerceRequirementGroup(group, index))
+    .filter(Boolean);
+
+  return { groups: deduplicateRequirementGroups(groups) };
 }
 
 function normalizeExpansionTopLevelPlanResponse(payload) {
-  const raw = requireObject(payload, 'ExpansionTopLevelPlanResponse');
-  const candidates = requireArray(raw.groups || raw.items || raw.requirements, 'groups');
-  const groups = candidates.map((group, index) => {
-    const item = requireObject(group, `groups[${index}]`);
-    return {
-      requirement_id: requireField(item.requirement_id, `groups[${index}].requirement_id`),
-      title: requireField(item.title, `groups[${index}].title`),
-      description: requireField(item.description, `groups[${index}].description`),
-      detail_points: item.detail_points === undefined || item.detail_points === null
-        ? []
-        : requireArray(item.detail_points, `groups[${index}].detail_points`).map((point) => String(point)),
-      existing_root_id: String(item.existing_root_id ?? item.existingRootId ?? '').trim(),
-    };
-  });
-  return { groups };
+  let candidates = [];
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    candidates = payload.groups ?? payload.items ?? payload.requirements ?? payload.data ?? [];
+  } else if (Array.isArray(payload)) {
+    candidates = payload;
+  }
+  if (!Array.isArray(candidates)) candidates = [];
+
+  const groups = candidates
+    .map((group, index) => coerceRequirementGroup(group, index, { includeExistingRootId: true }))
+    .filter(Boolean);
+
+  return { groups: deduplicateRequirementGroups(groups) };
 }
 
 function normalizeExpansionChildPatchResponse(payload) {
@@ -2790,7 +2834,7 @@ async function extractResponseFileOutlineGroups(aiService, payload, suggestions,
     failureMessage: '模型返回的响应文件技术目录格式无效',
   });
   if (!response.groups?.length) {
-    throw new Error('响应文件要求中未找到明确的技术文件目录，请先核对“响应文件要求”解析结果或关闭该选项。');
+    throw new Error('未能从“响应文件要求”中识别出技术文件目录。可能原因：1) 该招标文件未在响应文件要求里明确列出技术文件目录；2) 当前文本模型对 JSON 格式支持不稳定，返回了无法解析的结构。建议切换到“按评分项生成一级目录”重试，或检查设置中的文本模型配置。');
   }
   return response.groups || [];
 }
