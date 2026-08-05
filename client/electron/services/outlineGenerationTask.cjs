@@ -3386,7 +3386,7 @@ async function expansionComplementWorkflow(aiService, payload, originalOutline, 
   return normalized;
 }
 
-async function buildAligned(aiService, payload, outlineMode, groups, suggestions, log, progressRange = { start: OUTLINE_PROGRESS.mainChildrenStart, end: OUTLINE_PROGRESS.mainChildrenEnd }, existingOutline = null) {
+async function buildAligned(aiService, payload, outlineMode, groups, suggestions, log, existingOutline = null, progressRange = { start: OUTLINE_PROGRESS.mainChildrenStart, end: OUTLINE_PROGRESS.mainChildrenEnd }) {
   const sourceLabel = getTopLevelSourceLabel({ outlineMode });
   const top = buildTopLevelOutlineFromGroups(groups);
   validateAlignedTopLevelMapping(top, groups, sourceLabel);
