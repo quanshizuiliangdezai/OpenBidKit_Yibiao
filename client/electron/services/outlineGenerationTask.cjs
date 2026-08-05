@@ -2243,6 +2243,187 @@ function isGenericTemplateSignature(signature) {
   return genericCount >= Math.ceil(titles.length / 2);
 }
 
+// 聚合型评分项程序化兜底：将“核心词（分项）”形式的多个一级目录自动合并为 1 个。
+// 触发条件（保守，避免误并真正独立的目录）：
+//   - 多个一级目录标题共享同一“核心词”，且各自带一个明确的业务分项（括号/冒号/破折号后的内容）；
+//   - 在评分项/响应文件分组中，该核心词恰好对应“单一分组”（说明招标把它视为一个聚合评分项）；
+//   - 合并后总层级不超过 4 级（否则交由 Agent 修复，不在此兜底）。
+// 合并结果：1 个“核心词”一级目录，各分项作为二级目录，原二三级内容下挂；分项为聚合说明词（各技术方向/等）时并入合并节点而非单独成级。
+const AGGREGATE_QUALIFIER_STOPWORDS = new Set([
+  '各技术方向', '各方向', '各分项', '各项', '各部分', '等', '及其他', '及相关',
+  '相关', '其他', '等内容', '及其', '及其他内容', '含', '含相关', '及其他相关',
+]);
+
+function splitAggregateTitle(title) {
+  const t = String(title || '').trim();
+  if (!t) return null;
+  let core;
+  let qualifier;
+  const paren = t.match(/^(.*?)[（(]([^）)]*)[）)]$/);
+  if (paren) {
+    core = paren[1].trim();
+    qualifier = paren[2].trim();
+  } else {
+    const sep = t.match(/^(.*?)[：:—\-·]\s*(.+)$/);
+    if (!sep) return null;
+    core = sep[1].trim();
+    qualifier = sep[2].trim();
+  }
+  if (core.length < 2 || !qualifier) return null;
+  return { core, qualifier };
+}
+
+function outlineSubtreeDepth(item) {
+  const kids = item?.children;
+  if (!Array.isArray(kids) || !kids.length) return 1;
+  return 1 + Math.max(...kids.map(outlineSubtreeDepth));
+}
+
+function mergeAggregatedTopLevelItems(context) {
+  // 扩展示例需严格遵循既有方案结构，不在此处自动合并
+  if (context.workflowKind === 'existing-plan-expansion') return 0;
+  const outlineItems = context.outline?.outline;
+  if (!Array.isArray(outlineItems) || outlineItems.length < 2) return 0;
+
+  const coreMap = new Map();
+  outlineItems.forEach((item, idx) => {
+    const parsed = splitAggregateTitle(item.title);
+    if (!parsed) return;
+    if (!coreMap.has(parsed.core)) coreMap.set(parsed.core, []);
+    coreMap.get(parsed.core).push({ idx, item, qualifier: parsed.qualifier });
+  });
+
+  const groupsAvailable =
+    Array.isArray(context.groups) &&
+    context.groups.length > 0 &&
+    context.workflowKind !== 'existing-plan-expansion';
+
+  const groupCoreCount = new Map();
+  if (groupsAvailable) {
+    context.groups.forEach((g) => {
+      const parsed = splitAggregateTitle(g.title);
+      const core = parsed ? parsed.core : String(g.title || '').trim();
+      if (!core) return;
+      groupCoreCount.set(core, (groupCoreCount.get(core) || 0) + 1);
+    });
+  }
+
+  const plans = [];
+  for (const [core, entries] of coreMap) {
+    if (entries.length < 2) continue;
+    const distinctQual = [
+      ...new Set(entries.map((e) => e.qualifier).filter((q) => !AGGREGATE_QUALIFIER_STOPWORDS.has(q))),
+    ];
+    if (!distinctQual.length) continue;
+
+    let shouldMerge;
+    if (groupsAvailable) {
+      // 仅当评分项/响应文件中该核心词对应“单一分组”（聚合型评分项）时合并
+      shouldMerge = groupCoreCount.get(core) === 1;
+    } else {
+      // 无分组信息时，仅当存在 >=2 个不同业务分项（明显被拆开）才合并
+      shouldMerge = distinctQual.length >= 2;
+    }
+    if (!shouldMerge) continue;
+
+    // 若存在同名无括号的一级目录，则以其为合并目标，避免产生重复标题
+    let standaloneIdx = -1;
+    let standaloneItem = null;
+    for (let i = 0; i < outlineItems.length; i += 1) {
+      if (entries.some((e) => e.idx === i)) continue;
+      if (normalizeTitleKey(outlineItems[i].title) === normalizeTitleKey(core) && !splitAggregateTitle(outlineItems[i].title)) {
+        standaloneIdx = i;
+        standaloneItem = outlineItems[i];
+        break;
+      }
+    }
+
+    // 深度保护：合并后会多嵌套一层，若任一被合并子树已达 4 级则跳过
+    const maxDepth = Math.max(...entries.map((e) => outlineSubtreeDepth(e.item)));
+    if (maxDepth >= 4) continue;
+
+    const merged = standaloneItem ? cloneOutlineItems([standaloneItem])[0] : { id: '', title: core, description: core };
+    merged.title = core;
+    if (!String(merged.description || '').trim()) merged.description = core;
+
+    const detailPoints = new Set();
+    const addDetail = (pts) => (pts || []).forEach((p) => {
+      const s = String(p || '').trim();
+      if (s) detailPoints.add(s);
+    });
+    if (standaloneItem) addDetail(standaloneItem.detail_points);
+
+    const childByKey = new Map();
+    entries.forEach((e) => {
+      addDetail(e.item.detail_points);
+      if (AGGREGATE_QUALIFIER_STOPWORDS.has(e.qualifier)) {
+        // 聚合说明词（各技术方向/等）不单独成二级目录，其下内容并入合并节点
+        if (Array.isArray(e.item.children) && e.item.children.length) {
+          merged.children = merged.children || [];
+          const seen = new Set((merged.children || []).map((c) => normalizeTitleKey(c.title)));
+          e.item.children.forEach((c) => {
+            const ck = normalizeTitleKey(c.title);
+            if (seen.has(ck)) return;
+            seen.add(ck);
+            merged.children.push(cloneOutlineItems([c])[0]);
+          });
+        }
+        return;
+      }
+      const Q = e.qualifier;
+      const key = normalizeTitleKey(Q);
+      let child = childByKey.get(key);
+      if (!child) {
+        child = { id: '', title: Q, description: Q };
+        childByKey.set(key, child);
+      }
+      if (Array.isArray(e.item.children) && e.item.children.length) {
+        child.children = child.children || [];
+        const seen = new Set((child.children || []).map((c) => normalizeTitleKey(c.title)));
+        e.item.children.forEach((c) => {
+          const ck = normalizeTitleKey(c.title);
+          if (seen.has(ck)) return;
+          seen.add(ck);
+          child.children.push(cloneOutlineItems([c])[0]);
+        });
+      }
+      if (e.item.description && !String(child.description || '').trim()) {
+        child.description = e.item.description;
+      }
+    });
+
+    const childrenArr = [...childByKey.values()];
+    if (childrenArr.length) merged.children = childrenArr;
+    else delete merged.children;
+    addDetail(merged.detail_points);
+    merged.detail_points = [...detailPoints];
+    if (!merged.detail_points.length) delete merged.detail_points;
+
+    const minIdx = Math.min(...entries.map((e) => e.idx), ...(standaloneIdx >= 0 ? [standaloneIdx] : []));
+    const consumed = new Set(entries.map((e) => e.idx));
+    if (standaloneIdx >= 0) consumed.add(standaloneIdx);
+    plans.push({ minIdx, merged, consumed });
+  }
+
+  if (!plans.length) return 0;
+  const consumedAll = new Set();
+  plans.forEach((p) => p.consumed.forEach((i) => consumedAll.add(i)));
+  const minIdxToPlan = new Map();
+  plans.forEach((p) => minIdxToPlan.set(p.minIdx, p));
+
+  const keep = [];
+  for (let i = 0; i < outlineItems.length; i += 1) {
+    if (consumedAll.has(i)) {
+      const plan = minIdxToPlan.get(i);
+      if (plan) keep.push(plan.merged);
+      continue;
+    }
+    keep.push(outlineItems[i]);
+  }
+  context.outline.outline = renumber(keep);
+  return plans.length;
+}
+
 function detectTemplateChildrenStructure(outlineItems) {
   if (!outlineItems || outlineItems.length < 2) return null;
   const signatures = new Map();
@@ -2265,6 +2446,8 @@ function detectTemplateChildrenStructure(outlineItems) {
 }
 
 function validateFinalOutline(context) {
+  // 聚合型评分项兜底：先把“核心词（分项）”形式的多个一级目录合并回 1 个，再走后续校验
+  mergeAggregatedTopLevelItems(context);
   validateCompleteOutline(context.outline);
   if (outlineDepth(context.outline?.outline || []) > 4) {
     throw new Error('最终目录层级不能超过四级');
