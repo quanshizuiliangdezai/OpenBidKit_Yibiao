@@ -552,7 +552,8 @@ function extractResponseFileOutlineGroupsMessages({ overview, requirements, resp
 4.1 所有一级目录标题必须互不相同，不得出现完全重复的标题。聚合型章节处理（重要）：若响应文件要求中某个章节标题覆盖多个技术方向/分项/子模块（其下分项共享该章节、合并编写），必须按以下规则处理：
   - 识别特征：章节标题带有“（各技术方向）”“（含…）”“（…等）”等聚合说明，或其下分项列在同一章节的“细分列 / 子行”中，共享该章节、合并编写；
   - 这种情况只允许生成 **1 个一级目录**，标题使用章节核心词，去掉“（各技术方向）”“（含…）”等聚合说明；
-  - 各技术方向/分项必须作为该一级目录的 detail_points，绝对不得各自成为一级目录，也不得写成“核心词（某个方向）”这种多一级目录形式。
+  - 各技术方向/分项必须作为该一级目录的 detail_points，绝对不得各自成为一级目录，也不得写成“核心词（某个方向）”这种多一级目录形式；
+  - 严禁把“实施方案（网络组网）”“实施方案（安全防范系统）”“实施方案（计算机及存储）”等共享同一个核心词的方向拆成多个一级目录。
 4.2 独立章节判定：只有当某个方向/分项在响应文件要求中是“独立文件目录行”（拥有自己的目录标题单元格、不与其他目录共享）时，才允许它单独成为一级目录；否则一律归入所属章节的 detail_points。不要为规避重复而强行改写标题。只有真正独立的文件目录才单独成一级目录。
 5. detail_points 中保留该一级目录下明确要求响应、编写或提供的关键内容；可参考技术评分要求补充响应重点，但不能把技术评分项改造成一级目录。
 6. requirement_id 必须唯一，使用 R1、R2、R3 这种格式。
@@ -1099,6 +1100,60 @@ function createAgentBusyError() {
   return error;
 }
 
+// 从 Agent 原始输出字符串中尽量解析出目录对象。
+function tryParsePartialOutlineFromOutput(outputContent) {
+  try {
+    const parsed = parseAgentJsonContent(outputContent);
+    if (parsed && Array.isArray(parsed.outline) && parsed.outline.length) {
+      return normalizeOutlineResponse(parsed, new Set());
+    }
+    if (Array.isArray(parsed)) {
+      return normalizeOutlineResponse({ outline: parsed }, new Set());
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+// 根据当前已掌握的上下文，构造一个“尽力而为”的部分目录，用于失败时保存进度。
+function buildPartialOutline(context = {}) {
+  if (context.partialOutline && Array.isArray(context.partialOutline.outline)) {
+    return context.partialOutline;
+  }
+  if (context.outline && Array.isArray(context.outline.outline)) {
+    return context.outline;
+  }
+  if (context.agentPartialOutput) {
+    const fromOutput = tryParsePartialOutlineFromOutput(context.agentPartialOutput);
+    if (fromOutput) return fromOutput;
+  }
+  if (Array.isArray(context.groups) && context.groups.length) {
+    return { outline: buildTopLevelOutlineFromGroups(context.groups) };
+  }
+  return null;
+}
+
+// 失败时把已有进度写回 workspaceStore，并让错误对象带上 partialOutline，方便调用方/UI 提示。
+function persistPartialOutlineOnError(workspaceStore, context, error) {
+  const partialOutline = buildPartialOutline({
+    outline: context.outline,
+    groups: context.groups,
+    agentPartialOutput: error?.agentPartialOutput,
+  });
+  if (partialOutline) {
+    try {
+      workspaceStore.updateTechnicalPlan({ outlineData: partialOutline });
+    } catch {
+      // 持久化失败不应掩盖原始错误
+    }
+    if (error && typeof error === 'object') {
+      error.partialOutline = partialOutline;
+    }
+  }
+  return partialOutline;
+}
+
 function createAgentActivityLogHandler(log, progress) {
   let lastKey = '';
   return (event = {}) => {
@@ -1126,7 +1181,7 @@ async function runOutlineAgentRecovery(agentService, context, log) {
     output_file: outputFile,
     files: buildOutlineAgentRecoveryFiles(agentContext),
     timeout_ms: FINAL_AGENT_TIMEOUT_MS,
-    max_retries: 1,
+    max_retries: 0,
     validateOutput: (resultForValidation) => {
       const contentForValidation = String(resultForValidation?.output_content || resultForValidation?.assistant_text || '').trim();
       if (!contentForValidation) {
@@ -1197,7 +1252,7 @@ async function completeOriginalOutlineWithAgent(agentService, originalPlanMarkdo
       { path: outputFile, content: JSON.stringify(outline || { outline: [] }, null, 2) },
     ],
     timeout_ms: FINAL_AGENT_TIMEOUT_MS,
-    max_retries: 1,
+    max_retries: 0,
     validateOutput: (resultForValidation) => {
       const contentForValidation = String(resultForValidation?.output_content || resultForValidation?.assistant_text || '').trim();
       if (!contentForValidation) {
@@ -2174,6 +2229,71 @@ function validateRequirementGroups(payload, sourceLabel = '技术评分大类') 
   });
   if (new Set(requirementIds).size !== requirementIds.length) throw new Error(`${sourceLabel} requirement_id 不能重复`);
   if (new Set(titles).size !== titles.length) throw new Error(`${sourceLabel}标题不能重复`);
+}
+
+// 响应文件模式下，模型常把“实施方案（网络组网…）”“实施方案（安全防范系统）”等
+// 聚合型章节的各个方向拆成多个一级目录。这里用硬规则合并：标题核心词相同、且
+// 非核心部分写在括号/方括号内、看起来像多个技术方向时，合并成 1 个一级目录。
+function mergeResponseFileGroupsByCoreTitle(groups) {
+  if (!Array.isArray(groups) || groups.length < 2) return groups;
+
+  const bracketPattern = /[（(【\[](.+?)[）)】\]]/;
+  const directionPattern = /[、,，/及或和]/;
+
+  function splitCore(title) {
+    const trimmed = String(title || '').trim();
+    const match = trimmed.match(bracketPattern);
+    if (!match) return { core: trimmed, suffix: '', hasDirections: false };
+    const core = trimmed.slice(0, match.index).trim();
+    const suffix = match[1].trim();
+    return {
+      core,
+      suffix,
+      hasDirections: directionPattern.test(suffix) || /(系统|网络|集成|平台|模块|方向|分项|子项|领域)/.test(suffix),
+    };
+  }
+
+  const buckets = new Map();
+  for (const group of groups) {
+    const { core, suffix, hasDirections } = splitCore(group.title);
+    if (!core) {
+      buckets.set(Math.random().toString(36), { core: group.title, merged: false, items: [group] });
+      continue;
+    }
+    const key = `${core}:${hasDirections}`;
+    if (!buckets.has(key)) {
+      buckets.set(key, { core, merged: hasDirections, items: [] });
+    }
+    buckets.get(key).items.push({ group, suffix, hasDirections });
+  }
+
+  const merged = [];
+  for (const bucket of buckets.values()) {
+    if (!bucket.merged || bucket.items.length < 2) {
+      merged.push(...bucket.items.map((item) => item.group));
+      continue;
+    }
+    const [first, ...rest] = bucket.items;
+    const detailPoints = [
+      ...(first.group.detail_points || []),
+      ...(first.suffix ? [first.suffix] : []),
+      ...rest.flatMap((item) => [
+        ...(item.group.detail_points || []),
+        ...(item.suffix ? [item.suffix] : []),
+      ]),
+    ].filter(Boolean);
+    const uniqueDetails = [...new Set(detailPoints.map((d) => String(d).trim()))];
+    merged.push({
+      ...first.group,
+      title: bucket.core,
+      description: [first.group.description, ...rest.map((item) => item.group.description)]
+        .filter(Boolean)
+        .map((d) => String(d).trim())
+        .join('；'),
+      detail_points: uniqueDetails,
+    });
+  }
+  return merged;
 }
 
 function buildTopLevelOutlineFromGroups(groups) {
@@ -3266,12 +3386,25 @@ async function expansionComplementWorkflow(aiService, payload, originalOutline, 
   return normalized;
 }
 
-async function buildAligned(aiService, payload, outlineMode, groups, suggestions, log, progressRange = { start: OUTLINE_PROGRESS.mainChildrenStart, end: OUTLINE_PROGRESS.mainChildrenEnd }) {
+async function buildAligned(aiService, payload, outlineMode, groups, suggestions, log, progressRange = { start: OUTLINE_PROGRESS.mainChildrenStart, end: OUTLINE_PROGRESS.mainChildrenEnd }, existingOutline = null) {
   const sourceLabel = getTopLevelSourceLabel({ outlineMode });
   const top = buildTopLevelOutlineFromGroups(groups);
   validateAlignedTopLevelMapping(top, groups, sourceLabel);
   const childTotal = top.length;
   let completedChildren = 0;
+
+  // 若重试时已有部分目录进度，按 source_requirement_id / title 匹配，避免重复生成。
+  const existingMap = new Map();
+  if (existingOutline?.outline?.length) {
+    for (const existing of existingOutline.outline) {
+      if (existing?.children?.length) {
+        const key = String(existing.source_requirement_id || existing.source_requirement_title || normalizeTitleKey(existing.title));
+        existingMap.set(key, existing);
+      }
+    }
+  }
+  const getExistingKey = (item) => String(item.source_requirement_id || item.source_requirement_title || normalizeTitleKey(item.title));
+
   const runChild = async (item, index) => {
     const childrenResponse = await generateAlignedChildrenForGroup(aiService, payload, outlineMode, item, groups[index], suggestions, log, progressRange.start);
     const children = childrenResponse.children || [];
@@ -3280,16 +3413,51 @@ async function buildAligned(aiService, payload, outlineMode, groups, suggestions
     log(`已完成第 ${index + 1}/${childTotal} 个${sourceLabel}的二三级目录：${item.title || '未命名章节'}。`, progress);
     return { index, item, children };
   };
+  const runChildOrReuse = async (item, index) => {
+    const existing = existingMap.get(getExistingKey(item));
+    if (existing?.children?.length) {
+      completedChildren += 1;
+      const progress = progressRange.start + Math.round((completedChildren / Math.max(childTotal, 1)) * (progressRange.end - progressRange.start));
+      log(`已从上次进度恢复第 ${index + 1}/${childTotal} 个${sourceLabel}的二三级目录：${item.title || '未命名章节'}。`, progress);
+      return { index, item: { ...item, children: cloneOutlineItems(existing.children) }, children: existing.children };
+    }
+    return runChild(item, index);
+  };
+
   log(`正在先生成第 1/${childTotal} 个${sourceLabel}的二三级目录以优化提示词缓存。`, progressRange.start);
-  const firstResult = await runChild(top[0], 0);
-  if (childTotal > 1) {
-    log(`提示词缓存预热完成，等待 5 秒后并发生成剩余${sourceLabel}目录。`, progressRange.start);
-    await waitForPromptCacheWarmup();
+  const childResults = [];
+  let buildError = null;
+  try {
+    const firstResult = await runChildOrReuse(top[0], 0);
+    childResults.push(firstResult);
+    if (childTotal > 1) {
+      log(`提示词缓存预热完成，等待 5 秒后并发生成剩余${sourceLabel}目录。`, progressRange.start);
+      await waitForPromptCacheWarmup();
+    }
+    if (childTotal > 1) {
+      const remainingTasks = top.slice(1).map((item, offset) => runChildOrReuse(item, offset + 1));
+      const settled = await Promise.allSettled(remainingTasks);
+      for (const result of settled) {
+        if (result.status === 'fulfilled') {
+          childResults.push(result.value);
+        } else if (!buildError) {
+          buildError = result.reason;
+        }
+      }
+    }
+  } catch (error) {
+    buildError = error;
   }
-  const remainingResults = childTotal > 1
-    ? await runParallelAndThrowAfterSettled(top.slice(1).map((item, offset) => runChild(item, offset + 1)))
-    : [];
-  const childResults = [firstResult, ...remainingResults];
+  if (buildError) {
+    const partialAssembled = top.map((item, index) => {
+      const done = childResults.find((result) => result.index === index);
+      if (done) return { ...item, ...(done.children.length ? { children: done.children } : {}) };
+      return item;
+    });
+    const partialOutline = normalizeOutlineResponse({ outline: renumber(partialAssembled) }, new Set());
+    buildError.partialOutline = partialOutline;
+    throw buildError;
+  }
   const assembled = childResults
     .sort((left, right) => left.index - right.index)
     .map(({ item, children }) => ({ ...item, ...(children.length ? { children } : {}) }));
@@ -3300,13 +3468,14 @@ async function buildAligned(aiService, payload, outlineMode, groups, suggestions
   return outline;
 }
 
-async function responseFileWorkflow(aiService, agentService, payload, log) {
+async function responseFileWorkflow(aiService, agentService, payload, log, existingOutline = null) {
   log('开始提取响应文件要求中的技术文件目录。', OUTLINE_PROGRESS.requirementExtractionStart);
-  const groups = await extractResponseFileOutlineGroups(aiService, payload, undefined, log);
+  let groups = await extractResponseFileOutlineGroups(aiService, payload, undefined, log);
+  groups = mergeResponseFileGroupsByCoreTitle(groups);
   log('响应文件技术目录提取完成，正在构建一级目录。', OUTLINE_PROGRESS.requirementExtractionEnd);
   let outline;
   try {
-    outline = await buildAligned(aiService, payload, 'response-file', groups, undefined, log);
+    outline = await buildAligned(aiService, payload, 'response-file', groups, undefined, log, existingOutline);
   } catch (error) {
     assertRecoverableOutlineError(error, RECOVERABLE_ALIGNED_OUTLINE_ERRORS);
     const finalReview = createSyntheticFinalReview('响应文件技术目录生成失败', error);
@@ -3315,7 +3484,7 @@ async function responseFileWorkflow(aiService, agentService, payload, log) {
       recoveryKind: 'response-file-outline-generation',
       title: '响应文件技术目录自主生成',
       payload,
-      outline: topLevelOutline,
+      outline: existingOutline || topLevelOutline,
       groups,
       finalReview,
       workflowKind: 'technical-plan',
@@ -3335,7 +3504,7 @@ async function responseFileWorkflow(aiService, agentService, payload, log) {
   return { outline, groups };
 }
 
-async function alignedWorkflow(aiService, agentService, payload, log) {
+async function alignedWorkflow(aiService, agentService, payload, log, existingOutline = null) {
   log('开始提取技术评分大类。', OUTLINE_PROGRESS.requirementExtractionStart);
   let groups;
   try {
@@ -3347,7 +3516,7 @@ async function alignedWorkflow(aiService, agentService, payload, log) {
       recoveryKind: 'aligned-full-generation',
       title: '技术方案目录自主生成',
       payload,
-      outline: { outline: [] },
+      outline: existingOutline || { outline: [] },
       groups: [],
       finalReview,
       workflowKind: 'technical-plan',
@@ -3366,7 +3535,7 @@ async function alignedWorkflow(aiService, agentService, payload, log) {
   log('技术评分大类提取完成，正在构建一级目录。', OUTLINE_PROGRESS.requirementExtractionEnd);
   let outline;
   try {
-    outline = await buildAligned(aiService, payload, 'aligned', groups, undefined, log);
+    outline = await buildAligned(aiService, payload, 'aligned', groups, undefined, log, existingOutline);
   } catch (error) {
     assertRecoverableOutlineError(error, RECOVERABLE_ALIGNED_OUTLINE_ERRORS);
     const finalReview = createSyntheticFinalReview('评分项对齐目录生成失败', error);
@@ -3375,7 +3544,7 @@ async function alignedWorkflow(aiService, agentService, payload, log) {
       recoveryKind: 'aligned-outline-generation',
       title: '评分项对齐目录自主生成',
       payload,
-      outline: topLevelOutline,
+      outline: existingOutline || topLevelOutline,
       groups,
       finalReview,
       workflowKind: 'technical-plan',
@@ -4077,8 +4246,9 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     oldOutline: formatOldOutlineForPrompt(oldOutline),
   };
 
-  let outline;
+  let outline = null;
   let groups = [];
+  try {
   if (isExpansionWorkflow) {
     if (outlineExpansionMode === 'original-only') {
       log('已选择仅使用原方案目录，跳过AI补充和知识库补目录。', OUTLINE_PROGRESS.finalizing);
@@ -4195,6 +4365,10 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     outlineGenerationTask: finalTask,
   });
   updateTask(finalTask, technicalPlan);
+  } catch (error) {
+    persistPartialOutlineOnError(workspaceStore, { outline, groups, partialOutline: error?.partialOutline, agentPartialOutput: error?.agentPartialOutput }, error);
+    throw error;
+  }
 }
 
 const OUTLINE_WIZARD_STEP_LABELS = Object.freeze({
@@ -4275,6 +4449,13 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
   const orderedSteps = getOutlineWizardOrderedSteps({ isExpansionWorkflow, outlineExpansionMode: effectiveExpansionMode });
 
   const isFirstStep = forceRestart || !wizard || !wizard.active;
+  const previousTask = storedPlan.outlineGenerationTask;
+  const isResumeFromFailure = !isFirstStep && previousTask?.status === 'error';
+  const resumeOutline = isResumeFromFailure ? storedPlan.outlineData : null;
+  if (resumeOutline?.outline?.length) {
+    log('检测到上次目录生成失败，将从已保存进度续写。', OUTLINE_PROGRESS.start);
+  }
+
   if (isFirstStep) {
     if (step !== orderedSteps[0]) {
       throw new Error(`请先从第一步「${OUTLINE_WIZARD_STEP_LABELS[orderedSteps[0]]}」开始分步生成目录`);
@@ -4326,6 +4507,7 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
   let wordControlWarning = '';
   let wordControlWarningKind = '';
 
+  try {
   if (step === 'extract') {
     if (!isExpansionWorkflow) {
       throw new Error('提取原方案目录仅适用于原方案扩充流程');
@@ -4348,7 +4530,7 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
     if (isExpansionWorkflow) {
       outline = await expansionComplementWorkflow(aiService, { ...baseTaskPayload, oldOutline: formatOldOutlineForPrompt(oldOutline) }, oldOutline, log);
     } else {
-      const alignedResult = await alignedWorkflow(aiService, agentService, { ...baseTaskPayload, oldOutline: formatOldOutlineForPrompt(oldOutline) }, log);
+      const alignedResult = await alignedWorkflow(aiService, agentService, { ...baseTaskPayload, oldOutline: formatOldOutlineForPrompt(oldOutline) }, log, resumeOutline);
       outline = alignedResult.outline;
       groups = alignedResult.groups || [];
     }
@@ -4427,6 +4609,10 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
     }
   } else {
     throw new Error(`未知的向导步骤：${step}`);
+  }
+  } catch (error) {
+    persistPartialOutlineOnError(workspaceStore, { outline, groups, partialOutline: error?.partialOutline, agentPartialOutput: error?.agentPartialOutput }, error);
+    throw error;
   }
 
   const isLastStep = orderedSteps[orderedSteps.length - 1] === step;

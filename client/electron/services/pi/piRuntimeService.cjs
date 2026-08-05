@@ -345,7 +345,8 @@ function createPiRuntimeService({ app, configStore, aiService }) {
 
   function subscribeSession(session, taskToken, diffEntries) {
     let streamedText = '';
-    return session.subscribe((event) => {
+    const toolErrors = [];
+    const unsubscribe = session.subscribe((event) => {
       if (event.type === 'message_start' && event.message?.role === 'assistant') {
         streamedText = '';
       }
@@ -385,6 +386,12 @@ function createPiRuntimeService({ app, configStore, aiService }) {
       if (event.type === 'tool_execution_end') {
         const details = event.result?.details || {};
         if (details.diff || details.patch) diffEntries.push({ tool: event.toolName, diff: details.diff || '', patch: details.patch || '' });
+        if (event.isError) {
+          toolErrors.push({
+            tool: event.toolName,
+            message: event.result?.errorMessage || event.result?.error || event.result?.message || '',
+          });
+        }
         touchActivity({
           task_token: taskToken,
           stage: 'tool',
@@ -400,6 +407,11 @@ function createPiRuntimeService({ app, configStore, aiService }) {
         touchActivity({ task_token: taskToken, stage: event.type, message: '', source: `pi.${event.type}`, visible: false, activity: true });
       }
     });
+    return {
+      unsubscribe,
+      hasToolErrors: () => toolErrors.length > 0,
+      getToolErrors: () => [...toolErrors],
+    };
   }
 
   function bindAbort(parentSignal, controller, getSession) {
@@ -455,7 +467,7 @@ function createPiRuntimeService({ app, configStore, aiService }) {
     setPhase('running', activeTask.progress_text);
     let session = null;
     let sessionSnapshot = null;
-    let unsubscribe = null;
+    let sessionSubscription = null;
     let archivedWorkspace = '';
     const diffEntries = [];
     const cleanupAbort = bindAbort(payload.signal, activeController, () => session);
@@ -474,7 +486,7 @@ function createPiRuntimeService({ app, configStore, aiService }) {
       });
       session = created.session;
       sessionSnapshot = created.snapshot;
-      unsubscribe = subscribeSession(session, taskToken, diffEntries);
+      sessionSubscription = subscribeSession(session, taskToken, diffEntries);
       let prompt = payload.prompt || createDefaultPrompt(payload.task || '请分析当前输入文件并输出结果。', outputFile);
       let assistantText = '';
       let validationResult = null;
@@ -485,6 +497,12 @@ function createPiRuntimeService({ app, configStore, aiService }) {
           if (activeController.signal.aborted) throw activeController.signal.reason;
           await session.prompt(prompt, { expandPromptTemplates: false });
           if (activeController.signal.aborted) throw activeController.signal.reason;
+          if (sessionSubscription?.hasToolErrors?.()) {
+            const errors = sessionSubscription.getToolErrors();
+            const error = new Error(`Agent 工具执行失败：${errors.map((e) => `${e.tool}${e.message ? `（${e.message}）` : ''}`).join('；')}。请检查工具环境或重试。`);
+            error.piToolErrors = errors;
+            throw error;
+          }
           const assistantError = getAssistantError(session.messages);
           if (assistantError) {
             const error = new Error(assistantError);
@@ -597,7 +615,7 @@ function createPiRuntimeService({ app, configStore, aiService }) {
       trackAgentRuntime(app, configStore, 'failed', { retryCount: retryAttempts.length });
       throw error;
     } finally {
-      unsubscribe?.();
+      sessionSubscription?.unsubscribe?.();
       session?.dispose?.();
       cleanupAbort();
       clearInterval(watchdog);
