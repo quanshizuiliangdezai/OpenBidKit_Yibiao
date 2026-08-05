@@ -54,11 +54,11 @@ function childrenOutlineFixedStructureRules() {
 
 function childrenOutlineTopicSpecificityRules() {
   return `主题相关性要求（必须遵守）：
-1. 二三级目录必须紧扣“当前固定一级目录”的具体技术主题，必须体现该主题的专业内容，不能写成放之四海皆准的通用章节。
-2. 严禁对不同一级目录套用同一套通用模板。例如，不要对每个一级目录都生成“需求分析与标准引用 → 系统拓扑设计与模块功能描述 → 各区域详细设计方案 → 项目建设实施方案 → 培训运维及售后服务方案 → HSE健康安全管理方案/质量保障体系/信息安全与保密管理”这种雷同结构。
-3. 每个一级目录下的二级目录标题、描述、三级展开要点，必须与该一级目录的专业领域强相关。例如“网络组网”应突出网络架构、设备选型、IP规划、无线覆盖；“计算机及存储”应突出服务器配置、存储架构、虚拟化/云平台、备份容灾；“人工智能项目集成”应突出算法平台、数据治理、模型训练与部署、算力调度。
-4. 如果当前一级目录主题是具体的系统/产品/技术方向，二级目录应围绕该方向的“设计、实施、测试、验收、运维”等专业环节展开，而不是把所有方向都写成相同的实施流程。
-5. 最终输出前请自检：如果把当前生成的 children 换到另一个一级目录下也同样完全适用，则生成失败，必须重新按当前一级目录主题定制。`;
+1. 二三级目录必须严格依据“招标文件（技术评分要求 / 响应文件要求）中针对该一级目录列出的具体评分项与细则”来生成。招标文件里列了几点，就生成几点；每个二级目录标题与三级展开要点，都应能在招标原文对应条款中找到依据。
+2. 严禁套用与招标文件无关的通用模板。例如不要对每个一级目录都生硬补充“需求分析 → 系统拓扑 → 各区域详细设计 → 项目建设实施 → 培训运维及售后服务 → HSE/质量/信息安全”这类招标文件并未要求的流程章节。
+3. 只有当招标文件本身在某一级目录下明确要求了培训、运维、实施、质保、售后等内容时，才允许出现对应章节；招标文件未要求的，一律不得自行补齐。
+4. 不同一级目录的结构可以相似，也可以不同——以“招标文件的对应要求”为准，而不是以“和其他目录是否雷同”为准。判断标准只有一条：该二三级目录标题是否在招标文件的对应评分项/细则中有依据。
+5. 最终输出前请自检：把生成的 children 与招标文件原文逐条对照。凡是招标文件没有依据、纯属通用套话的章节，一律删除或改为招标文件实际要求的内容；招标文件明确要求但缺失的章节，必须补全。`;
 }
 
 function childrenOutlineParentNumberingRules(parentId) {
@@ -697,7 +697,7 @@ function buildFinalOutlineReviewMessages(context) {
 2. ${responseFileMode ? '技术评分要求是否已作为写作约束、判定标准或注意事项被合理参考；不得把技术评分项改造成一级目录。' : '技术评分要求是否已作为约束、扣分口径、判定标准或注意事项被合理参考；不得因为评分要求本身生成、补充或要求补充一级目录。'}
 3. 是否存在明显重复、归属错位、遗漏${sourceLabel}、误把非技术文件内容当成目录主题或结构不合理。
 4. 检查是否存在某个父目录下最终只有一个叶子目录；存在时必须返回 passed=false，并提出合并层级或调整归属的建议。
-5. 特别检查：多个不同一级目录的二级目录结构是否高度雷同（例如每个一级目录下都是“需求分析→系统拓扑→各区域详细设计→项目建设实施→培训运维→HSE/质量/信息安全”这种通用模板）。如果存在这种套用通用模板的情况，必须返回 passed=false，并在 suggestions 中明确指出哪些一级目录被模板化了，要求按各自主题重新生成差异化的二三级目录。
+5. 特别检查：多个不同一级目录的二级目录结构是否高度雷同。只有当雷同结构主要由通用套话词（需求分析、系统拓扑、项目建设实施、培训运维、HSE、质量、信息安全等）构成，且在招标文件对应评分项/细则中找不到依据时，才返回 passed=false，并在 suggestions 中明确指出应改为招标文件实际要求的内容。若雷同确实来自招标文件明确要求（例如每个子系统都要求培训、运维、质保等），则应放行，不得仅因结构相似就判不通过——判断的唯一标准是“该二三级目录标题能否在招标文件的对应条款中找到依据”。
 6. 如果不通过，suggestions 必须给出具体、局部、可执行的修改建议；建议应围绕${sourceLabel}覆盖和现有目录结构调整，不要要求修改已锁定的一级目录来源。
 
 只返回 JSON，格式为 {"passed": true, "suggestions": []}，不要返回完整目录，不要输出解释文字。`,
@@ -2215,6 +2215,29 @@ function getSecondLevelTitleSignature(item) {
     .join('|');
 }
 
+// 通用套话词：只有在雷同结构中主要由这些词构成时，才认定是“套用通用模板”。
+// 如果雷同来自招标文件的明确要求（如每个子系统都要求培训/运维/质保），不应被误杀。
+const GENERIC_TEMPLATE_KEYWORDS = [
+  '需求分析', '系统拓扑', '详细设计', '项目建设', '项目实施', '建设实施',
+  '培训', '运维', '质保', '售后', 'hse', '健康安全', '安全健康', '质量',
+  '信息安全', '保密', '标准引用', '模块功能', '实施方案', '技术方案',
+];
+
+function isGenericTemplateSignature(signature) {
+  if (!signature) return false;
+  const titles = signature
+    .split('|')
+    .map((t) => t.trim())
+    .filter(Boolean);
+  if (!titles.length) return false;
+  const genericCount = titles.filter((t) => {
+    const lower = t.toLowerCase();
+    return GENERIC_TEMPLATE_KEYWORDS.some((kw) => lower.includes(kw.toLowerCase()));
+  }).length;
+  // 过半标题含套话词，且整体看起来像通用流程章节，才认定是套模板
+  return genericCount >= Math.ceil(titles.length / 2);
+}
+
 function detectTemplateChildrenStructure(outlineItems) {
   if (!outlineItems || outlineItems.length < 2) return null;
   const signatures = new Map();
@@ -2226,7 +2249,11 @@ function detectTemplateChildrenStructure(outlineItems) {
     }
     signatures.get(sig).push(item);
   });
-  const templatedGroups = Array.from(signatures.values()).filter((group) => group.length >= 2);
+  // 仅当雷同签名主要由通用套话词构成时，才判定为套用模板；
+  // 若雷同来自招标文件明确要求的并列技术方向，则放行。
+  const templatedGroups = Array.from(signatures.values()).filter(
+    (group) => group.length >= 2 && isGenericTemplateSignature(getSecondLevelTitleSignature(group[0])),
+  );
   if (!templatedGroups.length) return null;
   const titles = templatedGroups.flatMap((group) => group.map((item) => String(item.title || '未命名').trim()));
   return titles;
