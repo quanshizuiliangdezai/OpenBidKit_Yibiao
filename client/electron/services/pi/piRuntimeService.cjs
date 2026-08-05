@@ -189,7 +189,20 @@ function createRuntimeDiagnostics(limit = 500) {
   };
 }
 
-function createPiRuntimeService({ app, configStore, aiService }) {
+function normalizeMonitorValue(value) {
+  if (value === undefined) return undefined;
+  try {
+    return JSON.parse(JSON.stringify(value, (_key, item) => {
+      if (typeof item === 'bigint') return String(item);
+      if (item instanceof Error) return { name: item.name, message: item.message, stack: item.stack || '' };
+      return item;
+    }));
+  } catch {
+    return String(value);
+  }
+}
+
+function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, onMonitorEvent }) {
   const runtime = PI_RUNTIME;
   const runtimeId = PI_RUNTIME_ID;
   const runtimeName = PI_RUNTIME_NAME;
@@ -213,6 +226,19 @@ function createPiRuntimeService({ app, configStore, aiService }) {
   let activeController = null;
   let statusTimer = null;
   let sdkVersion = '';
+
+  // Pi 事件只在开发者监视器实际挂载时转换为 IPC 可传输数据。
+  function emitMonitorEvent(event = {}) {
+    if (!isMonitorActive?.()) return;
+    try {
+      onMonitorEvent?.({
+        ...event,
+        task_id: event.task_id || activeTask?.task_id || '',
+        title: event.title || activeTask?.title || '',
+        at: event.at || nowIso(),
+      });
+    } catch {}
+  }
 
   function getActiveTaskSummary() {
     if (!activeTask) return null;
@@ -351,12 +377,15 @@ function createPiRuntimeService({ app, configStore, aiService }) {
         streamedText = '';
       }
       if (event.type === 'message_update' && event.assistantMessageEvent?.type === 'text_delta') {
-        streamedText += event.assistantMessageEvent.delta || '';
+        const delta = event.assistantMessageEvent.delta || '';
+        streamedText += delta;
+        if (isMonitorActive?.()) emitMonitorEvent({ type: 'assistant_delta', delta });
         return;
       }
       if (event.type === 'message_end' && event.message?.role === 'assistant') {
         const completedText = extractMessageText(event.message) || streamedText.trim();
         streamedText = '';
+        if (isMonitorActive?.()) emitMonitorEvent({ type: 'assistant_end', text: completedText });
         touchActivity({
           task_token: taskToken,
           stage: 'assistant_text',
@@ -368,6 +397,14 @@ function createPiRuntimeService({ app, configStore, aiService }) {
         return;
       }
       if (event.type === 'tool_execution_start') {
+        if (isMonitorActive?.()) {
+          emitMonitorEvent({
+            type: 'tool_start',
+            tool_call_id: event.toolCallId || '',
+            tool_name: event.toolName || '',
+            args: normalizeMonitorValue(event.args),
+          });
+        }
         touchActivity({
           task_token: taskToken,
           stage: 'tool',
@@ -380,6 +417,14 @@ function createPiRuntimeService({ app, configStore, aiService }) {
         return;
       }
       if (event.type === 'tool_execution_update') {
+        if (isMonitorActive?.()) {
+          emitMonitorEvent({
+            type: 'tool_update',
+            tool_call_id: event.toolCallId || '',
+            tool_name: event.toolName || '',
+            partial_result: normalizeMonitorValue(event.partialResult),
+          });
+        }
         touchActivity({ task_token: taskToken, stage: 'tool', message: '', source: 'pi.tool.update', visible: false, activity: true });
         return;
       }
@@ -390,6 +435,15 @@ function createPiRuntimeService({ app, configStore, aiService }) {
           toolErrors.push({
             tool: event.toolName,
             message: event.result?.errorMessage || event.result?.error || event.result?.message || '',
+          });
+        }
+        if (isMonitorActive?.()) {
+          emitMonitorEvent({
+            type: 'tool_end',
+            tool_call_id: event.toolCallId || '',
+            tool_name: event.toolName || '',
+            result: normalizeMonitorValue(event.result),
+            is_error: Boolean(event.isError),
           });
         }
         touchActivity({
@@ -403,7 +457,8 @@ function createPiRuntimeService({ app, configStore, aiService }) {
         });
         return;
       }
-      if (['agent_start', 'agent_end', 'agent_settled', 'turn_start', 'turn_end', 'message_start', 'message_end', 'compaction_start', 'compaction_end'].includes(event.type)) {
+      if (['agent_start', 'agent_end', 'agent_settled', 'turn_start', 'turn_end', 'compaction_start', 'compaction_end'].includes(event.type)) {
+        if (isMonitorActive?.()) emitMonitorEvent({ type: event.type });
         touchActivity({ task_token: taskToken, stage: event.type, message: '', source: `pi.${event.type}`, visible: false, activity: true });
       }
     });
@@ -463,6 +518,17 @@ function createPiRuntimeService({ app, configStore, aiService }) {
       task_token: taskToken,
       onActivity: payload.onActivity,
     };
+    let prompt = payload.prompt || createDefaultPrompt(payload.task || '请分析当前输入文件并输出结果。', outputFile);
+    if (isMonitorActive?.()) {
+      emitMonitorEvent({
+        type: 'task_start',
+        task_id: taskId,
+        title,
+        prompt,
+        output_file: outputFile,
+        files: (payload.files || []).map((file) => ({ path: String(file.path || ''), content: String(file.content || '') })),
+      });
+    }
     activeController = new AbortController();
     setPhase('running', activeTask.progress_text);
     let session = null;
@@ -487,7 +553,6 @@ function createPiRuntimeService({ app, configStore, aiService }) {
       session = created.session;
       sessionSnapshot = created.snapshot;
       sessionSubscription = subscribeSession(session, taskToken, diffEntries);
-      let prompt = payload.prompt || createDefaultPrompt(payload.task || '请分析当前输入文件并输出结果。', outputFile);
       let assistantText = '';
       let validationResult = null;
       let retryCount = 0;
@@ -558,6 +623,15 @@ function createPiRuntimeService({ app, configStore, aiService }) {
             activity: true,
           });
           prompt = buildRetryPrompt(outputFile, error, retryCount, maxRetries);
+          emitMonitorEvent({
+            type: 'retry',
+            task_id: taskId,
+            title,
+            attempt: retryCount,
+            maximum: maxRetries,
+            message: compactText(error?.message || error, 600),
+            prompt,
+          });
         }
       }
 
@@ -586,6 +660,15 @@ function createPiRuntimeService({ app, configStore, aiService }) {
         },
       };
       await writeJsonAsync(path.join(archive.taskDir, 'result.json'), result);
+      emitMonitorEvent({
+        type: 'task_end',
+        task_id: taskId,
+        title,
+        output_file: outputFile,
+        output_content: output.content,
+        assistant_text: assistantText,
+        retry_count: retryCount,
+      });
       trackAgentRuntime(app, configStore, 'success', { retryCount });
       return result;
     } catch (error) {
@@ -612,6 +695,14 @@ function createPiRuntimeService({ app, configStore, aiService }) {
           error: serializeDiagnosticError(error),
         };
       }
+      emitMonitorEvent({
+        type: 'task_error',
+        task_id: taskId,
+        title,
+        output_file: outputFile,
+        output_content: output.content,
+        message: error?.message || String(error),
+      });
       trackAgentRuntime(app, configStore, 'failed', { retryCount: retryAttempts.length });
       throw error;
     } finally {
