@@ -76,6 +76,7 @@ const bridge = {
     exportSelfCheckReport: (payload) => ipcRenderer.invoke('agent:export-self-check-report', payload),
     getStatus: () => ipcRenderer.invoke('agent:get-status'),
     restart: (reason) => ipcRenderer.invoke('agent:restart', reason),
+    listRuntimes: () => ipcRenderer.invoke('agent:list-runtimes'),
     onStatus: (callback) => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('agent:status', listener);

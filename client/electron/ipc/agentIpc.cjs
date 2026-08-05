@@ -6,6 +6,7 @@ function registerAgentIpc({ agentService, mainWindow }) {
   ipcMain.handle('agent:export-self-check-report', async (_event, payload) => agentService.exportSelfCheckReport(payload));
   ipcMain.handle('agent:get-status', async () => agentService.getStatus());
   ipcMain.handle('agent:restart', async (_event, reason) => agentService.restart(reason || 'manual'));
+  ipcMain.handle('agent:list-runtimes', async () => agentService.listRuntimes());
 
   agentService.onStatus?.((status) => {
     if (!mainWindow?.isDestroyed?.() && !mainWindow?.webContents?.isDestroyed?.()) {

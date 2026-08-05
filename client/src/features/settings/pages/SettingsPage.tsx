@@ -540,7 +540,7 @@ const initialState: SettingsPageState = {
     mermaid_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
     html_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
   },
-  agentRuntime: '',
+  agentRuntime: 'pi',
   agentModeScenarios: { ...defaultAgentModeScenarios },
   general: {
     developer_mode: false,

@@ -285,6 +285,7 @@ const defaultConfig = {
   analytics_client_id: '',
   analytics_created_at: '',
   account: null,
+  agent_runtime: 'pi',
 };
 
 function createAnalyticsClientId() {
