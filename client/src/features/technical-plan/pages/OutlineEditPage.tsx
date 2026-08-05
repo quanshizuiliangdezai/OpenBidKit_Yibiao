@@ -1329,13 +1329,18 @@ function OutlineEditPage({
                 const isPending = index > wizardCurrentIndex;
                 const isCurrentExecutable = isCurrent && !runningWizardStep;
                 const stepNumber = index + 1;
+                const isLast = index === effectiveWizardSteps.length - 1;
                 return (
                   <li
                     key={step}
                     className={`outline-wizard-step${isDone ? ' is-done' : ''}${isCurrent ? ' is-current' : ''}${isRunning ? ' is-running' : ''}${isFailed ? ' is-failed' : ''}${isPending ? ' is-pending' : ''}`}
                   >
-                    <div className="outline-wizard-step-main">
-                      <div className="outline-wizard-step-indicator" aria-label={isDone ? '已完成' : isCurrent ? '当前' : '待执行'}>
+                    <div className="outline-wizard-step-track">
+                      <div
+                        className="outline-wizard-step-node"
+                        aria-label={isDone ? '已完成' : isCurrent ? '当前' : '待执行'}
+                        title={WIZARD_STEP_DESCRIPTIONS[step]}
+                      >
                         {isDone ? (
                           <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M20.29 6.71a1 1 0 0 0-1.42 0l-8.88 8.88-3.88-3.88a1 1 0 1 0-1.42 1.42l4.59 4.59a1 1 0 0 0 1.42 0l9.59-9.59a1 1 0 0 0 0-1.42Z" />
@@ -1346,27 +1351,26 @@ function OutlineEditPage({
                           <span>{stepNumber}</span>
                         )}
                       </div>
-                      <div className="outline-wizard-step-body">
-                        <div className="outline-wizard-step-head">
-                          <strong>{WIZARD_STEP_LABELS[step]}</strong>
-                          {isRunning && (
-                            <span className="outline-wizard-step-progress">{Math.max(0, Math.min(99, task?.progress || 0))}%</span>
-                          )}
-                          {isDone && <span className="outline-wizard-step-badge">已完成</span>}
-                          {isFailed && <span className="outline-wizard-step-badge is-failed">失败</span>}
-                        </div>
-                        <p>{WIZARD_STEP_DESCRIPTIONS[step]}</p>
+                      {!isLast && <span className="outline-wizard-step-line" aria-hidden="true" />}
+                    </div>
+                    <div className="outline-wizard-step-info">
+                      <strong>{WIZARD_STEP_LABELS[step]}</strong>
+                      <div className="outline-wizard-step-meta">
+                        {isRunning && (
+                          <span className="outline-wizard-step-progress">{Math.max(0, Math.min(99, task?.progress || 0))}%</span>
+                        )}
+                        {isDone && <span className="outline-wizard-step-badge">已完成</span>}
+                        {isFailed && <span className="outline-wizard-step-badge is-failed">失败</span>}
+                        {isPending && <span className="outline-wizard-step-badge is-pending">待执行</span>}
                         {isCurrentExecutable && (
-                          <div className="outline-wizard-step-action">
-                            <button
-                              type="button"
-                              className="outline-wizard-btn outline-wizard-btn-primary"
-                              disabled={generating || !projectOverview || !techRequirements}
-                              onClick={() => runWizardStep(step, { restart: false })}
-                            >
-                              {isFailed ? '重试此步' : '执行此步'}
-                            </button>
-                          </div>
+                          <button
+                            type="button"
+                            className="outline-wizard-btn outline-wizard-btn-primary"
+                            disabled={generating || !projectOverview || !techRequirements}
+                            onClick={() => runWizardStep(step, { restart: false })}
+                          >
+                            {isFailed ? '重试' : '执行'}
+                          </button>
                         )}
                       </div>
                     </div>
