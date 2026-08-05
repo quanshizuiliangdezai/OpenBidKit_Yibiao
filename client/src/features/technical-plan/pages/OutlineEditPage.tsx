@@ -579,6 +579,31 @@ function OutlineEditPage({
     }
   };
 
+  const hasOutlineConfigDraftChanged = () => {
+    const wordControlOptions = getNormalizedWordControlOptions();
+    const knowledgeChanged =
+      draftKnowledgeDocumentIds.length !== referenceKnowledgeDocumentIds.length ||
+      draftKnowledgeDocumentIds.some((id) => !referenceKnowledgeDocumentIds.includes(id)) ||
+      referenceKnowledgeDocumentIds.some((id) => !draftKnowledgeDocumentIds.includes(id));
+    const modeChanged = isExpansionWorkflow
+      ? draftOutlineExpansionMode !== outlineExpansionMode
+      : draftOutlineMode !== outlineMode;
+    const wordControlChanged =
+      wordControlOptions.minimumWords !== outlineWordControlOptions.minimumWords ||
+      wordControlOptions.maximumWords !== outlineWordControlOptions.maximumWords ||
+      wordControlOptions.sectionWords !== outlineWordControlOptions.sectionWords ||
+      wordControlOptions.strictSectionWords !== outlineWordControlOptions.strictSectionWords;
+    return knowledgeChanged || modeChanged || wordControlChanged;
+  };
+
+  const handleDialogOpenChange = (open: boolean) => {
+    if (!open && generationDialogOpen && hasOutlineConfigDraftChanged()) {
+      void saveOutlineConfig();
+      return;
+    }
+    setGenerationDialogOpen(open);
+  };
+
   const generateOutline = async () => {
     const lockMessage = getMutationLockMessage();
     if (lockMessage) {
@@ -1517,7 +1542,7 @@ function OutlineEditPage({
         </aside>
       </section>
 
-      <Dialog.Root open={generationDialogOpen} onOpenChange={setGenerationDialogOpen}>
+      <Dialog.Root open={generationDialogOpen} onOpenChange={handleDialogOpenChange}>
         <Dialog.Portal>
           <Dialog.Overlay className="content-regenerate-modal" />
           <Dialog.Content className="outline-generation-config-card">
