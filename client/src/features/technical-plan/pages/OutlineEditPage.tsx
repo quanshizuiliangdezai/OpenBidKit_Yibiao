@@ -670,13 +670,15 @@ function OutlineEditPage({
     ? '未开始'
     : wizardDone
       ? '已完成'
-      : runningWizardStep
-        ? '进行中'
-        : failedWizardStep
-          ? '失败，可重试'
-          : wizardActive
-            ? `待执行：${WIZARD_STEP_LABELS[effectiveWizardSteps[wizardCurrentIndex]]}`
-            : '未开始';
+      : task?.status === 'wizard-step-done'
+        ? '已完成，即将自动进入下一步'
+        : runningWizardStep
+          ? '进行中'
+          : failedWizardStep
+            ? '失败，可重试'
+            : wizardActive
+              ? `待执行：${WIZARD_STEP_LABELS[effectiveWizardSteps[wizardCurrentIndex]]}`
+              : '未开始';
 
   const runWizardStep = async (step: OutlineWizardStep, options: { restart?: boolean } = {}) => {
     if (!projectOverview || !techRequirements) {
@@ -710,6 +712,32 @@ function OutlineEditPage({
       showToast(error instanceof Error ? error.message : '启动分步生成失败', 'error');
     }
   };
+
+  // 分步向导自动串联：某一步成功（wizard-step-done）且仍有后续步骤时，
+  // 自动启动下一步；任一步失败（error）则停留在当前步，由用户手动「重试」，不自动重试。
+  // 用 ref 记录已触发自动推进的 wizard 对象引用，避免重渲染 / 依赖变化导致重复触发。
+  const lastAutoAdvancedWizardRef = useRef<unknown>(null);
+  useEffect(() => {
+    if (task?.status !== 'wizard-step-done') {
+      return;
+    }
+    if (!outlineWizard?.active) {
+      return;
+    }
+    const completedCount = outlineWizard.completedSteps.length;
+    const nextStep = effectiveWizardSteps[completedCount];
+    if (!nextStep || completedCount >= effectiveWizardSteps.length) {
+      return;
+    }
+    if (lastAutoAdvancedWizardRef.current === outlineWizard) {
+      return;
+    }
+    lastAutoAdvancedWizardRef.current = outlineWizard;
+    const timer = window.setTimeout(() => {
+      void runWizardStep(nextStep, { restart: false });
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [task?.status, outlineWizard, effectiveWizardSteps, runWizardStep]);
 
   const toggleDraftKnowledgeDocument = (document: KnowledgeDocument) => {
     if (document.status !== 'success' || knowledgePickingDisabled) {
