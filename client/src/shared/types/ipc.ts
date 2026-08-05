@@ -312,6 +312,7 @@ export interface AgentMonitorEvent {
   type: AgentMonitorEventType;
   task_id: string;
   title?: string;
+  workspace_dir?: string;
   prompt?: string;
   output_file?: string;
   files?: AgentRunFile[];
@@ -334,6 +335,7 @@ export interface AgentMonitorEvent {
 export interface AgentMonitorSnapshot {
   attached_at: string;
   active_task?: AgentRuntimeActiveTask | null;
+  workspace_dir?: string;
 }
 
 export interface AgentSelfCheckStep {
@@ -694,6 +696,7 @@ export interface YibiaoBridge {
   };
   developerAgentMonitor: {
     openWindow: () => Promise<{ success: boolean }>;
+    openWorkspace: (workspaceDir: string) => Promise<{ success: boolean; path: string }>;
     attach: () => Promise<AgentMonitorSnapshot>;
     detach: () => Promise<{ success: boolean }>;
     onEvent: (callback: (event: AgentMonitorEvent) => void) => () => void;
