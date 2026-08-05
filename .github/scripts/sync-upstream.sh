@@ -164,6 +164,35 @@ else
   log "Merge completed cleanly (no conflicts)."
 fi
 
+# ========== 4f. 强制保留 fork 深度定制文件（修复“每次同步 tsc 失败”） ==========
+# 根因：上游常往共享类型/接口加必填项（如 SettingsPageState.developer_agent_monitor_auto_open）
+# 或删除我们仍在用的字段（embeddingModelName / agentRuntime）。这类文件大多被 git
+# **自动合并**进上游版本（非冲突，index 里没有 ours/theirs 舞台，`git checkout --ours`
+# 对它无效，只会拿回已合并的上游版本）；而消费它的文件（SettingsPage.tsx）因冲突被 --ours
+# 保留了我们的旧版 → 类型要求必填/字段不匹配 → tsc 必然失败 → 脚本 abort → 同步永远失败。
+# 对策：对 fork 深度定制的文件，合并后一律从“合并前 HEAD”恢复我们的版本（即使已自动合并），
+# 保证 fork 内部一致、我们的改动不丢。这些文件刻意不吸收上游改动（用户决策：保留自有版本，
+# 后续如需上游改进再手动 cherry-pick）。注意用 `git show $PRE_MERGE_HEAD:` 而非 checkout --ours。
+FORCE_OURS=(
+  "client/src/features/settings/types.ts"
+  "client/electron/services/outlineGenerationTask.cjs"
+  "client/electron/services/outlineComplianceAudit.cjs"
+  "client/src/features/technical-plan/pages/OutlineEditPage.tsx"
+  "client/src/features/technical-plan/types.ts"
+  "client/electron/services/pi/piRuntimeService.cjs"
+  "client/electron/services/configStore.cjs"
+  "client/src/features/settings/pages/SettingsPage.tsx"
+)
+log "Force-restoring fork-customized files from pre-merge HEAD (FORCE_OURS)..."
+for f in "${FORCE_OURS[@]}"; do
+  if git show "$PRE_MERGE_HEAD:$f" > "$f" 2>/dev/null; then
+    git add "$f"
+    log "  [FORCE-OURS] $f"
+  else
+    warn "  [FORCE-OURS-skip] $f not found in pre-merge HEAD (possibly new upstream file)"
+  fi
+done
+
 # ========== 5. 恢复我们的修改 ==========
 log "Checking our modifications..."
 RESTORED=0
