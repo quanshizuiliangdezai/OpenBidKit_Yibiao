@@ -52,15 +52,6 @@ function childrenOutlineFixedStructureRules() {
 4. 三级目录只包含 id、title、description，不要继续包含 children。`;
 }
 
-function childrenOutlineTopicSpecificityRules() {
-  return `主题相关性要求（必须遵守）：
-1. 二三级目录必须严格依据“招标文件（技术评分要求 / 响应文件要求）中针对该一级目录列出的具体评分项与细则”来生成。招标文件里列了几点，就生成几点；每个二级目录标题与三级展开要点，都应能在招标原文对应条款中找到依据。
-2. 严禁套用与招标文件无关的通用模板骨架。所谓“通用模板骨架”，指并非来自本招标文件、而是行业通用套路里常出现的一套固定章节——它可能表现为“通用流程骨架”（一串固定的流程步骤），也可能表现为“通用管理类骨架”（各类管理体系、组织架构、目标承诺等固定模块）。凡招标文件未明确要求、纯属套话的章节，无论它具体叫什么名字，一律不得添加。
-3. 只有当招标文件本身在某一级目录下明确要求了某项具体服务或保障措施（例如培训、运维、实施、质保、售后等内容）时，才允许出现对应章节；招标文件未要求的，一律不得自行补齐。
-4. 不同一级目录的结构可以相似，也可以不同——以“招标文件的对应要求”为准。若招标文件本身在某一级目录下明确要求了相关内容（例如各子系统均需响应），请保留对应章节；但每个目录的二三级要点必须结合该目录主题具体化，不得把同一套与招标无关的通用模板骨架原样复制到其他目录。判断标准只有一条：该二三级目录标题与要点是否能在招标文件的对应评分项/细则中找到依据；凡招标无依据、纯属通用套话的章节，一律删除或改写为招标文件实际要求的内容。
-5. 最终输出前请自检：把生成的 children 与招标文件原文逐条对照。凡是招标文件没有依据、纯属通用套话的章节，一律删除或改为招标文件实际要求的内容；招标文件明确要求但缺失的章节，必须补全。`;
-}
-
 function childrenOutlineParentNumberingRules(parentId) {
   const id = String(parentId || '1').trim() || '1';
   return `当前一级目录编号要求：
@@ -511,18 +502,12 @@ function extractRequirementGroupsMessages({ overview, requirements, oldOutline }
 3. 如果输入未明确分区，也必须按语义判断：投标人需要在技术方案中一一响应、展开编写的具体评分内容才是评分项；用于解释评分、约束评分、定义扣分或判定规则的内容是评分要求。
 4. 不要提取商务、报价、资质等非技术类条目。
 5. 每个大类都必须适合作为技术标一级目录标题，标题要专业、简洁、完整。
-5.1 所有一级目录标题必须互不相同，不得出现完全重复的标题。注意：标题用词取决于招标文件本身，不要为规避重复而强行改写——若评分表中出现“一个评分项标题覆盖多个技术方向/分项、各方向/分项只是该评分项下的细目（共享同一评分项、合并计分）”的聚合型评分项，则应只生成 1 个一级目录（标题使用评分项核心词）、各方向/分项归入 detail_points（见第 11、12 条）；只有真正独立的评分项才单独成一级目录且标题互不相同。
 6. 同一大类下的细项、子项、分值说明、评分标准要归入 detail_points，不要拆成多个一级目录。
 7. requirement_id 必须唯一，使用 R1、R2、R3 这种格式。
 8. description 需要概括该大类关注的核心内容。
 9. detail_points 中保留该大类下的关键评分细项，并可参考技术评分要求中的通用约束补充响应注意点，但不要把评分要求本身写成独立细项。
 10. 如果提供了“已有目录”，提取结果用于识别原目录未覆盖的评分项缺口，在已有目录上补齐，不要重构、删除、重排原目录。
-11. 聚合型评分项处理（重要）：如果评分表中出现“一个评分项标题覆盖多个技术方向、业务模块、功能分项或实施阶段，各细目只是该评分项下的评分细目（共享同一评分项、合并计分）”的情况，必须按以下规则处理：
-  - 识别特征：多个技术方向/分项列在同一评分项标题下的“细分列 / 细目行 / 子行”中，或评分项标题带有“（各技术方向）”“（含…）”“（…等）”等聚合说明；它们共享同一评分项分值，没有各自独立的评分项标题单元格与独立满分分值行；
-  - 这种情况只允许生成 **1 个一级目录**，标题使用评分项的核心词，去掉“（各技术方向）”“（含…）”等聚合说明；
-  - 各技术方向/分项必须作为该一级目录的 detail_points，绝对不得各自成为一级目录，也不得在标题中写成“核心词（某个方向）”这种多一级目录形式。
-12. 独立评分项判定：只有当某个方向/分项在评分表中是“独立评分项行”（拥有自己的评分项标题单元格与独立的满分分值，不与其他项共享分值）时，才允许它单独成为一级目录；否则一律归入所属评分项的 detail_points。
-13. 只返回 JSON，格式必须为 {"groups": [...]}，不要输出任何其他内容。
+11. 只返回 JSON，格式必须为 {"groups": [...]}，不要输出任何其他内容。
 
 JSON 格式要求：
 {
@@ -549,12 +534,6 @@ function extractResponseFileOutlineGroupsMessages({ overview, requirements, resp
 2. 不要提取报价文件、商务文件、资格证明、授权委托书、承诺函、偏离表、分项报价表等非技术文件目录。
 3. 如果响应文件要求中列出了技术文件的章节、目录、附件或格式模板，应保持原顺序。
 4. 每个目录必须适合作为技术标一级目录标题，标题要专业、简洁、完整，不要包含原文编号。
-4.1 所有一级目录标题必须互不相同，不得出现完全重复的标题。聚合型章节处理（重要）：若响应文件要求中某个章节标题覆盖多个技术方向/分项/子模块（其下分项共享该章节、合并编写），必须按以下规则处理：
-  - 识别特征：章节标题带有“（各技术方向）”“（含…）”“（…等）”等聚合说明，或其下分项列在同一章节的“细分列 / 子行”中，共享该章节、合并编写；
-  - 这种情况只允许生成 **1 个一级目录**，标题使用章节核心词，去掉“（各技术方向）”“（含…）”等聚合说明；
-  - 各技术方向/分项必须作为该一级目录的 detail_points，绝对不得各自成为一级目录，也不得写成“核心词（某个方向）”这种多一级目录形式；
-  - 严禁把共享同一个核心词、仅分项/方向不同的多个条目（形如“核心词（方向A）”“核心词（方向B）”）拆成多个一级目录；它们应合并为 1 个一级目录，各分项列入其 detail_points。
-4.2 独立章节判定：只有当某个方向/分项在响应文件要求中是“独立文件目录行”（拥有自己的目录标题单元格、不与其他目录共享）时，才允许它单独成为一级目录；否则一律归入所属章节的 detail_points。不要为规避重复而强行改写标题。只有真正独立的文件目录才单独成一级目录。
 5. detail_points 中保留该一级目录下明确要求响应、编写或提供的关键内容；可参考技术评分要求补充响应重点，但不能把技术评分项改造成一级目录。
 6. requirement_id 必须唯一，使用 R1、R2、R3 这种格式。
 7. description 需要概括该技术文件目录关注的核心内容。
@@ -599,8 +578,6 @@ function generateAlignedChildrenMessages({ overview, requirements, responseFileR
 6. 一个二级目录下至少有两个三级目录。
 7. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
 8. 除了 JSON 结果外，不要输出任何其他内容。
-
-${childrenOutlineTopicSpecificityRules()}
 
 ${childrenOutlineFixedStructureRules()}`;
   const messages = [
@@ -707,9 +684,7 @@ function buildFinalOutlineReviewMessages(context) {
 2. ${responseFileMode ? '技术评分要求是否已作为写作约束、判定标准或注意事项被合理参考；不得把技术评分项改造成一级目录。' : '技术评分要求是否已作为约束、扣分口径、判定标准或注意事项被合理参考；不得因为评分要求本身生成、补充或要求补充一级目录。'}
 3. 是否存在明显重复、归属错位、遗漏${sourceLabel}、误把非技术文件内容当成目录主题或结构不合理。
 4. 检查是否存在某个父目录下最终只有一个叶子目录；存在时必须返回 passed=false，并提出合并层级或调整归属的建议。
-5. 是否存在多个一级目录复制同一套与招标无关的通用模板骨架（可能是通用流程骨架，也可能是通用管理类骨架），且这些章节在其对应${sourceLabel}中并无依据；存在时必须返回 passed=false，并指出应删除或按各目录主题重写。
-6. 特别检查：多个不同一级目录的二级目录结构是否高度雷同。只有当雷同结构主要由通用套话章节构成（即并非来自本招标文件、而是行业通用套路里的固定章节），且在招标文件对应评分项/细则中找不到依据时，才返回 passed=false，并在 suggestions 中明确指出应改为招标文件实际要求的内容。若雷同确实来自招标文件明确要求（例如每个子系统都明确要求了某项服务或保障措施），则应放行，不得仅因结构相似就判不通过——判断的唯一标准是“该二三级目录标题能否在招标文件的对应条款中找到依据”。
-7. 如果不通过，suggestions 必须给出具体、局部、可执行的修改建议；建议应围绕${sourceLabel}覆盖和现有目录结构调整，不要要求修改已锁定的一级目录来源。
+5. 如果不通过，suggestions 必须给出具体、局部、可执行的修改建议；建议应围绕${sourceLabel}覆盖和现有目录结构调整，不要要求修改已锁定的一级目录来源。
 
 只返回 JSON，格式为 {"passed": true, "suggestions": []}，不要返回完整目录，不要输出解释文字。`,
     },
@@ -1100,7 +1075,7 @@ function createAgentBusyError() {
   return error;
 }
 
-// 从 Agent 原始输出字符串中尽量解析出目录对象。
+
 function tryParsePartialOutlineFromOutput(outputContent) {
   try {
     const parsed = parseAgentJsonContent(outputContent);
@@ -1181,7 +1156,7 @@ async function runOutlineAgentRecovery(agentService, context, log) {
     output_file: outputFile,
     files: buildOutlineAgentRecoveryFiles(agentContext),
     timeout_ms: FINAL_AGENT_TIMEOUT_MS,
-    max_retries: 0,
+    max_retries: 1,
     validateOutput: (resultForValidation) => {
       const contentForValidation = String(resultForValidation?.output_content || resultForValidation?.assistant_text || '').trim();
       if (!contentForValidation) {
@@ -1252,7 +1227,7 @@ async function completeOriginalOutlineWithAgent(agentService, originalPlanMarkdo
       { path: outputFile, content: JSON.stringify(outline || { outline: [] }, null, 2) },
     ],
     timeout_ms: FINAL_AGENT_TIMEOUT_MS,
-    max_retries: 0,
+    max_retries: 1,
     validateOutput: (resultForValidation) => {
       const contentForValidation = String(resultForValidation?.output_content || resultForValidation?.assistant_text || '').trim();
       if (!contentForValidation) {
@@ -1356,8 +1331,6 @@ function buildExpansionMissingChildrenMessages(sharedMessages, parentItem, group
 5. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
 6. id 字段用于承载目录编号；title 字段只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #。
 7. 除了 JSON 结果外，不要输出任何其他内容。
-
-${childrenOutlineTopicSpecificityRules()}
 
 ${childrenOutlineFixedStructureRules()}`;
   const messages = [
@@ -1660,82 +1633,38 @@ function normalizeReviewResponse(payload) {
   return { passed, suggestions };
 }
 
-function coerceRequirementGroup(item, index, options = {}) {
-  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
-
-  let requirementId = String(item.requirement_id ?? item.requirementId ?? item.id ?? '').trim();
-  let title = String(item.title ?? item.name ?? item.chapter ?? '').trim();
-  let description = String(item.description ?? item.desc ?? item.summary ?? '').trim();
-
-  let detailPoints = [];
-  const rawDetail = item.detail_points ?? item.detailPoints ?? item.points ?? item.key_points;
-  if (Array.isArray(rawDetail)) {
-    detailPoints = rawDetail.map((p) => String(p)).filter(Boolean);
-  }
-
-  if (!title && !description) return null;
-  if (!title) title = description.split(/[。；;]/)[0].trim() || '未命名目录';
-  if (!description) description = title;
-  if (!requirementId) requirementId = `R${index + 1}`;
-
-  const result = {
-    requirement_id: requirementId,
-    title,
-    description,
-    detail_points: detailPoints,
-  };
-  if (options.includeExistingRootId) {
-    result.existing_root_id = String(item.existing_root_id ?? item.existingRootId ?? '').trim();
-  }
-  return result;
-}
-
-function deduplicateRequirementGroups(groups) {
-  const seenIds = new Set();
-  const seenTitles = new Set();
-  return groups.filter((group) => {
-    const id = String(group.requirement_id || '').trim();
-    const title = String(group.title || '').trim();
-    if (!id || !title) return false;
-    const idKey = id.toLowerCase();
-    const titleKey = title.toLowerCase();
-    if (seenIds.has(idKey) || seenTitles.has(titleKey)) return false;
-    seenIds.add(idKey);
-    seenTitles.add(titleKey);
-    return true;
-  });
-}
-
 function normalizeRequirementGroupsResponse(payload) {
-  let candidates = [];
-  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
-    candidates = payload.groups ?? payload.items ?? payload.requirements ?? payload.data ?? [];
-  } else if (Array.isArray(payload)) {
-    candidates = payload;
-  }
-  if (!Array.isArray(candidates)) candidates = [];
-
-  const groups = candidates
-    .map((group, index) => coerceRequirementGroup(group, index))
-    .filter(Boolean);
-
-  return { groups: deduplicateRequirementGroups(groups) };
+  const raw = requireObject(payload, 'TechnicalRequirementGroupResponse');
+  const groups = requireArray(raw.groups, 'groups').map((group, index) => {
+    const item = requireObject(group, `groups[${index}]`);
+    return {
+      requirement_id: requireField(item.requirement_id, `groups[${index}].requirement_id`),
+      title: requireField(item.title, `groups[${index}].title`),
+      description: requireField(item.description, `groups[${index}].description`),
+      detail_points: item.detail_points === undefined || item.detail_points === null
+        ? []
+        : requireArray(item.detail_points, `groups[${index}].detail_points`).map((point) => String(point)),
+    };
+  });
+  return { groups };
 }
 
 function normalizeExpansionTopLevelPlanResponse(payload) {
-  let candidates = [];
-  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
-    candidates = payload.groups ?? payload.items ?? payload.requirements ?? payload.data ?? [];
-  } else if (Array.isArray(payload)) {
-    candidates = payload;
-  }
-  if (!Array.isArray(candidates)) candidates = [];
-
-  const groups = candidates
-    .map((group, index) => coerceRequirementGroup(group, index, { includeExistingRootId: true }))
-    .filter(Boolean);
-
-  return { groups: deduplicateRequirementGroups(groups) };
+  const raw = requireObject(payload, 'ExpansionTopLevelPlanResponse');
+  const candidates = requireArray(raw.groups || raw.items || raw.requirements, 'groups');
+  const groups = candidates.map((group, index) => {
+    const item = requireObject(group, `groups[${index}]`);
+    return {
+      requirement_id: requireField(item.requirement_id, `groups[${index}].requirement_id`),
+      title: requireField(item.title, `groups[${index}].title`),
+      description: requireField(item.description, `groups[${index}].description`),
+      detail_points: item.detail_points === undefined || item.detail_points === null
+        ? []
+        : requireArray(item.detail_points, `groups[${index}].detail_points`).map((point) => String(point)),
+      existing_root_id: String(item.existing_root_id ?? item.existingRootId ?? '').trim(),
+    };
+  });
+  return { groups };
 }
 
 function normalizeExpansionChildPatchResponse(payload) {
@@ -2231,71 +2160,6 @@ function validateRequirementGroups(payload, sourceLabel = '技术评分大类') 
   if (new Set(titles).size !== titles.length) throw new Error(`${sourceLabel}标题不能重复`);
 }
 
-// 响应文件模式下，模型常把“实施方案（网络组网…）”“实施方案（安全防范系统）”等
-// 聚合型章节的各个方向拆成多个一级目录。这里用硬规则合并：标题核心词相同、且
-// 非核心部分写在括号/方括号内、看起来像多个技术方向时，合并成 1 个一级目录。
-function mergeResponseFileGroupsByCoreTitle(groups) {
-  if (!Array.isArray(groups) || groups.length < 2) return groups;
-
-  const bracketPattern = /[（(【\[](.+?)[）)】\]]/;
-  const directionPattern = /[、,，/及或和]/;
-
-  function splitCore(title) {
-    const trimmed = String(title || '').trim();
-    const match = trimmed.match(bracketPattern);
-    if (!match) return { core: trimmed, suffix: '', hasDirections: false };
-    const core = trimmed.slice(0, match.index).trim();
-    const suffix = match[1].trim();
-    return {
-      core,
-      suffix,
-      hasDirections: directionPattern.test(suffix) || /(系统|网络|集成|平台|模块|方向|分项|子项|领域)/.test(suffix),
-    };
-  }
-
-  const buckets = new Map();
-  for (const group of groups) {
-    const { core, suffix, hasDirections } = splitCore(group.title);
-    if (!core) {
-      buckets.set(Math.random().toString(36), { core: group.title, merged: false, items: [group] });
-      continue;
-    }
-    const key = `${core}:${hasDirections}`;
-    if (!buckets.has(key)) {
-      buckets.set(key, { core, merged: hasDirections, items: [] });
-    }
-    buckets.get(key).items.push({ group, suffix, hasDirections });
-  }
-
-  const merged = [];
-  for (const bucket of buckets.values()) {
-    if (!bucket.merged || bucket.items.length < 2) {
-      merged.push(...bucket.items.map((item) => item.group));
-      continue;
-    }
-    const [first, ...rest] = bucket.items;
-    const detailPoints = [
-      ...(first.group.detail_points || []),
-      ...(first.suffix ? [first.suffix] : []),
-      ...rest.flatMap((item) => [
-        ...(item.group.detail_points || []),
-        ...(item.suffix ? [item.suffix] : []),
-      ]),
-    ].filter(Boolean);
-    const uniqueDetails = [...new Set(detailPoints.map((d) => String(d).trim()))];
-    merged.push({
-      ...first.group,
-      title: bucket.core,
-      description: [first.group.description, ...rest.map((item) => item.group.description)]
-        .filter(Boolean)
-        .map((d) => String(d).trim())
-        .join('；'),
-      detail_points: uniqueDetails,
-    });
-  }
-  return merged;
-}
-
 function buildTopLevelOutlineFromGroups(groups) {
   return groups.map((group, index) => {
     const title = String(group.title || '').trim();
@@ -2337,329 +2201,10 @@ function validateOriginalTopLevelPrefix(originalOutlinePayload, finalOutlinePayl
   });
 }
 
-// 通用流程骨架词：只有“主要由这些阶段词构成、且跨多个一级目录高度雷同”的二三级结构，
-// 才认定是“套用与招标无关的通用模板”。这些词本身是中性词——招标文件若在某一级目录下
-// 明确要求了培训/运维/质保等内容，对应章节就是有依据的，不应被误杀（见下方 grounding 校验）。
-const GENERIC_PROCESS_TERMS = new Set([
-  '需求分析', '需求调研', '现状分析', '业务分析',
-  '总体设计', '系统架构', '系统拓扑', '架构设计', '方案设计', '详细设计',
-  '建设实施', '项目实施', '项目施工', '项目建设', '部署实施',
-  '培训', '运维', '质保', '售后', 'hse', '健康安全', '安全健康',
-  '信息安全', '保密', '标准引用',
-]);
-
-// 近义/同义归一：让“需求调研≈需求分析”“系统拓扑≈系统架构”“详细方案≈详细设计”
-// “项目实施≈建设实施”等在以集合方式比对时视为同一标题，从而能识别“只换说法、不改骨架”的雷同。
-const TITLE_SYNONYM_MAP = {
-  '需求调研': '需求分析', '现状分析': '需求分析', '业务分析': '需求分析',
-  '系统拓扑': '系统架构', '系统结构': '系统架构', '拓扑结构': '系统架构', '架构设计': '系统架构',
-  '方案设计': '详细设计', '详细方案': '详细设计',
-  '项目实施': '建设实施', '项目施工': '建设实施', '项目建设': '建设实施', '部署实施': '建设实施',
-  '健康安全': '安全健康', 'hse': '安全健康',
-};
-
-function normalizeTitleSyn(value) {
-  const k = normalizeTitleKey(value);
-  return TITLE_SYNONYM_MAP[k] || k;
-}
-
-// 二级目录标题归一化后的无序集合（顺序无关，便于识别“换顺序的雷同”）。
-function getSecondLevelNormalizedSet(item) {
-  const children = item?.children || [];
-  return new Set(
-    children
-      .map((child) => normalizeTitleSyn(child?.title))
-      .filter(Boolean),
-  );
-}
-
-// 一个二级标题集合是否“通用骨架主导”：至少含 2 个通用阶段词，且通用词过半。
-// 单章“质量/保密”之类不会触发，只有整段流程骨架才构成模板信号。
-function isGenericDominated(set) {
-  if (!set || set.size < 2) return false;
-  let generic = 0;
-  for (const t of set) {
-    if (GENERIC_PROCESS_TERMS.has(t)) generic += 1;
-  }
-  return generic >= 2 && generic >= Math.ceil(set.size / 2);
-}
-
-// 从招标来源 groups 抽取每个评分项/目录“允许出现的通用阶段词”，用于判断某目录的通用骨架
-// 到底是招标明确要求（有依据），还是模型自带的套话（无依据）。
-function buildGroupGroundingSet(groups) {
-  const m = new Map();
-  if (!Array.isArray(groups)) return m;
-  groups.forEach((g) => {
-    const rid = String(g?.requirement_id || '').trim();
-    if (!rid) return;
-    const text = [
-      g.title,
-      g.description,
-      ...(Array.isArray(g.detail_points) ? g.detail_points : []),
-    ]
-      .filter((x) => typeof x === 'string' && x.trim())
-      .join(' ')
-      .toLowerCase();
-    const terms = new Set();
-    for (const term of GENERIC_PROCESS_TERMS) {
-      if (text.includes(term)) terms.add(term);
-    }
-    m.set(rid, terms);
-  });
-  return m;
-}
-
-// 某目录的通用骨架是否能在它自己的来源评分项/目录中找到依据。
-// 找到且过半通用词有依据 -> 视为招标明确要求（合法并行结构，不误杀）。
-function isGenericSkeletonGrounded(item, set, groupGrounding) {
-  const rid = String(item?.source_requirement_id || '').trim();
-  if (!rid || !groupGrounding || !groupGrounding.has(rid)) return false;
-  const gt = groupGrounding.get(rid);
-  const generic = [...set].filter((t) => GENERIC_PROCESS_TERMS.has(t));
-  if (!generic.length) return true;
-  if (!gt.size) return false;
-  let grounded = 0;
-  for (const t of generic) {
-    if (gt.has(t)) grounded += 1;
-  }
-  return grounded >= Math.ceil(generic.length / 2);
-}
-
-// 聚合型评分项程序化兜底：将“核心词（分项）”形式的多个一级目录自动合并为 1 个。
-// 触发条件（保守，避免误并真正独立的目录）：
-//   - 多个一级目录标题共享同一“核心词”，且各自带一个明确的业务分项（括号/冒号/破折号后的内容）；
-//   - 在评分项/响应文件分组中，该核心词恰好对应“单一分组”（说明招标把它视为一个聚合评分项）；
-//   - 合并后总层级不超过 4 级（否则交由 Agent 修复，不在此兜底）。
-// 合并结果：1 个“核心词”一级目录，各分项作为二级目录，原二三级内容下挂；分项为聚合说明词（各技术方向/等）时并入合并节点而非单独成级。
-const AGGREGATE_QUALIFIER_STOPWORDS = new Set([
-  '各技术方向', '各方向', '各分项', '各项', '各部分', '等', '及其他', '及相关',
-  '相关', '其他', '等内容', '及其', '及其他内容', '含', '含相关', '及其他相关',
-]);
-
-function splitAggregateTitle(title) {
-  const t = String(title || '').trim();
-  if (!t) return null;
-  let core;
-  let qualifier;
-  const paren = t.match(/^(.*?)[（(]([^）)]*)[）)]$/);
-  if (paren) {
-    core = paren[1].trim();
-    qualifier = paren[2].trim();
-  } else {
-    const sep = t.match(/^(.*?)[：:—\-·]\s*(.+)$/);
-    if (!sep) return null;
-    core = sep[1].trim();
-    qualifier = sep[2].trim();
-  }
-  if (core.length < 2 || !qualifier) return null;
-  return { core, qualifier };
-}
-
-function outlineSubtreeDepth(item) {
-  const kids = item?.children;
-  if (!Array.isArray(kids) || !kids.length) return 1;
-  return 1 + Math.max(...kids.map(outlineSubtreeDepth));
-}
-
-function mergeAggregatedTopLevelItems(context) {
-  // 扩展示例需严格遵循既有方案结构，不在此处自动合并
-  if (context.workflowKind === 'existing-plan-expansion') return 0;
-  const outlineItems = context.outline?.outline;
-  if (!Array.isArray(outlineItems) || outlineItems.length < 2) return 0;
-
-  const coreMap = new Map();
-  outlineItems.forEach((item, idx) => {
-    const parsed = splitAggregateTitle(item.title);
-    if (!parsed) return;
-    if (!coreMap.has(parsed.core)) coreMap.set(parsed.core, []);
-    coreMap.get(parsed.core).push({ idx, item, qualifier: parsed.qualifier });
-  });
-
-  const groupsAvailable =
-    Array.isArray(context.groups) &&
-    context.groups.length > 0 &&
-    context.workflowKind !== 'existing-plan-expansion';
-
-  const groupCoreCount = new Map();
-  if (groupsAvailable) {
-    context.groups.forEach((g) => {
-      const parsed = splitAggregateTitle(g.title);
-      const core = parsed ? parsed.core : String(g.title || '').trim();
-      if (!core) return;
-      groupCoreCount.set(core, (groupCoreCount.get(core) || 0) + 1);
-    });
-  }
-
-  const plans = [];
-  for (const [core, entries] of coreMap) {
-    if (entries.length < 2) continue;
-    const distinctQual = [
-      ...new Set(entries.map((e) => e.qualifier).filter((q) => !AGGREGATE_QUALIFIER_STOPWORDS.has(q))),
-    ];
-    if (!distinctQual.length) continue;
-
-    let shouldMerge;
-    if (groupsAvailable) {
-      // 仅当评分项/响应文件中该核心词对应“单一分组”（聚合型评分项）时合并
-      shouldMerge = groupCoreCount.get(core) === 1;
-    } else {
-      // 无分组信息时，仅当存在 >=2 个不同业务分项（明显被拆开）才合并
-      shouldMerge = distinctQual.length >= 2;
-    }
-    if (!shouldMerge) continue;
-
-    // 若存在同名无括号的一级目录，则以其为合并目标，避免产生重复标题
-    let standaloneIdx = -1;
-    let standaloneItem = null;
-    for (let i = 0; i < outlineItems.length; i += 1) {
-      if (entries.some((e) => e.idx === i)) continue;
-      if (normalizeTitleKey(outlineItems[i].title) === normalizeTitleKey(core) && !splitAggregateTitle(outlineItems[i].title)) {
-        standaloneIdx = i;
-        standaloneItem = outlineItems[i];
-        break;
-      }
-    }
-
-    // 深度保护：合并后会多嵌套一层，若任一被合并子树已达 4 级则跳过
-    const maxDepth = Math.max(...entries.map((e) => outlineSubtreeDepth(e.item)));
-    if (maxDepth >= 4) continue;
-
-    const merged = standaloneItem ? cloneOutlineItems([standaloneItem])[0] : { id: '', title: core, description: core };
-    merged.title = core;
-    if (!String(merged.description || '').trim()) merged.description = core;
-
-    const detailPoints = new Set();
-    const addDetail = (pts) => (pts || []).forEach((p) => {
-      const s = String(p || '').trim();
-      if (s) detailPoints.add(s);
-    });
-    if (standaloneItem) addDetail(standaloneItem.detail_points);
-
-    const childByKey = new Map();
-    entries.forEach((e) => {
-      addDetail(e.item.detail_points);
-      if (AGGREGATE_QUALIFIER_STOPWORDS.has(e.qualifier)) {
-        // 聚合说明词（各技术方向/等）不单独成二级目录，其下内容并入合并节点
-        if (Array.isArray(e.item.children) && e.item.children.length) {
-          merged.children = merged.children || [];
-          const seen = new Set((merged.children || []).map((c) => normalizeTitleKey(c.title)));
-          e.item.children.forEach((c) => {
-            const ck = normalizeTitleKey(c.title);
-            if (seen.has(ck)) return;
-            seen.add(ck);
-            merged.children.push(cloneOutlineItems([c])[0]);
-          });
-        }
-        return;
-      }
-      const Q = e.qualifier;
-      const key = normalizeTitleKey(Q);
-      let child = childByKey.get(key);
-      if (!child) {
-        child = { id: '', title: Q, description: Q };
-        childByKey.set(key, child);
-      }
-      if (Array.isArray(e.item.children) && e.item.children.length) {
-        child.children = child.children || [];
-        const seen = new Set((child.children || []).map((c) => normalizeTitleKey(c.title)));
-        e.item.children.forEach((c) => {
-          const ck = normalizeTitleKey(c.title);
-          if (seen.has(ck)) return;
-          seen.add(ck);
-          child.children.push(cloneOutlineItems([c])[0]);
-        });
-      }
-      if (e.item.description && !String(child.description || '').trim()) {
-        child.description = e.item.description;
-      }
-    });
-
-    const childrenArr = [...childByKey.values()];
-    if (childrenArr.length) merged.children = childrenArr;
-    else delete merged.children;
-    addDetail(merged.detail_points);
-    merged.detail_points = [...detailPoints];
-    if (!merged.detail_points.length) delete merged.detail_points;
-
-    const minIdx = Math.min(...entries.map((e) => e.idx), ...(standaloneIdx >= 0 ? [standaloneIdx] : []));
-    const consumed = new Set(entries.map((e) => e.idx));
-    if (standaloneIdx >= 0) consumed.add(standaloneIdx);
-    plans.push({ minIdx, merged, consumed });
-  }
-
-  if (!plans.length) return 0;
-  const consumedAll = new Set();
-  plans.forEach((p) => p.consumed.forEach((i) => consumedAll.add(i)));
-  const minIdxToPlan = new Map();
-  plans.forEach((p) => minIdxToPlan.set(p.minIdx, p));
-
-  const keep = [];
-  for (let i = 0; i < outlineItems.length; i += 1) {
-    if (consumedAll.has(i)) {
-      const plan = minIdxToPlan.get(i);
-      if (plan) keep.push(plan.merged);
-      continue;
-    }
-    keep.push(outlineItems[i]);
-  }
-  context.outline.outline = renumber(keep);
-  return plans.length;
-}
-
-// 雷同检测：识别“多个一级目录套用同一套与招标无关的通用流程骨架”。
-// 改进点（相对旧实现）：
-//  1) 无序集合 + 近义归一 -> 换顺序、换说法的雷同也能识别（旧实现只认“二级标题序列完全相同”）；
-//  2) 以“成对相似度”而非“精确签名相等”成组 -> 容忍个别目录多/少一两个章节；
-//  3) 招标依据校验 -> 若某目录的通用骨架能在它自己的来源评分项/目录中找到依据（招标明确要求
-//     的并行结构，如各子系统均需培训/运维/质保），则放行，不再误杀。
-// 返回被判定为套模板的一级目录标题列表；无则返回 null。
-function detectTemplateChildrenStructure(outlineItems, groups) {
-  if (!Array.isArray(outlineItems) || outlineItems.length < 2) return null;
-  const items = outlineItems.filter((it) => Array.isArray(it?.children) && it.children.length);
-  if (items.length < 2) return null;
-
-  const records = items.map((item) => ({ item, set: getSecondLevelNormalizedSet(item) }));
-  const groupGrounding = buildGroupGroundingSet(groups);
-
-  const templated = new Set();
-  for (let i = 0; i < records.length; i += 1) {
-    const a = records[i].set;
-    if (!a.size) continue;
-    for (let j = i + 1; j < records.length; j += 1) {
-      const b = records[j].set;
-      if (!b.size) continue;
-      const inter = [...a].filter((x) => b.has(x)).length;
-      const union = new Set([...a, ...b]).size;
-      const jaccard = union ? inter / union : 0;
-      const containment = inter / Math.min(a.size, b.size);
-      // 结构相似：多数重叠，或一方基本包含另一方
-      if (jaccard < 0.5 && containment < 0.85) continue;
-      if (!isGenericDominated(a) || !isGenericDominated(b)) continue;
-      // 招标依据校验：任一方通用骨架有依据 -> 视为合法并行结构，跳过
-      if (
-        isGenericSkeletonGrounded(records[i].item, a, groupGrounding) ||
-        isGenericSkeletonGrounded(records[j].item, b, groupGrounding)
-      ) {
-        continue;
-      }
-      templated.add(records[i].item);
-      templated.add(records[j].item);
-    }
-  }
-  if (!templated.size) return null;
-  return [...templated].map((it) => String(it.title || '未命名').trim());
-}
-
 function validateFinalOutline(context) {
-  // 聚合型评分项兜底：先把“核心词（分项）”形式的多个一级目录合并回 1 个，再走后续校验
-  mergeAggregatedTopLevelItems(context);
   validateCompleteOutline(context.outline);
   if (outlineDepth(context.outline?.outline || []) > 4) {
     throw new Error('最终目录层级不能超过四级');
-  }
-  const templatedTitles = detectTemplateChildrenStructure(context.outline?.outline || [], context.groups);
-  if (templatedTitles?.length) {
-    throw new Error(`以下一级目录的二三级结构高度雷同，疑似套用通用模板，请按各自主题重新生成：${templatedTitles.join('、')}`);
   }
   if (context.workflowKind !== 'existing-plan-expansion') {
     validateAlignedTopLevelMapping(context.outline.outline || [], context.groups || [], getTopLevelSourceLabel(context));
@@ -3256,7 +2801,7 @@ async function extractResponseFileOutlineGroups(aiService, payload, suggestions,
     failureMessage: '模型返回的响应文件技术目录格式无效',
   });
   if (!response.groups?.length) {
-    throw new Error('未能从“响应文件要求”中识别出技术文件目录。可能原因：1) 该招标文件未在响应文件要求里明确列出技术文件目录；2) 当前文本模型对 JSON 格式支持不稳定，返回了无法解析的结构。建议切换到“按评分项生成一级目录”重试，或检查设置中的文本模型配置。');
+    throw new Error('响应文件要求中未找到明确的技术文件目录，请先核对“响应文件要求”解析结果或关闭该选项。');
   }
   return response.groups || [];
 }
@@ -3471,7 +3016,6 @@ async function buildAligned(aiService, payload, outlineMode, groups, suggestions
 async function responseFileWorkflow(aiService, agentService, payload, log, existingOutline = null) {
   log('开始提取响应文件要求中的技术文件目录。', OUTLINE_PROGRESS.requirementExtractionStart);
   let groups = await extractResponseFileOutlineGroups(aiService, payload, undefined, log);
-  groups = mergeResponseFileGroupsByCoreTitle(groups);
   log('响应文件技术目录提取完成，正在构建一级目录。', OUTLINE_PROGRESS.requirementExtractionEnd);
   let outline;
   try {
@@ -4246,9 +3790,8 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     oldOutline: formatOldOutlineForPrompt(oldOutline),
   };
 
-  let outline = null;
+  let outline;
   let groups = [];
-  try {
   if (isExpansionWorkflow) {
     if (outlineExpansionMode === 'original-only') {
       log('已选择仅使用原方案目录，跳过AI补充和知识库补目录。', OUTLINE_PROGRESS.finalizing);
@@ -4365,11 +3908,8 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     outlineGenerationTask: finalTask,
   });
   updateTask(finalTask, technicalPlan);
-  } catch (error) {
-    persistPartialOutlineOnError(workspaceStore, { outline, groups, partialOutline: error?.partialOutline, agentPartialOutput: error?.agentPartialOutput }, error);
-    throw error;
-  }
 }
+
 
 const OUTLINE_WIZARD_STEP_LABELS = Object.freeze({
   extract: '提取原方案目录',
