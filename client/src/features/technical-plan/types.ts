@@ -9,7 +9,7 @@ export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error
 export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'global-facts-generation' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error' | 'wizard-step-done';
 
-export type OutlineWizardStep = 'extract' | 'main' | 'knowledge' | 'review' | 'word';
+export type OutlineWizardStep = 'extract' | 'main' | 'knowledge' | 'review' | 'audit' | 'word';
 
 export interface OutlineWizardState {
   active: boolean;

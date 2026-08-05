@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const { getBidAnalysisTasks } = require('./bidAnalysisTask.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 const { countReadableWords } = require('../utils/wordCount.cjs');
+const { runOutlineComplianceAudit } = require('./outlineComplianceAudit.cjs');
 
 function formatSuggestions(suggestions) {
   if (!suggestions?.length) return '';
@@ -113,7 +114,10 @@ const OUTLINE_PROGRESS = Object.freeze({
   finalRepairActivity: 70,
   finalRepairValidation: 73,
   finalReviewEnd: 75,
-  wordAdjustmentStart: 76,
+  complianceAuditStart: 76,
+  complianceAuditActivity: 79,
+  complianceAuditEnd: 82,
+  wordAdjustmentStart: 83,
   wordAdjustmentEnd: 91,
   secondReviewStart: 92,
   secondReviewActivity: 93,
@@ -4030,6 +4034,7 @@ const OUTLINE_WIZARD_STEP_LABELS = Object.freeze({
   main: '生成主目录',
   knowledge: '知识库增强',
   review: '最终审核',
+  audit: '合规审核',
   word: '字数调整与二审',
 });
 
@@ -4038,6 +4043,7 @@ const OUTLINE_WIZARD_STEP_PROGRESS = Object.freeze({
   main: OUTLINE_PROGRESS.mainComplete,
   knowledge: OUTLINE_PROGRESS.knowledgeEnhancementEnd,
   review: OUTLINE_PROGRESS.finalReviewEnd,
+  audit: OUTLINE_PROGRESS.complianceAuditEnd,
   word: OUTLINE_PROGRESS.complete,
 });
 
@@ -4046,9 +4052,9 @@ function getOutlineWizardOrderedSteps({ isExpansionWorkflow, outlineExpansionMod
     if (outlineExpansionMode === 'original-only') {
       return ['extract'];
     }
-    return ['extract', 'main', 'knowledge', 'review', 'word'];
+    return ['extract', 'main', 'knowledge', 'review', 'audit', 'word'];
   }
-  return ['main', 'knowledge', 'review', 'word'];
+  return ['main', 'knowledge', 'review', 'audit', 'word'];
 }
 
 // 分步向导：按 payload.wizardStep 逐步执行目录生成各阶段，每步持久化中间结果，
@@ -4213,6 +4219,19 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
     });
     outline = finalResult.outline;
     groups = finalResult.groups || groups;
+  } else if (step === 'audit') {
+    outline = storedPlan.outlineData;
+    if (!outline || !outline.outline) {
+      throw new Error('未找到上一步生成的目录，请重新执行');
+    }
+    const auditResult = await runOutlineComplianceAudit({
+      aiService,
+      payload: baseTaskPayload,
+      outline,
+      groups,
+      log,
+    });
+    outline = auditResult.outline;
   } else if (step === 'word') {
     outline = storedPlan.outlineData;
     if (!outline || !outline.outline) {

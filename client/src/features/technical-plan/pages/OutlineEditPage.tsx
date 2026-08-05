@@ -16,6 +16,7 @@ const WIZARD_STEP_LABELS: Record<OutlineWizardStep, string> = {
   main: '生成主目录',
   knowledge: '知识库增强',
   review: '最终审核',
+  audit: '合规审核',
   word: '字数调整与二审',
 };
 
@@ -24,14 +25,15 @@ const WIZARD_STEP_DESCRIPTIONS: Record<OutlineWizardStep, string> = {
   main: '基于招标文件要求生成完整的一级、二级目录骨架。',
   knowledge: '结合参考知识库自动补充相关章节与要点。',
   review: '对目录完整性、相关性、逻辑性进行 AI 审核。',
+  audit: '对照招标文件评分项逐条核对目录，自动删除越界内容、提示遗漏项。',
   word: '根据字数要求进行扩写或精简，并做最终检查。',
 };
 
 function getWizardSteps(isExpansion: boolean, expansionMode: OutlineExpansionMode): OutlineWizardStep[] {
   if (!isExpansion) {
-    return ['main', 'knowledge', 'review', 'word'];
+    return ['main', 'knowledge', 'review', 'audit', 'word'];
   }
-  return expansionMode === 'original-only' ? ['extract'] : ['extract', 'main', 'knowledge', 'review', 'word'];
+  return expansionMode === 'original-only' ? ['extract'] : ['extract', 'main', 'knowledge', 'review', 'audit', 'word'];
 }
 
 interface OutlineEditPageProps {
