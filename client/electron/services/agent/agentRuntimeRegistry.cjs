@@ -1,19 +1,13 @@
+// 精简版智能体运行时注册表（仅保留 Pi Agent）。
+// OpenCode 运行时已移除；上游重构后 agentService 默认走 Pi SDK，此处仅用于
+// 向设置页提供运行时列表元数据，并对外提供统一的默认/归一化接口。
+
 const runtimeDefinitions = [
-  {
-    id: 'opencode',
-    displayName: 'OpenCode Agent',
-    description: '使用现有常驻 OpenCode Server 智能体链路。',
-    isDefault: true,
-    createRuntime(options) {
-      const { createOpenCodeRuntimeService } = require('../opencode/opencodeRuntimeService.cjs');
-      return createOpenCodeRuntimeService(options);
-    },
-  },
   {
     id: 'pi',
     displayName: 'Pi Agent',
     description: '使用内嵌 Pi SDK 智能体链路。',
-    isDefault: false,
+    isDefault: true,
     createRuntime(options) {
       const { createPiRuntimeService } = require('../pi/piRuntimeService.cjs');
       return createPiRuntimeService(options);
@@ -42,13 +36,13 @@ function getDefaultAgentRuntimeId() {
   return defaultRuntime.id;
 }
 
-// 空配置应用统一默认值，未知配置直接报错。
+// 统一默认值；未知配置（含历史遗留的 opencode）一律回退到 Pi，绝不抛错。
 function normalizeAgentRuntimeId(value) {
-  const runtimeId = String(value || '').trim() || getDefaultAgentRuntimeId();
-  if (!runtimeById.has(runtimeId)) {
-    throw new Error(`未知的智能体运行时：${runtimeId}`);
+  const runtimeId = String(value || '').trim();
+  if (runtimeId && runtimeById.has(runtimeId)) {
+    return runtimeId;
   }
-  return runtimeId;
+  return getDefaultAgentRuntimeId();
 }
 
 function getAgentRuntimeDefinition(runtimeId) {

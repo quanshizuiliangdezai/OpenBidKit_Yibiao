@@ -129,49 +129,22 @@ if [ $MERGE_EXIT -ne 0 ]; then
     done
   fi
 
-  # --- 4c. UU 冲突（双方都修改）→ 双保留策略 ---
+  # --- 4c. UU 冲突（双方都修改）→ 优先保留 fork 版本 ---
+  # 说明：fork 在设置页/类型/ipc 上有大量专属定制（KB问答 KbQa*、agentRuntime、
+  # 模型配置侧边栏、向导、技术方案等），不能让上游覆盖；且旧版“双保留”会把两份整文件
+  # 拼接导致 tsc 失败、坏代码被 push。故 UU 一律取 fork 版本（--ours），仅在不冲突的
+  # 文件中自动吸收上游改动。代价：暂不吸收上游对 settings 类型的重构（fork 并不需要）。
   UU_FILES=$(git diff --name-only --diff-filter=UU 2>/dev/null || true)
   if [ -n "$UU_FILES" ]; then
-    log "Resolving UU conflicts (double-preserve)..."
+    log "Resolving UU conflicts (prefer fork version)..."
     echo "$UU_FILES" | while IFS= read -r f; do
       [ -z "$f" ] && continue
-      log "  [UU→double] $f"
-      python3 - "$f" << 'PYEOF'
-import sys, re
-
-filepath = sys.argv[1]
-try:
-    with open(filepath, 'r', encoding='utf-8') as fh:
-        content = fh.read()
-except Exception as e:
-    print(f"  ERROR reading {filepath}: {e}", file=sys.stderr)
-    sys.exit(1)
-
-# 冲突块格式: <<<<<<< HEAD\n(ours)\n=======\n(theirs)\n>>>>>>> upstream/main
-pattern = r'<{7} HEAD\n(.*?)\n={7}\n(.*?)\n>{7} [^\n]+'
-
-def replacer(m):
-    head_part = m.group(1).rstrip()
-    upstream_part = m.group(2).rstrip()
-    # 双保留：HEAD 块在前，upstream 块追加在后
-    if head_part and upstream_part:
-        return head_part + '\n' + upstream_part
-    elif head_part:
-        return head_part
-    else:
-        return upstream_part
-
-content = re.sub(pattern, replacer, content, flags=re.DOTALL)
-
-# 清理孤儿括号 & 多余空行
-content = re.sub(r'\n{4,}', '\n\n\n', content)
-
-with open(filepath, 'w', encoding='utf-8') as fh:
-    fh.write(content)
-
-print(f"  Resolved: {filepath}")
-PYEOF
-      git add "$f" || true
+      if git checkout --ours "$f" 2>/dev/null; then
+        git add "$f" && log "  [UU→ours] $f"
+      else
+        git rm -f "$f" 2>/dev/null || true
+        log "  [UU→keep-deleted] $f (stage2 missing)"
+      fi
     done
   fi
 

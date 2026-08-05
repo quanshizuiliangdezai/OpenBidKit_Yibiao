@@ -5,7 +5,7 @@ const { execFileSync } = require('node:child_process');
 const AdmZip = require('adm-zip');
 
 const ROOT = path.resolve(__dirname, '..');
-const VENDOR_ROOT = path.join(ROOT, 'vendor', 'opencode-tools');
+const VENDOR_ROOT = path.join(ROOT, 'vendor', 'agent-tools');
 
 const TOOL_SOURCES = {
   rg: {
@@ -56,8 +56,7 @@ function readArg(name, fallback = '') {
 
 function requestJson(url) {
   return new Promise((resolve, reject) => {
-    const headers = { 'User-Agent': 'yibiao-opencode-tools-preparer', Accept: 'application/vnd.github+json' };
-    if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+    const headers = { 'User-Agent': 'yibiao-agent-tools-preparer', Accept: 'application/vnd.github+json' };
     https.get(url, { headers }, (res) => {
       let body = '';
       res.setEncoding('utf8');
@@ -78,14 +77,14 @@ function downloadFile(url, targetPath) {
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     const file = fs.createWriteStream(targetPath);
     const request = (currentUrl, redirectCount = 0) => {
-      https.get(currentUrl, { headers: { 'User-Agent': 'yibiao-opencode-tools-preparer' } }, (res) => {
+      https.get(currentUrl, { headers: { 'User-Agent': 'yibiao-agent-tools-preparer' } }, (res) => {
         if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
-          if (redirectCount > 5) return reject(new Error('下载 OpenCode tools 重定向过多'));
+          if (redirectCount > 5) return reject(new Error('下载智能体命令工具重定向过多'));
           request(new URL(res.headers.location, currentUrl).toString(), redirectCount + 1);
           return;
         }
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          reject(new Error(`下载 OpenCode tools 失败：HTTP ${res.statusCode}`));
+          reject(new Error(`下载智能体命令工具失败：HTTP ${res.statusCode}`));
           return;
         }
         res.pipe(file);
@@ -146,8 +145,24 @@ function verifyExecutable(filePath, command) {
   }
 }
 
-async function prepareTool({ command, source, key, platform, arch, tmpRoot, binDir }) {
-  const version = String(process.env[source.versionEnv] || source.defaultVersion).trim();
+// 读取工具的目标版本。
+function getRequestedVersion(source) {
+  return String(process.env[source.versionEnv] || source.defaultVersion).trim();
+}
+
+// 生成指定平台下的工具可执行文件名。
+function getExecutableName(command, platform) {
+  return platform === 'win32' ? `${command}.exe` : command;
+}
+
+// 只在当前主机与目标完全一致时执行二进制，异平台校验交给对应的发布任务。
+function canExecuteTarget(platform, arch) {
+  return platform === process.platform && arch === process.arch;
+}
+
+// 下载并整理单个目标平台工具。
+async function prepareTool({ command, source, key, platform, arch, tmpRoot, binDir, verifyAfterCopy }) {
+  const version = getRequestedVersion(source);
   const release = await requestJson(`https://api.github.com/repos/${source.repo}/releases/tags/${encodeURIComponent(version)}`);
   const asset = findAsset(release, source, key);
   const downloadPath = path.join(tmpRoot, `${command}-${asset.name}`);
@@ -155,11 +170,11 @@ async function prepareTool({ command, source, key, platform, arch, tmpRoot, binD
   await downloadFile(asset.browser_download_url, downloadPath);
   const extractedDir = extractAsset(downloadPath, extractDir);
   const binaryPath = findBinary(downloadPath, extractedDir, source);
-  const targetName = platform === 'win32' ? `${command}.exe` : command;
+  const targetName = getExecutableName(command, platform);
   const targetPath = path.join(binDir, targetName);
   fs.copyFileSync(binaryPath, targetPath);
   if (platform !== 'win32') fs.chmodSync(targetPath, 0o755);
-  verifyExecutable(targetPath, command);
+  if (verifyAfterCopy) verifyExecutable(targetPath, command);
   return { command, version, repo: source.repo, asset: asset.name, platform, arch, key };
 }
 
@@ -171,27 +186,46 @@ async function main() {
     throw new Error(`第一版只支持 win32-x64、darwin-x64、darwin-arm64，当前为 ${key}`);
   }
 
-  const tmpRoot = path.join(ROOT, '.tmp-opencode-tools-download', key);
-  const binDir = path.join(VENDOR_ROOT, key, 'bin');
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
-  fs.rmSync(VENDOR_ROOT, { recursive: true, force: true });
-  fs.mkdirSync(binDir, { recursive: true });
+  const targetRoot = path.join(VENDOR_ROOT, key);
+  const tmpRoot = path.join(ROOT, '.tmp-agent-tools-download', key);
+  const stagedTargetRoot = path.join(tmpRoot, 'staged-target');
+  const stagedBinDir = path.join(stagedTargetRoot, 'bin');
+  const verifyAfterCopy = canExecuteTarget(platform, arch);
 
-  const tools = [];
-  for (const command of ['rg', 'fd', 'jq']) {
-    tools.push(await prepareTool({ command, source: TOOL_SOURCES[command], key, platform, arch, tmpRoot, binDir }));
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  fs.mkdirSync(stagedBinDir, { recursive: true });
+
+  try {
+    const tools = [];
+    for (const command of ['rg', 'fd', 'jq']) {
+      tools.push(await prepareTool({
+        command,
+        source: TOOL_SOURCES[command],
+        key,
+        platform,
+        arch,
+        tmpRoot,
+        binDir: stagedBinDir,
+        verifyAfterCopy,
+      }));
+    }
+
+    fs.writeFileSync(path.join(stagedTargetRoot, 'manifest.json'), JSON.stringify({
+      platform,
+      arch,
+      key,
+      tools,
+      prepared_at: new Date().toISOString(),
+    }, null, 2), 'utf-8');
+    fs.writeFileSync(path.join(stagedTargetRoot, 'VERSION'), tools.map((item) => `${item.command}=${item.version}`).join('\n') + '\n', 'utf-8');
+
+    fs.mkdirSync(VENDOR_ROOT, { recursive: true });
+    fs.rmSync(targetRoot, { recursive: true, force: true });
+    fs.renameSync(stagedTargetRoot, targetRoot);
+    console.log(`Prepared Agent tools: ${path.join(targetRoot, 'bin')}`);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
-
-  fs.writeFileSync(path.join(VENDOR_ROOT, 'manifest.json'), JSON.stringify({
-    platform,
-    arch,
-    key,
-    tools,
-    prepared_at: new Date().toISOString(),
-  }, null, 2), 'utf-8');
-  fs.writeFileSync(path.join(VENDOR_ROOT, 'VERSION'), tools.map((item) => `${item.command}=${item.version}`).join('\n') + '\n', 'utf-8');
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
-  console.log(`Prepared OpenCode tools: ${binDir}`);
 }
 
 main().catch((error) => { console.error(error?.stack || error?.message || String(error)); process.exit(1); });
