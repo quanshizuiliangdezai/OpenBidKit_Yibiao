@@ -57,7 +57,7 @@ function childrenOutlineTopicSpecificityRules() {
 1. 二三级目录必须严格依据“招标文件（技术评分要求 / 响应文件要求）中针对该一级目录列出的具体评分项与细则”来生成。招标文件里列了几点，就生成几点；每个二级目录标题与三级展开要点，都应能在招标原文对应条款中找到依据。
 2. 严禁套用与招标文件无关的通用模板。例如不要对每个一级目录都生硬补充“需求分析 → 系统拓扑 → 各区域详细设计 → 项目建设实施 → 培训运维及售后服务 → HSE/质量/信息安全”这类招标文件并未要求的流程章节。
 3. 只有当招标文件本身在某一级目录下明确要求了培训、运维、实施、质保、售后等内容时，才允许出现对应章节；招标文件未要求的，一律不得自行补齐。
-4. 不同一级目录的结构可以相似，也可以不同——以“招标文件的对应要求”为准，而不是以“和其他目录是否雷同”为准。判断标准只有一条：该二三级目录标题是否在招标文件的对应评分项/细则中有依据。
+4. 不同一级目录的结构可以相似，也可以不同——以“招标文件的对应要求”为准。若招标文件本身在某一级目录下明确要求了培训、运维、实施、质保、售后等内容（例如各子系统均需响应），请保留对应章节；但每个目录的二三级要点必须结合该目录主题具体化，不得把同一套与招标无关的通用流程骨架（如“需求分析 → 系统拓扑 → 详细设计 → 项目建设实施 → 培训运维及售后服务 → HSE/质量/信息安全”）原样复制到其他目录。判断标准只有一条：该二三级目录标题与要点是否能在招标文件的对应评分项/细则中找到依据；凡招标无依据、纯属通用套话的章节，一律删除或改写为招标文件实际要求的内容。
 5. 最终输出前请自检：把生成的 children 与招标文件原文逐条对照。凡是招标文件没有依据、纯属通用套话的章节，一律删除或改为招标文件实际要求的内容；招标文件明确要求但缺失的章节，必须补全。`;
 }
 
@@ -549,7 +549,11 @@ function extractResponseFileOutlineGroupsMessages({ overview, requirements, resp
 2. 不要提取报价文件、商务文件、资格证明、授权委托书、承诺函、偏离表、分项报价表等非技术文件目录。
 3. 如果响应文件要求中列出了技术文件的章节、目录、附件或格式模板，应保持原顺序。
 4. 每个目录必须适合作为技术标一级目录标题，标题要专业、简洁、完整，不要包含原文编号。
-4.1 所有一级目录标题必须互不相同，不得出现完全重复的标题。若响应文件要求中某个章节标题覆盖多个技术方向/分项/子模块（其下分项共享该章节、合并编写），则只生成 1 个一级目录（使用章节核心词）、分项归入 detail_points；不要为规避重复而强行改写标题。只有真正独立的文件目录才单独成一级目录。
+4.1 所有一级目录标题必须互不相同，不得出现完全重复的标题。聚合型章节处理（重要）：若响应文件要求中某个章节标题覆盖多个技术方向/分项/子模块（其下分项共享该章节、合并编写），必须按以下规则处理：
+  - 识别特征：章节标题带有“（各技术方向）”“（含…）”“（…等）”等聚合说明，或其下分项列在同一章节的“细分列 / 子行”中，共享该章节、合并编写；
+  - 这种情况只允许生成 **1 个一级目录**，标题使用章节核心词，去掉“（各技术方向）”“（含…）”等聚合说明；
+  - 各技术方向/分项必须作为该一级目录的 detail_points，绝对不得各自成为一级目录，也不得写成“核心词（某个方向）”这种多一级目录形式。
+4.2 独立章节判定：只有当某个方向/分项在响应文件要求中是“独立文件目录行”（拥有自己的目录标题单元格、不与其他目录共享）时，才允许它单独成为一级目录；否则一律归入所属章节的 detail_points。不要为规避重复而强行改写标题。只有真正独立的文件目录才单独成一级目录。
 5. detail_points 中保留该一级目录下明确要求响应、编写或提供的关键内容；可参考技术评分要求补充响应重点，但不能把技术评分项改造成一级目录。
 6. requirement_id 必须唯一，使用 R1、R2、R3 这种格式。
 7. description 需要概括该技术文件目录关注的核心内容。
@@ -702,6 +706,7 @@ function buildFinalOutlineReviewMessages(context) {
 2. ${responseFileMode ? '技术评分要求是否已作为写作约束、判定标准或注意事项被合理参考；不得把技术评分项改造成一级目录。' : '技术评分要求是否已作为约束、扣分口径、判定标准或注意事项被合理参考；不得因为评分要求本身生成、补充或要求补充一级目录。'}
 3. 是否存在明显重复、归属错位、遗漏${sourceLabel}、误把非技术文件内容当成目录主题或结构不合理。
 4. 检查是否存在某个父目录下最终只有一个叶子目录；存在时必须返回 passed=false，并提出合并层级或调整归属的建议。
+5. 是否存在多个一级目录复制同一套与招标无关的通用流程骨架（如“需求分析 → 系统拓扑 → 详细设计 → 建设实施 → 培训运维及售后服务 → HSE/质量/信息安全”等），且这些章节在其对应${sourceLabel}中并无依据；存在时必须返回 passed=false，并指出应删除或按各目录主题重写。
 5. 特别检查：多个不同一级目录的二级目录结构是否高度雷同。只有当雷同结构主要由通用套话词（需求分析、系统拓扑、项目建设实施、培训运维、HSE、质量、信息安全等）构成，且在招标文件对应评分项/细则中找不到依据时，才返回 passed=false，并在 suggestions 中明确指出应改为招标文件实际要求的内容。若雷同确实来自招标文件明确要求（例如每个子系统都要求培训、运维、质保等），则应放行，不得仅因结构相似就判不通过——判断的唯一标准是“该二三级目录标题能否在招标文件的对应条款中找到依据”。
 6. 如果不通过，suggestions 必须给出具体、局部、可执行的修改建议；建议应围绕${sourceLabel}覆盖和现有目录结构调整，不要要求修改已锁定的一级目录来源。
 
@@ -2212,35 +2217,92 @@ function validateOriginalTopLevelPrefix(originalOutlinePayload, finalOutlinePayl
   });
 }
 
-function getSecondLevelTitleSignature(item) {
-  const children = item?.children || [];
-  return children
-    .map((child) => normalizeTitleKey(child?.title))
-    .filter(Boolean)
-    .join('|');
+// 通用流程骨架词：只有“主要由这些阶段词构成、且跨多个一级目录高度雷同”的二三级结构，
+// 才认定是“套用与招标无关的通用模板”。这些词本身是中性词——招标文件若在某一级目录下
+// 明确要求了培训/运维/质保等内容，对应章节就是有依据的，不应被误杀（见下方 grounding 校验）。
+const GENERIC_PROCESS_TERMS = new Set([
+  '需求分析', '需求调研', '现状分析', '业务分析',
+  '总体设计', '系统架构', '系统拓扑', '架构设计', '方案设计', '详细设计',
+  '建设实施', '项目实施', '项目施工', '项目建设', '部署实施',
+  '培训', '运维', '质保', '售后', 'hse', '健康安全', '安全健康',
+  '信息安全', '保密', '标准引用',
+]);
+
+// 近义/同义归一：让“需求调研≈需求分析”“系统拓扑≈系统架构”“详细方案≈详细设计”
+// “项目实施≈建设实施”等在以集合方式比对时视为同一标题，从而能识别“只换说法、不改骨架”的雷同。
+const TITLE_SYNONYM_MAP = {
+  '需求调研': '需求分析', '现状分析': '需求分析', '业务分析': '需求分析',
+  '系统拓扑': '系统架构', '系统结构': '系统架构', '拓扑结构': '系统架构', '架构设计': '系统架构',
+  '方案设计': '详细设计', '详细方案': '详细设计',
+  '项目实施': '建设实施', '项目施工': '建设实施', '项目建设': '建设实施', '部署实施': '建设实施',
+  '健康安全': '安全健康', 'hse': '安全健康',
+};
+
+function normalizeTitleSyn(value) {
+  const k = normalizeTitleKey(value);
+  return TITLE_SYNONYM_MAP[k] || k;
 }
 
-// 通用套话词：只有在雷同结构中主要由这些词构成时，才认定是“套用通用模板”。
-// 如果雷同来自招标文件的明确要求（如每个子系统都要求培训/运维/质保），不应被误杀。
-const GENERIC_TEMPLATE_KEYWORDS = [
-  '需求分析', '系统拓扑', '详细设计', '项目建设', '项目实施', '建设实施',
-  '培训', '运维', '质保', '售后', 'hse', '健康安全', '安全健康', '质量',
-  '信息安全', '保密', '标准引用', '模块功能',
-];
+// 二级目录标题归一化后的无序集合（顺序无关，便于识别“换顺序的雷同”）。
+function getSecondLevelNormalizedSet(item) {
+  const children = item?.children || [];
+  return new Set(
+    children
+      .map((child) => normalizeTitleSyn(child?.title))
+      .filter(Boolean),
+  );
+}
 
-function isGenericTemplateSignature(signature) {
-  if (!signature) return false;
-  const titles = signature
-    .split('|')
-    .map((t) => t.trim())
-    .filter(Boolean);
-  if (!titles.length) return false;
-  const genericCount = titles.filter((t) => {
-    const lower = t.toLowerCase();
-    return GENERIC_TEMPLATE_KEYWORDS.some((kw) => lower.includes(kw.toLowerCase()));
-  }).length;
-  // 过半标题含套话词，且整体看起来像通用流程章节，才认定是套模板
-  return genericCount >= Math.ceil(titles.length / 2);
+// 一个二级标题集合是否“通用骨架主导”：至少含 2 个通用阶段词，且通用词过半。
+// 单章“质量/保密”之类不会触发，只有整段流程骨架才构成模板信号。
+function isGenericDominated(set) {
+  if (!set || set.size < 2) return false;
+  let generic = 0;
+  for (const t of set) {
+    if (GENERIC_PROCESS_TERMS.has(t)) generic += 1;
+  }
+  return generic >= 2 && generic >= Math.ceil(set.size / 2);
+}
+
+// 从招标来源 groups 抽取每个评分项/目录“允许出现的通用阶段词”，用于判断某目录的通用骨架
+// 到底是招标明确要求（有依据），还是模型自带的套话（无依据）。
+function buildGroupGroundingSet(groups) {
+  const m = new Map();
+  if (!Array.isArray(groups)) return m;
+  groups.forEach((g) => {
+    const rid = String(g?.requirement_id || '').trim();
+    if (!rid) return;
+    const text = [
+      g.title,
+      g.description,
+      ...(Array.isArray(g.detail_points) ? g.detail_points : []),
+    ]
+      .filter((x) => typeof x === 'string' && x.trim())
+      .join(' ')
+      .toLowerCase();
+    const terms = new Set();
+    for (const term of GENERIC_PROCESS_TERMS) {
+      if (text.includes(term)) terms.add(term);
+    }
+    m.set(rid, terms);
+  });
+  return m;
+}
+
+// 某目录的通用骨架是否能在它自己的来源评分项/目录中找到依据。
+// 找到且过半通用词有依据 -> 视为招标明确要求（合法并行结构，不误杀）。
+function isGenericSkeletonGrounded(item, set, groupGrounding) {
+  const rid = String(item?.source_requirement_id || '').trim();
+  if (!rid || !groupGrounding || !groupGrounding.has(rid)) return false;
+  const gt = groupGrounding.get(rid);
+  const generic = [...set].filter((t) => GENERIC_PROCESS_TERMS.has(t));
+  if (!generic.length) return true;
+  if (!gt.size) return false;
+  let grounded = 0;
+  for (const t of generic) {
+    if (gt.has(t)) grounded += 1;
+  }
+  return grounded >= Math.ceil(generic.length / 2);
 }
 
 // 聚合型评分项程序化兜底：将“核心词（分项）”形式的多个一级目录自动合并为 1 个。
@@ -2424,25 +2486,48 @@ function mergeAggregatedTopLevelItems(context) {
   return plans.length;
 }
 
-function detectTemplateChildrenStructure(outlineItems) {
-  if (!outlineItems || outlineItems.length < 2) return null;
-  const signatures = new Map();
-  outlineItems.forEach((item) => {
-    const sig = getSecondLevelTitleSignature(item);
-    if (!sig) return;
-    if (!signatures.has(sig)) {
-      signatures.set(sig, []);
+// 雷同检测：识别“多个一级目录套用同一套与招标无关的通用流程骨架”。
+// 改进点（相对旧实现）：
+//  1) 无序集合 + 近义归一 -> 换顺序、换说法的雷同也能识别（旧实现只认“二级标题序列完全相同”）；
+//  2) 以“成对相似度”而非“精确签名相等”成组 -> 容忍个别目录多/少一两个章节；
+//  3) 招标依据校验 -> 若某目录的通用骨架能在它自己的来源评分项/目录中找到依据（招标明确要求
+//     的并行结构，如各子系统均需培训/运维/质保），则放行，不再误杀。
+// 返回被判定为套模板的一级目录标题列表；无则返回 null。
+function detectTemplateChildrenStructure(outlineItems, groups) {
+  if (!Array.isArray(outlineItems) || outlineItems.length < 2) return null;
+  const items = outlineItems.filter((it) => Array.isArray(it?.children) && it.children.length);
+  if (items.length < 2) return null;
+
+  const records = items.map((item) => ({ item, set: getSecondLevelNormalizedSet(item) }));
+  const groupGrounding = buildGroupGroundingSet(groups);
+
+  const templated = new Set();
+  for (let i = 0; i < records.length; i += 1) {
+    const a = records[i].set;
+    if (!a.size) continue;
+    for (let j = i + 1; j < records.length; j += 1) {
+      const b = records[j].set;
+      if (!b.size) continue;
+      const inter = [...a].filter((x) => b.has(x)).length;
+      const union = new Set([...a, ...b]).size;
+      const jaccard = union ? inter / union : 0;
+      const containment = inter / Math.min(a.size, b.size);
+      // 结构相似：多数重叠，或一方基本包含另一方
+      if (jaccard < 0.5 && containment < 0.85) continue;
+      if (!isGenericDominated(a) || !isGenericDominated(b)) continue;
+      // 招标依据校验：任一方通用骨架有依据 -> 视为合法并行结构，跳过
+      if (
+        isGenericSkeletonGrounded(records[i].item, a, groupGrounding) ||
+        isGenericSkeletonGrounded(records[j].item, b, groupGrounding)
+      ) {
+        continue;
+      }
+      templated.add(records[i].item);
+      templated.add(records[j].item);
     }
-    signatures.get(sig).push(item);
-  });
-  // 仅当雷同签名主要由通用套话词构成时，才判定为套用模板；
-  // 若雷同来自招标文件明确要求的并列技术方向，则放行。
-  const templatedGroups = Array.from(signatures.values()).filter(
-    (group) => group.length >= 2 && isGenericTemplateSignature(getSecondLevelTitleSignature(group[0])),
-  );
-  if (!templatedGroups.length) return null;
-  const titles = templatedGroups.flatMap((group) => group.map((item) => String(item.title || '未命名').trim()));
-  return titles;
+  }
+  if (!templated.size) return null;
+  return [...templated].map((it) => String(it.title || '未命名').trim());
 }
 
 function validateFinalOutline(context) {
@@ -2452,7 +2537,7 @@ function validateFinalOutline(context) {
   if (outlineDepth(context.outline?.outline || []) > 4) {
     throw new Error('最终目录层级不能超过四级');
   }
-  const templatedTitles = detectTemplateChildrenStructure(context.outline?.outline || []);
+  const templatedTitles = detectTemplateChildrenStructure(context.outline?.outline || [], context.groups);
   if (templatedTitles?.length) {
     throw new Error(`以下一级目录的二三级结构高度雷同，疑似套用通用模板，请按各自主题重新生成：${templatedTitles.join('、')}`);
   }
