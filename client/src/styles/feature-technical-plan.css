@@ -3329,8 +3329,17 @@
 }
 
 .outline-tree-head > div:first-child {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 4px;
+  min-width: 0;
+}
+
+.outline-tree-head > div:first-child strong,
+.outline-tree-head > div:first-child span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .outline-tree-tools {
