@@ -4,7 +4,7 @@ const { dialog } = require('electron');
 const { createPiRuntimeService } = require('./pi/piRuntimeService.cjs');
 const { buildPiSelfCheckReportMarkdown } = require('./pi/piSelfCheckService.cjs');
 const { createAgentErrorReporter } = require('./agent/agentErrorReporter.cjs');
-const { listAgentRuntimeDescriptors } = require('./agent/agentRuntimeRegistry.cjs');
+const { listAgentRuntimeDescriptors, normalizeAgentRuntimeId } = require('./agent/agentRuntimeRegistry.cjs');
 
 const PI_RUNTIME_ID = 'pi';
 const PI_RUNTIME_NAME = 'Pi Agent';
@@ -288,11 +288,12 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
     return getStatus();
   }
 
-  async function selfCheck() {
+  async function selfCheck(rawRuntimeId) {
+    const runtimeId = normalizeAgentRuntimeId(rawRuntimeId);
     if (activeEntry || queue.length) {
       return {
         success: false,
-        runtime_id: PI_RUNTIME_ID,
+        runtime_id: runtimeId,
         runtime_name: PI_RUNTIME_NAME,
         status: 'busy',
         message: 'Agent 正在处理其他任务，请耐心等待',
@@ -311,7 +312,7 @@ function createAgentService({ app, configStore, aiService, licenseService }) {
       };
     }
     const entry = {
-      taskId: `${PI_RUNTIME_ID}-self-check`,
+      taskId: `${runtimeId}-self-check`,
       title: `${PI_RUNTIME_NAME} 自检`,
       queuedAt: nowIso(),
       startedAt: nowIso(),

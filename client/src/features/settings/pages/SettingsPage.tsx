@@ -58,6 +58,12 @@ function normalizeAgentModeScenarios(value?: Partial<AgentModeScenariosConfig>):
   };
 }
 
+// 归一化已保存的智能体运行时 id：历史遗留的 'opencode' 及任何未知值一律回退 'pi'，
+// 避免老用户升级后设置页运行时下拉框因找不到匹配项而显示空白。
+function normalizeAgentRuntimeId(value?: string): string {
+  return value && value !== 'opencode' ? value : 'pi';
+}
+
 const textModelProviders: Array<{ value: TextModelProvider; label: string }> = [
   { value: 'jinlong', label: '金龙中转站【推荐】' },
   { value: 'volcengine', label: '火山方舟' },
@@ -640,7 +646,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         imageModelProfiles,
         embeddingModelName: config.embedding_model?.model_name || '',
         components: normalizeComponentsState(config.components),
-        agentRuntime: config.agent_runtime,
+        agentRuntime: normalizeAgentRuntimeId(config.agent_runtime),
         agentModeScenarios: normalizeAgentModeScenarios(config.agent_mode_scenarios),
         general: {
           developer_mode: Boolean(config.developer_mode),
@@ -650,7 +656,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
           gpu_hardware_acceleration_configured: Boolean(config.gpu_hardware_acceleration_configured),
         },
       }));
-      setSavedConfig(config);
+      setSavedConfig({ ...config, agent_runtime: normalizeAgentRuntimeId(config.agent_runtime) });
       onDeveloperModeChange?.(Boolean(config.developer_mode));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '加载客户端配置失败';
@@ -831,7 +837,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       const result = await window.yibiao?.config.save(config);
       showToast(result?.success ? '配置已保存' : result?.message || '配置保存失败', result?.success ? 'success' : 'error');
       if (result?.success) {
-        setSavedConfig(config);
+        setSavedConfig({ ...config, agent_runtime: normalizeAgentRuntimeId(config.agent_runtime) });
         onDeveloperModeChange?.(Boolean(config.developer_mode));
         trackConfigUsage({}, config);
       }
@@ -990,7 +996,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       const config = createClientConfig();
       const saveResult = await window.yibiao?.config.save(config);
       if (saveResult?.success) {
-        setSavedConfig(config);
+        setSavedConfig({ ...config, agent_runtime: normalizeAgentRuntimeId(config.agent_runtime) });
       }
       const content = await window.yibiao?.ai.chat({
         messages: [{ role: 'user', content: 'hi' }],

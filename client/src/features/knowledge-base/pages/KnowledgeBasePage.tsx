@@ -1230,7 +1230,7 @@ function KnowledgeBasePage() {
             analyzeErrors.push(`文档「${item.file_name || item.document_id}」缺少同步信息，跳过`);
             continue;
           }
-          const itemSynced = (item as any)?.analysis_synced;
+          const itemSynced = item.analysis_synced;
           if (itemSynced) {
             syncedAnalysisCount += 1;
             // 分析已同步，主动水合到本地库，避免 loadTeamTree 异步水合前显示「等待处理」
