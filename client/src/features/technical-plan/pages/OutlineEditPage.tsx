@@ -1268,7 +1268,7 @@ function OutlineEditPage({
         <div>
           <span className="section-kicker">STEP 03</span>
           <strong>目录生成</strong>
-          <p>{isExpansionWorkflow ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。` : `当前一级目录生成方式：${outlineModeLabels[outlineMode]}；参考知识库：${referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
+          <p>{isExpansionWorkflow ? `当前原方案目录使用方式：${outlineExpansionModeLabels[outlineExpansionMode]}；参考知识库：${(referenceKnowledgeDocumentIds.length || draftKnowledgeDocumentIds.length) ? `已选择 ${referenceKnowledgeDocumentIds.length || draftKnowledgeDocumentIds.length} 个文档` : '未选择'}。` : `当前一级目录生成方式：${outlineModeLabels[outlineMode]}；参考知识库：${(referenceKnowledgeDocumentIds.length || draftKnowledgeDocumentIds.length) ? `已选择 ${referenceKnowledgeDocumentIds.length || draftKnowledgeDocumentIds.length} 个文档` : '未选择'}。`}</p>
         </div>
         <div className="outline-command-actions">
           <label className={`outline-wizard-switch${wizardMode ? ' is-active' : ''}`} title="分步向导：将目录生成拆分为多步，逐步确认与重试">
