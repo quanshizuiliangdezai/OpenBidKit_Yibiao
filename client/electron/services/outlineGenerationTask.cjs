@@ -52,6 +52,15 @@ function childrenOutlineFixedStructureRules() {
 4. 三级目录只包含 id、title、description，不要继续包含 children。`;
 }
 
+function childrenOutlineTopicSpecificityRules() {
+  return `主题相关性要求（必须遵守）：
+1. 二三级目录必须紧扣“当前固定一级目录”的具体技术主题，必须体现该主题的专业内容，不能写成放之四海皆准的通用章节。
+2. 严禁对不同一级目录套用同一套通用模板。例如，不要对每个一级目录都生成“需求分析与标准引用 → 系统拓扑设计与模块功能描述 → 各区域详细设计方案 → 项目建设实施方案 → 培训运维及售后服务方案 → HSE健康安全管理方案/质量保障体系/信息安全与保密管理”这种雷同结构。
+3. 每个一级目录下的二级目录标题、描述、三级展开要点，必须与该一级目录的专业领域强相关。例如“网络组网”应突出网络架构、设备选型、IP规划、无线覆盖；“计算机及存储”应突出服务器配置、存储架构、虚拟化/云平台、备份容灾；“人工智能项目集成”应突出算法平台、数据治理、模型训练与部署、算力调度。
+4. 如果当前一级目录主题是具体的系统/产品/技术方向，二级目录应围绕该方向的“设计、实施、测试、验收、运维”等专业环节展开，而不是把所有方向都写成相同的实施流程。
+5. 最终输出前请自检：如果把当前生成的 children 换到另一个一级目录下也同样完全适用，则生成失败，必须重新按当前一级目录主题定制。`;
+}
+
 function childrenOutlineParentNumberingRules(parentId) {
   const id = String(parentId || '1').trim() || '1';
   return `当前一级目录编号要求：
@@ -579,6 +588,8 @@ function generateAlignedChildrenMessages({ overview, requirements, responseFileR
 7. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
 8. 除了 JSON 结果外，不要输出任何其他内容。
 
+${childrenOutlineTopicSpecificityRules()}
+
 ${childrenOutlineFixedStructureRules()}`;
   const messages = [
     ...buildOutlineSharedContextMessages({ overview, requirements, responseFileRequirements, oldOutline }),
@@ -684,7 +695,8 @@ function buildFinalOutlineReviewMessages(context) {
 2. ${responseFileMode ? '技术评分要求是否已作为写作约束、判定标准或注意事项被合理参考；不得把技术评分项改造成一级目录。' : '技术评分要求是否已作为约束、扣分口径、判定标准或注意事项被合理参考；不得因为评分要求本身生成、补充或要求补充一级目录。'}
 3. 是否存在明显重复、归属错位、遗漏${sourceLabel}、误把非技术文件内容当成目录主题或结构不合理。
 4. 检查是否存在某个父目录下最终只有一个叶子目录；存在时必须返回 passed=false，并提出合并层级或调整归属的建议。
-5. 如果不通过，suggestions 必须给出具体、局部、可执行的修改建议；建议应围绕${sourceLabel}覆盖和现有目录结构调整，不要要求修改已锁定的一级目录来源。
+5. 特别检查：多个不同一级目录的二级目录结构是否高度雷同（例如每个一级目录下都是“需求分析→系统拓扑→各区域详细设计→项目建设实施→培训运维→HSE/质量/信息安全”这种通用模板）。如果存在这种套用通用模板的情况，必须返回 passed=false，并在 suggestions 中明确指出哪些一级目录被模板化了，要求按各自主题重新生成差异化的二三级目录。
+6. 如果不通过，suggestions 必须给出具体、局部、可执行的修改建议；建议应围绕${sourceLabel}覆盖和现有目录结构调整，不要要求修改已锁定的一级目录来源。
 
 只返回 JSON，格式为 {"passed": true, "suggestions": []}，不要返回完整目录，不要输出解释文字。`,
     },
@@ -1277,6 +1289,8 @@ function buildExpansionMissingChildrenMessages(sharedMessages, parentItem, group
 5. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
 6. id 字段用于承载目录编号；title 字段只能写纯标题，不得包含“第一章”“第一节”“一、”“（一）”“1.1.1”等任何编号或 Markdown #。
 7. 除了 JSON 结果外，不要输出任何其他内容。
+
+${childrenOutlineTopicSpecificityRules()}
 
 ${childrenOutlineFixedStructureRules()}`;
   const messages = [
@@ -2147,10 +2161,39 @@ function validateOriginalTopLevelPrefix(originalOutlinePayload, finalOutlinePayl
   });
 }
 
+function getSecondLevelTitleSignature(item) {
+  const children = item?.children || [];
+  return children
+    .map((child) => normalizeTitleKey(child?.title))
+    .filter(Boolean)
+    .join('|');
+}
+
+function detectTemplateChildrenStructure(outlineItems) {
+  if (!outlineItems || outlineItems.length < 2) return null;
+  const signatures = new Map();
+  outlineItems.forEach((item) => {
+    const sig = getSecondLevelTitleSignature(item);
+    if (!sig) return;
+    if (!signatures.has(sig)) {
+      signatures.set(sig, []);
+    }
+    signatures.get(sig).push(item);
+  });
+  const templatedGroups = Array.from(signatures.values()).filter((group) => group.length >= 2);
+  if (!templatedGroups.length) return null;
+  const titles = templatedGroups.flatMap((group) => group.map((item) => String(item.title || '未命名').trim()));
+  return titles;
+}
+
 function validateFinalOutline(context) {
   validateCompleteOutline(context.outline);
   if (outlineDepth(context.outline?.outline || []) > 4) {
     throw new Error('最终目录层级不能超过四级');
+  }
+  const templatedTitles = detectTemplateChildrenStructure(context.outline?.outline || []);
+  if (templatedTitles?.length) {
+    throw new Error(`以下一级目录的二三级结构高度雷同，疑似套用通用模板，请按各自主题重新生成：${templatedTitles.join('、')}`);
   }
   if (context.workflowKind !== 'existing-plan-expansion') {
     validateAlignedTopLevelMapping(context.outline.outline || [], context.groups || [], getTopLevelSourceLabel(context));
