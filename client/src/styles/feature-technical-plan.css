@@ -2368,6 +2368,10 @@
   overflow: hidden;
 }
 
+.outline-generation-page.has-wizard-panel {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
 .outline-command-bar,
 .outline-generation-workspace {
   background: rgba(255, 255, 255, 0.92);
@@ -3244,6 +3248,10 @@
   height: auto;
   min-height: 0;
   overflow: hidden;
+}
+
+.outline-generation-workspace.is-wizard-mode {
+  grid-template-columns: minmax(360px, 1fr) 340px;
 }
 
 .outline-progress-panel,

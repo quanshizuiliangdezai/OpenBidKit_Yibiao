@@ -1291,7 +1291,7 @@ function OutlineEditPage({
   };
 
   return (
-    <div className="plan-step-body outline-generation-page">
+    <div className={`plan-step-body outline-generation-page${wizardMode ? ' has-wizard-panel' : ''}`}>
       <section className="outline-command-bar">
         <div>
           <span className="section-kicker">STEP 03</span>
@@ -1435,7 +1435,8 @@ function OutlineEditPage({
         </section>
       )}
 
-      <section className="outline-generation-workspace">
+      <section className={`outline-generation-workspace${wizardMode ? ' is-wizard-mode' : ''}`}>
+        {!wizardMode && (
         <aside className="outline-progress-panel">
           <div className="analysis-result-head">
             <strong>生成过程</strong>
@@ -1469,6 +1470,7 @@ function OutlineEditPage({
             )) : <p>等待生成任务启动。</p>}
           </div>
         </aside>
+        )}
 
         <section className="outline-tree-panel">
           <div className="analysis-result-head outline-tree-head">
