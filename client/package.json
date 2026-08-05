@@ -16,6 +16,8 @@
     "preview": "vite preview --host 127.0.0.1 --port 4173",
     "generate-build-attestation": "node scripts/generate-build-attestation.cjs",
     "smoke:electron-native": "electron scripts/electron-native-smoke.cjs",
+    "verify-agent-tools": "node scripts/verify-agent-tools.cjs",
+    "verify-packaged-agent-tools": "node scripts/verify-packaged-agent-tools.cjs",
     "start": "electron ."
   },
   "build": {
@@ -24,6 +26,7 @@
     "copyright": "Copyright © 2026 mark",
     "asar": true,
     "compression": "maximum",
+    "afterPack": "scripts/after-pack-agent-tools.cjs",
     "electronLanguages": [
       "zh-CN",
       "en-US"

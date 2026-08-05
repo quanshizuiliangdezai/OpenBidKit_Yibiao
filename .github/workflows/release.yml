@@ -93,6 +93,9 @@ jobs:
       - name: Smoke test Electron native dependencies
         run: npm run smoke:electron-native
 
+      - name: Verify bundled agent tools
+        run: npm run verify-agent-tools
+
       - name: Write sync config from secret
         # secrets.YIBIAO_SYNC_CONFIG 示例：{"baseUrl":"http://59.49.48.147:15004","authToken":"yibiao-sync-2026","uploadPath":"/sync/upload","downloadPath":"/sync/download","manifestPath":"/sync/yibiao/manifest"}
         run: echo '${{ secrets.YIBIAO_SYNC_CONFIG }}' > client/electron/sync-config.local.json
@@ -120,6 +123,9 @@ jobs:
 
       - name: Build Windows NSIS and ZIP artifacts
         run: npx electron-builder --win nsis zip --publish never
+
+      - name: Verify packaged agent tools
+        run: npm run verify-packaged-agent-tools -- --platform win32 --arch x64 --release release
 
       - name: Build Windows MSI artifact
         run: npx electron-builder --win msi --publish never -c.productName=OpenBidKit_Yibiao -c.extraMetadata.author=mark -c.copyright="Copyright (c) 2026 mark"
@@ -197,6 +203,9 @@ jobs:
 
       - name: Smoke test Electron native dependencies
         run: npm run smoke:electron-native
+
+      - name: Verify bundled agent tools
+        run: npm run verify-agent-tools
 
       - name: Write sync config from secret
         # secrets.YIBIAO_SYNC_CONFIG 示例：{"baseUrl":"http://59.49.48.147:15004","authToken":"yibiao-sync-2026","uploadPath":"/sync/upload","downloadPath":"/sync/download","manifestPath":"/sync/yibiao/manifest"}
@@ -276,6 +285,9 @@ jobs:
 
             sleep $((attempt * 20))
           done
+
+      - name: Verify packaged agent tools
+        run: npm run verify-packaged-agent-tools -- --platform darwin --arch ${{ matrix.arch }} --release release
 
       - name: Verify packaged native architectures
         run: node scripts/verify-macos-native-arch.cjs "${{ matrix.arch }}" release

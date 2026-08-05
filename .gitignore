@@ -23,11 +23,6 @@ frontend/build/
 backend/static/
 client/release/
 
-# OpenCode binary 由本地脚本或 GitHub Actions 下载生成，只保留版本文件
-client/.tmp-opencode-download/
-client/vendor/opencode/*
-!client/vendor/opencode/VERSION
-
 # 临时和缓存文件
 *.tmp
 *.temp
@@ -272,7 +267,10 @@ testfiles/
 doc/
 logs/
 # === 本地 Fork 特有忽略 ===
-client/vendor/
+# agent-tools 已入 Git（Pi Agent 所需），仅忽略已移除的 OpenCode 相关目录
+client/vendor/opencode/
+client/vendor/opencode-tools/
+client/.tmp-agent-tools-download/
 client/electron/sync-config.local.json
 _ourmods/
 restore-our-mods.ps1

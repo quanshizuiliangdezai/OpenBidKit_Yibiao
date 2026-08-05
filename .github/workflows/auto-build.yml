@@ -64,6 +64,10 @@ jobs:
         working-directory: client
         run: npm run smoke:electron-native
 
+      - name: Verify bundled agent tools
+        working-directory: client
+        run: npm run verify-agent-tools -- --platform win32 --arch x64
+
       - name: Set build version (semantic, v1.x / v1.x.x)
         working-directory: client
         shell: bash
@@ -116,3 +120,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win nsis zip --publish always
+
+      - name: Verify packaged agent tools
+        working-directory: client
+        run: npm run verify-packaged-agent-tools -- --platform win32 --arch x64 --release release
