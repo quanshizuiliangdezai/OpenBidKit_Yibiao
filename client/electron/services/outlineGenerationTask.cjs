@@ -617,6 +617,7 @@ function generateAlignedDirectionChildrenMessages({ overview, requirements, resp
   const detailPoints = (directionGroup.detail_points || [])
     .filter((item) => typeof item === 'string' && item.trim());
   const detailLines = detailPoints.map((item) => `- ${item}`).join('\n');
+  const numberedDetailLines = detailPoints.map((item, index) => `${index + 1}. ${item}`).join('\n');
   const dimensionCount = detailPoints.length;
   const sourceLabel = getTopLevelSourceLabel({ outlineMode });
   const directionTitle = String(directionGroup.title || '').trim();
@@ -625,8 +626,12 @@ function generateAlignedDirectionChildrenMessages({ overview, requirements, resp
     .map((title, index) => `${index + 1}. ${title}`)
     .join('\n');
   const dimensionConstraint = dimensionCount > 0
-    ? `招标评分依据（必须逐条覆盖，缺项会被扣分）：
-本方向在招标文件「${parentItem.title}」下的评分标准共 ${dimensionCount} 个维度（见下方“该方向评分细项”）。每个维度对应评审打分项的考察内容，专家会逐条核对。请务必把这 ${dimensionCount} 个维度全部保留为三级目录，不得遗漏、不得合并、不得用无关的通用章节替代。`
+    ? `招标评分依据（必须逐条对应，缺项会被扣分）：
+本方向在招标文件「${parentItem.title}」下的评分标准共 ${dimensionCount} 个维度，每条对应评审打分项的考察内容，专家会逐条核对。下面已逐条编号列出：
+
+${numberedDetailLines}
+
+硬性要求：你返回的三级目录 children 数组中，**第 1 项必须对应上面的第 1 条**、**第 2 项必须对应上面的第 2 条**、……、**第 ${dimensionCount} 项必须对应上面的第 ${dimensionCount} 条**，**一一对应**。不得合并任何条目，不得遗漏任何条目，不得新增与评分维度无关的条目。**标题相近也不代表是同一条**——本项目招标文件评分标准中常出现「系统拓扑」和「各区域/功能模块设计方案」这种语义接近但各自独立的评审点，必须分别对应。`
     : `本方向暂无明确评分细项，请基于「${directionTitle}」的实际技术常识合理拆解三级目录。`;
   const instructionPrompt = `你是一个资深的技术标书架构师。现在需要为「${directionTitle}」这个具体技术方向设计它下属的技术方案三级目录。
 
@@ -634,6 +639,7 @@ ${dimensionConstraint}
 
 设计思路（请据此自行判断，不要套用通用项目管理模板）：
 - 这${dimensionCount > 0 ? ` ${dimensionCount} 个维度` : '些内容'}来自该方向在招标文件中的真实评分要求，是评审依据；但它们目前是通用表述（如“用户需求”“系统拓扑”“建设实施”）。你需要让每个三级目录的标题融入「${directionTitle}」的专业语境：用该方向的具体技术语言重写，使标题体现该方向真实的技术构成、建设任务与交付物，避免与其他方向雷同。
+- **${dimensionCount} 个维度虽然主题相近，但每条都是独立的评审打分项**——例如「用户需求」与「相关标准」是两条独立打分点，「系统拓扑」与「各区域/功能模块设计方案」也是两条独立打分点，**不得因语义接近就合并**。
 - 同一章内还有其他并列方向（见下方列表），各方向技术内容不同，请只围绕本方向真实要求展开；但所覆盖的维度数量与对应关系不变。
 - 若某维度（如“各区域/功能模块设计方案”）确实需要按本方向的子系统进一步拆分，可引入一层二级目录承载多个三级目录，但必须覆盖所有维度。
 
@@ -3129,14 +3135,41 @@ async function buildAligned(aiService, payload, outlineMode, groups, suggestions
     for (const originalGroup of mergedGroup.items) {
       directionIndex += 1;
       const directionId = `${parentItem.id}.${directionIndex}`;
-      const childrenResponse = await generateAlignedDirectionChildrenForGroup(aiService, payload, outlineMode, parentItem, directionId, originalGroup, siblingTitles, suggestions, log, progressRange.start);
-      const directionChildren = renumberSubtree(childrenResponse.children || [], directionId);
       const subTitle = String(originalGroup.title || '').trim();
+      const directionDimensionPoints = (originalGroup.detail_points || [])
+        .filter((item) => typeof item === 'string' && item.trim());
+      const directionDimensionCount = directionDimensionPoints.length;
+      const childrenResponse = await generateAlignedDirectionChildrenForGroup(aiService, payload, outlineMode, parentItem, directionId, originalGroup, siblingTitles, suggestions, log, progressRange.start);
+      let directionChildren = (childrenResponse.children || []).slice();
+
+      // 后处理兑底：AI 即使违反 prompt 合并了维度，也必须保证三级目录数量 = 评分维度数。
+      // 数量不足时用原始评分点补齐（缺失项的标题用「方向·评分点摘要」，description 注明对应维度），
+      // 保证招标文件的每条评分点都逐条保留，避免被合并/丢失导致评审扣分。
+      if (directionDimensionCount > 0 && directionChildren.length < directionDimensionCount) {
+        const missing = directionDimensionCount - directionChildren.length;
+        log(`检测到「${subTitle}」AI 返回的三级目录数(${directionChildren.length})少于评分维度数(${directionDimensionCount})，已用原始评分点补齐 ${missing} 项，避免合并丢失。`, progressRange.start);
+        const summaryPattern = /^[\s\d.、，,；;]+/;
+        for (let i = directionChildren.length; i < directionDimensionCount; i += 1) {
+          const rawPoint = directionDimensionPoints[i] || '';
+          const summary = rawPoint.replace(summaryPattern, '').slice(0, 24);
+          directionChildren.push({
+            id: `${directionId}.${i + 1}`,
+            title: `${subTitle}·${summary}`,
+            description: `对应评分维度：${rawPoint}`,
+          });
+        }
+      }
+      // 防御：AI 偶尔多生成一项时，截断到维度数（避免数量对不上评分表）
+      if (directionDimensionCount > 0 && directionChildren.length > directionDimensionCount) {
+        directionChildren = directionChildren.slice(0, directionDimensionCount);
+      }
+
+      const numberedChildren = renumberSubtree(directionChildren, directionId);
       children.push({
         id: directionId,
         title: subTitle,
         description: String(originalGroup.description || subTitle).trim(),
-        ...(directionChildren.length ? { children: directionChildren } : {}),
+        ...(numberedChildren.length ? { children: numberedChildren } : {}),
       });
     }
     return children;
