@@ -79,7 +79,7 @@ jobs:
           PATCH=$(echo "$CURRENT" | cut -d. -f3)
 
           # 根据本次提交信息判断 bump 级别
-          # 用 git log 运行时读取，避免提交信息中的单引号破坏 bash 赋值（${{ }} 模板替换会提前闭合引号）
+          # 用 git log 运行时读取，避免提交信息中的单引号破坏 bash 赋值（模板替换会提前闭合引号）
           COMMIT_MSG="$(git log -1 --format=%B)"
           BUMP="patch"
           if printf '%s' "$COMMIT_MSG" | grep -qiE 'BREAKING CHANGE|!:'; then
