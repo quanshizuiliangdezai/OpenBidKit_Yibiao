@@ -612,9 +612,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
   }
 
   function recoverInterruptedContentGenerationTask() {
-    if (activeTasks.has('content-generation')) {
-      return;
-    }
+    // 始终清掉 activeTasks 残留（防止 zombie 任务对象让 startManagedTask 跳过新任务导致死锁）
+    activeTasks.delete('content-generation');
+    activeTaskControls.delete('content-generation');
 
     const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const contentTask = technicalPlan.contentGenerationTask;
@@ -660,9 +660,12 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
   }
 
   function recoverInterruptedOutlineGenerationTask() {
-    if (activeTasks.has('outline-generation')) {
-      return;
-    }
+    // 始终清掉 activeTasks 里的残留任务对象（包括 zombie 记录——runner 因异常中断时 finally 没跑，
+    // activeTasks 留下 status=running 的脏数据，会让 startManagedTask 误以为有任务在跑、
+    // 跳过新任务导致死锁）。之前的 has 检查直接 return 反而保留了这个 zombie，
+    // 用户反馈：进度卡在 mainComplete (55%) 1 小时不动，根因就在这里。
+    activeTasks.delete('outline-generation');
+    activeTaskControls.delete('outline-generation');
 
     const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const outlineTask = technicalPlan.outlineGenerationTask;
@@ -718,9 +721,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
   }
 
   function recoverInterruptedBidAnalysisTask() {
-    if (activeTasks.has('bid-analysis')) {
-      return;
-    }
+    // 始终清掉 activeTasks 残留（防止 zombie 任务对象让 startManagedTask 跳过新任务导致死锁）
+    activeTasks.delete('bid-analysis');
+    activeTaskControls.delete('bid-analysis');
 
     const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const bidAnalysisTask = technicalPlan.bidAnalysisTask;
@@ -762,9 +765,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
   }
 
   function recoverInterruptedBidSectionExtractionTask() {
-    if (activeTasks.has('bid-section-extraction')) {
-      return;
-    }
+    // 始终清掉 activeTasks 残留（防止 zombie 任务对象让 startManagedTask 跳过新任务导致死锁）
+    activeTasks.delete('bid-section-extraction');
+    activeTaskControls.delete('bid-section-extraction');
 
     const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const extractionTask = technicalPlan.bidSectionExtractionTask;
@@ -791,9 +794,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
   }
 
   function recoverInterruptedGlobalFactsTask() {
-    if (activeTasks.has('global-facts-generation')) {
-      return;
-    }
+    // 始终清掉 activeTasks 残留（防止 zombie 任务对象让 startManagedTask 跳过新任务导致死锁）
+    activeTasks.delete('global-facts-generation');
+    activeTaskControls.delete('global-facts-generation');
 
     const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const globalFactsTask = technicalPlan.globalFactsTask;
@@ -815,12 +818,18 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
   }
 
   function recoverInterruptedRejectionCheckTasks() {
+    // 始终清掉 activeTasks 残留（防止 zombie 任务对象让 startManagedTask 跳过新任务导致死锁）
+    activeTasks.delete('rejection-items-extraction');
+    activeTaskControls.delete('rejection-items-extraction');
+    activeTasks.delete('rejection-check-run');
+    activeTaskControls.delete('rejection-check-run');
+
     const staleExtractionMessage = '上次解析未完成，请重新解析';
     const staleCheckMessage = '上次检查未完成，请重新检查';
     const state = rejectionCheckStore.loadRejectionCheck() || {};
     const partial = {};
 
-    if (!activeTasks.has('rejection-items-extraction') && state.extractionTask?.status === 'running') {
+    if (state.extractionTask?.status === 'running') {
       partial.invalidBidAndRejectionItems = state.invalidBidAndRejectionItems?.status === 'running'
         ? { ...state.invalidBidAndRejectionItems, status: 'error', error: staleExtractionMessage, updatedAt: now() }
         : state.invalidBidAndRejectionItems;
@@ -834,7 +843,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       };
     }
 
-    if (!activeTasks.has('rejection-check-run') && state.checkTask?.status === 'running') {
+    if (state.checkTask?.status === 'running') {
       const markResult = (result) => result?.status === 'running'
         ? { ...result, status: 'error', error: staleCheckMessage, progressMessage: staleCheckMessage, updatedAt: now() }
         : result;
@@ -857,9 +866,10 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
   }
 
   function recoverInterruptedDuplicateCheckTask() {
-    if (activeTasks.has('duplicate-analysis')) {
-      return;
-    }
+    // 始终清掉 activeTasks 残留（防止 zombie 任务对象让 startManagedTask 跳过新任务导致死锁）
+    activeTasks.delete('duplicate-analysis');
+    activeTaskControls.delete('duplicate-analysis');
+
     const state = duplicateCheckStore.loadDuplicateCheck() || {};
     if (state.analysisTask?.status !== 'running') {
       return;
