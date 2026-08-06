@@ -811,6 +811,34 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     return unsubscribe;
   }, [setState, showToast]);
 
+  // 缓存加载与任务事件订阅是并行的：useTechnicalPlanWorkflow 先发起 load-state，
+  // 随后本组件才订阅任务事件并触发 recover。主进程按队列先处理 load-state（可能读到 running），
+  // 再 recover 把 DB 改成 wizard-step-done 并 emit；前端先收到 event 更新状态，随后 load-state
+  // 返回又用缓存的 running 把状态覆盖，导致 autoAdvance 看不到 done。因此在 hydrated 后再拉一次
+  // 最新 state，覆盖可能过时的缓存。
+  useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+    let mounted = true;
+    window.yibiao?.technicalPlan.loadState().then((latestState) => {
+      if (!mounted || !latestState) {
+        return;
+      }
+      setState((prev) => ({
+        ...prev,
+        ...latestState,
+        // 工作流类型以当前 props 为准，不跟随缓存。
+        workflowKind: prev.workflowKind,
+      }));
+    }).catch((error) => {
+      console.warn('hydration 后刷新技术方案状态失败', error);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [hydrated, setState]);
+
   useEffect(() => {
     if (state.step !== 'document-analysis') {
       return;
