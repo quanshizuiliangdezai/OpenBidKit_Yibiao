@@ -798,18 +798,11 @@ function OutlineEditPage({
       return;
     }
 
-    // 已经处理过该次 done 状态，避免重复触发。
-    if (prevStatus === 'wizard-step-done') {
-      return;
-    }
-
     // outlineWizard 尚未加载完成时先不标记状态，等 active 变为 true 后再判断，
     // 防止 task 先变成 done、wizard 后加载时漏触发。
     if (!outlineWizard?.active) {
       return;
     }
-
-    autoAdvanceStateRef.current.lastTaskStatus = currentStatus;
 
     const wizard = outlineWizardRef.current;
     const steps = getWizardSteps(
@@ -819,20 +812,27 @@ function OutlineEditPage({
     const completedCount = wizard?.completedSteps?.length ?? 0;
     const nextStep = steps[completedCount];
     if (!nextStep || completedCount >= steps.length) {
+      autoAdvanceStateRef.current.lastTaskStatus = currentStatus;
       return;
     }
 
     // 防御：如果 nextStep 和 currentStep 相同，说明 completedSteps 尚未推进，
     // 此时自动推进会重复执行当前步骤并触发 backend 的顺序校验失败。
     if (nextStep === wizard?.currentStep) {
+      autoAdvanceStateRef.current.lastTaskStatus = currentStatus;
       return;
     }
 
     // 基于已完成步骤数和当前步骤生成稳定 key，避免对象引用变化导致重复或漏触发。
+    // 组件重新挂载后 prevStatus=null、lastAdvancedKey=''，如果当前状态仍满足推进条件，
+    // 会继续推进；这保证用户切到别的模块再回来时，自动推进不会"丢失"。
     const key = `${completedCount}:${wizard?.currentStep ?? ''}`;
-    if (autoAdvanceStateRef.current.lastAdvancedKey === key) {
+    const alreadyHandled = prevStatus === 'wizard-step-done' && autoAdvanceStateRef.current.lastAdvancedKey === key;
+    if (alreadyHandled) {
       return;
     }
+
+    autoAdvanceStateRef.current.lastTaskStatus = currentStatus;
     autoAdvanceStateRef.current.lastAdvancedKey = key;
 
     // 关键修复：定时器存进 ref，不依赖 effect 的 cleanup 清除。

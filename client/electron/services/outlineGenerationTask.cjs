@@ -4496,7 +4496,11 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
 
   const isLastStep = orderedSteps[orderedSteps.length - 1] === step;
   const nextCompletedSteps = [...wizard.completedSteps, step];
-  const nextWizard = { ...wizard, completedSteps: nextCompletedSteps, currentStep: step, oldOutline, groups };
+  // 完成当前步骤后，currentStep 应该指向下一步（或最后一步），而不是刚完成的步骤。
+  // 前端 autoAdvance 与 wizard 面板都依赖 currentStep 来判断“现在该执行哪一步”。
+  const nextStepIndex = nextCompletedSteps.length;
+  const nextCurrentStep = orderedSteps[Math.min(nextStepIndex, orderedSteps.length - 1)];
+  const nextWizard = { ...wizard, completedSteps: nextCompletedSteps, currentStep: nextCurrentStep, oldOutline, groups };
   const finalOutlineData = { ...outline, project_overview: overview };
 
   if (!isLastStep) {
