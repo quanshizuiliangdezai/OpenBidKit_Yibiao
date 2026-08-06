@@ -4090,6 +4090,21 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     phase: 'reviewing',
     current_leaf_count: countOutlineLeafItems(outline?.outline || []),
   };
+
+  const auditResult = await runOutlineComplianceAudit({
+    aiService,
+    payload: taskPayload,
+    outline,
+    groups,
+    log,
+  });
+  outline = auditResult.outline;
+  outlineStats = {
+    ...outlineStats,
+    phase: 'auditing',
+    current_leaf_count: countOutlineLeafItems(outline?.outline || []),
+  };
+
   let wordControlWarning = '';
   let wordControlWarningKind = '';
   if (wordControl.minimumLeafCount !== null || wordControl.maximumLeafCount !== null) {
