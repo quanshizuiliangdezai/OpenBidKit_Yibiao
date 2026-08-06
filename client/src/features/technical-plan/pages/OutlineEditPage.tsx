@@ -350,6 +350,42 @@ function OutlineEditPage({
     }
   }, [referenceKnowledgeDocumentIds, generationDialogOpen]);
 
+  // 弹窗打开期间，参考知识库/一级目录生成方式草稿变化即自动持久化（debounce 400ms），
+  // 避免用户在弹窗未关闭时强制重启/被强杀导致草稿丢失（重启后看到“未选择”）。
+  // cleanup 会取消未触发的定时器；关弹窗时由 handleDialogOpenChange 统一保存，cleanup 自动让出，不重复 IPC。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!generationDialogOpen) return undefined;
+    const expansion = workflowKind === 'existing-plan-expansion';
+    const knowledgeChanged =
+      draftKnowledgeDocumentIds.length !== referenceKnowledgeDocumentIds.length ||
+      draftKnowledgeDocumentIds.some((id, index) => id !== referenceKnowledgeDocumentIds[index]);
+    const modeChanged = expansion
+      ? draftOutlineExpansionMode !== outlineExpansionMode
+      : draftOutlineMode !== outlineMode;
+    if (!knowledgeChanged && !modeChanged) return undefined;
+    const timer = window.setTimeout(() => {
+      void onOutlineConfigChange({
+        referenceKnowledgeDocumentIds: draftKnowledgeDocumentIds,
+        outlineMode: expansion ? 'aligned' : draftOutlineMode,
+        outlineExpansionMode: expansion ? draftOutlineExpansionMode : 'ai-complement',
+        wordControlOptions: getNormalizedWordControlOptions(),
+      }).catch((error) => {
+        showToast(error instanceof Error ? error.message : '保存目录配置失败', 'error');
+      });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [
+    draftKnowledgeDocumentIds,
+    draftOutlineMode,
+    draftOutlineExpansionMode,
+    referenceKnowledgeDocumentIds,
+    outlineMode,
+    outlineExpansionMode,
+    generationDialogOpen,
+    workflowKind,
+  ]);
+
   const [draftMinimumWords, setDraftMinimumWords] = useState(formatWordCountDraft(outlineWordControlOptions.minimumWords));
   const [draftMaximumWords, setDraftMaximumWords] = useState(formatWordCountDraft(outlineWordControlOptions.maximumWords));
   const [draftSectionWords, setDraftSectionWords] = useState(formatWordCountDraft(outlineWordControlOptions.sectionWords));
