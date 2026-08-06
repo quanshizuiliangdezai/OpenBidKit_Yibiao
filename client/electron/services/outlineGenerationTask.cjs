@@ -4311,7 +4311,10 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
       outlineGenerationTask: finalTask,
       outlineWizard: nextWizard,
     });
-    updateTask(finalTask, technicalPlan);
+    // 必须显式把 outlineWizard/outlineData 作为 eventPatch 推给前端，
+    // 否则 buildSnapshot 可能从只更新了 task 的 persistedState 中读到旧 outlineWizard，
+    // 导致前端自动推进用旧 completedSteps 计算出错误下一步而触发顺序校验失败。
+    updateTask(finalTask, technicalPlan, { outlineData: finalOutlineData, outlineWizard: nextWizard });
     return;
   }
 
@@ -4328,6 +4331,7 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
     logs: finalLogs,
     stats: taskStats(),
   });
+  const finalWizard = { ...nextWizard, active: false };
   const technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineData: finalOutlineData,
     outlineWordControlSnapshot: wizard.wordControlOptions,
@@ -4337,9 +4341,9 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
     contentGenerationRuntime: undefined,
     contentIllustrationPlan: undefined,
     outlineGenerationTask: finalTask,
-    outlineWizard: { ...nextWizard, active: false },
+    outlineWizard: finalWizard,
   });
-  updateTask(finalTask, technicalPlan);
+  updateTask(finalTask, technicalPlan, { outlineData: finalOutlineData, outlineWizard: finalWizard });
 }
 
 module.exports = { runOutlineGenerationTask, runOutlineWizardStep };

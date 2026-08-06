@@ -768,6 +768,12 @@ function OutlineEditPage({
       return;
     }
 
+    // 防御：如果 nextStep 和 currentStep 相同，说明 completedSteps 尚未推进，
+    // 此时自动推进会重复执行当前步骤并触发 backend 的顺序校验失败。
+    if (nextStep === outlineWizard.currentStep) {
+      return;
+    }
+
     // 基于已完成步骤数和当前步骤生成稳定 key，避免对象引用变化导致重复或漏触发。
     const key = `${completedCount}:${outlineWizard.currentStep ?? ''}`;
     if (autoAdvanceStateRef.current.lastAdvancedKey === key) {
@@ -775,9 +781,10 @@ function OutlineEditPage({
     }
     autoAdvanceStateRef.current.lastAdvancedKey = key;
 
+    // 给 backend 持久化 + 前端状态同步留一些缓冲，降低竞态概率。
     const timer = window.setTimeout(() => {
       void runWizardStepRef.current(nextStep, { restart: false });
-    }, 700);
+    }, 500);
     return () => window.clearTimeout(timer);
   }, [task?.status, outlineWizard]);
 
