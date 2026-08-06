@@ -415,6 +415,7 @@ function OutlineEditPage({
   const selectedItem = activeOutlineData && selectedItemId ? findOutlineItem(activeOutlineData.outline, selectedItemId) : null;
   const taskRunning = task?.status === 'running';
   const taskFailed = task?.status === 'error';
+  const taskCancelled = taskFailed && typeof task?.error === 'string' && task.error.includes('用户已取消');
   const generating = startingOutline || taskRunning;
   const isExpansionWorkflow = workflowKind === 'existing-plan-expansion';
   const knowledgePickingDisabled = generating;
@@ -429,9 +430,13 @@ function OutlineEditPage({
       : outlineData || task?.status === 'success'
         ? 100
         : 0;
-  const statusText = generating ? '运行中' : taskFailed ? '失败' : outlineData ? '已完成' : '未开始';
-  const aiStatusTitle = generating ? 'AI 正在工作' : taskFailed ? '生成失败' : outlineData ? '目录已生成' : '等待生成';
-  const statusMessage = taskFailed ? task?.error || latestLog || '目录生成失败，请查看开发者日志。' : latestLog || '点击生成目录后，这里会显示目录生成、审核和修正过程。';
+  const statusText = generating ? '运行中' : taskCancelled ? '已停止' : taskFailed ? '失败' : outlineData ? '已完成' : '未开始';
+  const aiStatusTitle = generating ? 'AI 正在工作' : taskCancelled ? '生成已停止' : taskFailed ? '生成失败' : outlineData ? '目录已生成' : '等待生成';
+  const statusMessage = taskCancelled
+    ? '目录生成已被停止，可点击“重新生成目录”从头开始，或在分步向导中继续当前步骤。'
+    : taskFailed
+      ? task?.error || latestLog || '目录生成失败，请查看开发者日志。'
+      : latestLog || '点击生成目录后，这里会显示目录生成、审核和修正过程。';
   const startedAt = task?.started_at ? Date.parse(task.started_at) : NaN;
   const updatedAt = task?.updated_at ? Date.parse(task.updated_at) : NaN;
   const effectiveStartedAt = Number.isFinite(startedAt) ? startedAt : localStartAt;
@@ -768,6 +773,25 @@ function OutlineEditPage({
       setStartingOutline(false);
       showToast(error instanceof Error ? error.message : '启动分步生成失败', 'error');
     }
+  };
+
+  const cancelOutlineGeneration = async () => {
+    try {
+      await window.yibiao?.tasks.cancelOutlineGeneration();
+      showToast('已请求停止目录生成，当前 AI 请求完成后将退出', 'info');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '停止目录生成失败', 'error');
+    }
+  };
+
+  const continueOutlineGeneration = async () => {
+    const nextStep = outlineWizard?.currentStep;
+    if (!nextStep) {
+      showToast('没有可继续的生成步骤', 'error');
+      return;
+    }
+    setWizardMode(true);
+    await runWizardStep(nextStep, { restart: false });
   };
 
   // 分步向导自动串联：某一步成功（wizard-step-done）且仍有后续步骤时，
@@ -1561,6 +1585,21 @@ function OutlineEditPage({
           <div className="analysis-result-head">
             <strong>生成过程</strong>
             <span>{statusText}</span>
+            {taskRunning && (
+              <button type="button" className="outline-wizard-btn outline-wizard-btn-secondary" onClick={cancelOutlineGeneration}>
+                停止生成
+              </button>
+            )}
+            {taskCancelled && (
+              <>
+                <button type="button" className="outline-wizard-btn outline-wizard-btn-primary" onClick={() => { void continueOutlineGeneration(); }}>
+                  继续生成
+                </button>
+                <button type="button" className="outline-wizard-btn outline-wizard-btn-secondary" onClick={openGenerationDialog}>
+                  重新生成
+                </button>
+              </>
+            )}
           </div>
           <div className={`content-outline-stats outline-progress-summary${progressCollapsed ? ' is-collapsed' : ''}`}>
             <button type="button" onClick={() => setProgressCollapsed((prev) => !prev)} aria-expanded={!progressCollapsed}>

@@ -971,6 +971,19 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         outlineWizard: technicalPlan.outlineWizard || null,
       });
     },
+    cancelOutlineGeneration() {
+      const task = activeTasks.get('outline-generation');
+      const control = activeTaskControls.get('outline-generation');
+      if (task && isActiveTaskStatus(task.status) && control?.requestPause) {
+        return control.requestPause();
+      }
+      const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
+      const outlineTask = technicalPlan.outlineGenerationTask;
+      if (outlineTask?.status === 'pausing' || outlineTask?.status === 'paused') {
+        return outlineTask;
+      }
+      throw new Error('当前没有正在生成的目录任务。');
+    },
     startGlobalFactsGeneration(payload) {
       return startManagedTask('global-facts-generation', payload, runGlobalFactsTask, {
         globalFacts: [],

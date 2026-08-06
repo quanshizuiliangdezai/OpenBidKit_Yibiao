@@ -3919,7 +3919,7 @@ async function adjustOutlineForWordControl({ aiService, agentService, workspaceS
   };
 }
 
-async function runOutlineGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, updateTask, payload }) {
+async function runOutlineGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, updateTask, payload, taskControl }) {
   let logs = ['开始生成目录。'];
   let currentProgress = OUTLINE_PROGRESS.start;
   const wordControlOptions = normalizeOutlineWordControlOptions(payload?.word_control_options);
@@ -3933,6 +3933,9 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
   };
   const taskStats = () => ({ outline: { ...outlineStats } });
   function log(message, progress = currentProgress) {
+    if (taskControl?.isPauseRequested?.()) {
+      throw new Error('用户已取消当前目录生成环节');
+    }
     currentProgress = Math.max(currentProgress, Math.min(progress, OUTLINE_PROGRESS.finalizing));
     logs = [...logs, message];
     const task = updateTask({ status: 'running', progress: currentProgress, logs, stats: taskStats() });
@@ -3945,6 +3948,8 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
   // 在每个阶段结束后推进一次 completedSteps，保证两边进度一致。
   let outlineWizard = null;
   let wizardStepIndex = 0;
+  // oldOutline 必须在 buildOutlineWizard 闭包使用前声明，避免 TDZ 错误。
+  let oldOutline = null;
   function getCurrentWizardSteps() {
     return getOutlineWizardOrderedSteps({ isExpansionWorkflow, outlineExpansionMode });
   }
@@ -4024,7 +4029,6 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
   });
   updateTask({ status: 'running', progress: OUTLINE_PROGRESS.start, logs, stats: taskStats() }, technicalPlan, { outlineWizard });
 
-  let oldOutline = null;
   if (isExpansionWorkflow) {
     if (!storedPlan.originalPlanFile) {
       throw new Error('请先上传原方案，再生成目录');
@@ -4250,7 +4254,7 @@ function getOutlineWizardOrderedSteps({ isExpansionWorkflow, outlineExpansionMod
 // 分步向导：按 payload.wizardStep 逐步执行目录生成各阶段，每步持久化中间结果，
 // 非末步置 wizard-step-done 等待用户确认下一步；末步置 success 完成向导。
 // 与一次性 runOutlineGenerationTask 互不干扰，作为“分步生成”的替代入口。
-async function runOutlineWizardStep({ aiService, agentService, workspaceStore, knowledgeBaseService, updateTask, payload }) {
+async function runOutlineWizardStep({ aiService, agentService, workspaceStore, knowledgeBaseService, updateTask, payload, taskControl }) {
   const step = payload?.wizardStep;
   if (!step) {
     throw new Error('缺少向导步骤参数 wizardStep');
@@ -4269,6 +4273,9 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
   };
   const taskStats = () => ({ outline: { ...outlineStats } });
   function log(message, progress = currentProgress) {
+    if (taskControl?.isPauseRequested?.()) {
+      throw new Error('用户已取消当前目录生成环节');
+    }
     currentProgress = Math.max(currentProgress, Math.min(progress, OUTLINE_PROGRESS.finalizing));
     logs = [...logs, message];
     const task = updateTask({ status: 'running', progress: currentProgress, logs, stats: taskStats() });

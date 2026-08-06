@@ -802,6 +802,7 @@ export interface YibiaoBridge {
     startBidAnalysis: (payload: unknown) => Promise<unknown>;
     startOutlineGeneration: (payload: unknown) => Promise<unknown>;
     startOutlineGenerationStep: (payload: unknown) => Promise<unknown>;
+    cancelOutlineGeneration: () => Promise<unknown>;
     startGlobalFactsGeneration: (payload: unknown) => Promise<unknown>;
     startContentGeneration: (payload: unknown) => Promise<unknown>;
     pauseContentGeneration: () => Promise<unknown>;
