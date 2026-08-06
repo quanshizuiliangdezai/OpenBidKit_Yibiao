@@ -943,7 +943,13 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         outlineMode: 'aligned',
         outlineExpansionMode: payload?.outline_expansion_mode === 'original-only' ? 'original-only' : 'ai-complement',
         outlineWordControlOptions: payload?.word_control_options,
-        referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids) ? payload.reference_knowledge_document_ids : [],
+        // 非第一步（如 knowledge/review）payload 不会带 reference_knowledge_document_ids，
+        // 此时必须回退到已保存的 technicalPlan.referenceKnowledgeDocumentIds，
+        // 否则 initialPartial 传空数组会覆盖数据库里的有效选择，
+        // 导致用户点击「重试」后页面顶部显示「参考知识库：未选择」。
+        referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids)
+          ? payload.reference_knowledge_document_ids
+          : (technicalPlan.referenceKnowledgeDocumentIds || []),
         outlineWizard: technicalPlan.outlineWizard || null,
       });
     },

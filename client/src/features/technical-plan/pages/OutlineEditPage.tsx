@@ -754,8 +754,10 @@ function OutlineEditPage({
       await window.yibiao?.tasks.startOutlineGenerationStep({
         wizardStep: step,
         wizardRestart: Boolean(options.restart),
+        // 每一步都带上当前有效的参考知识库 ID，防止后端因 payload 缺失而回退到空数组，
+        // 避免用户点击「重试」后页面顶部「参考知识库」被显示为「未选择」。
+        reference_knowledge_document_ids: effectiveKnowledgeDocumentIds,
         ...(isFirst ? {
-          reference_knowledge_document_ids: effectiveKnowledgeDocumentIds,
           outline_expansion_mode: nextOutlineExpansionMode,
           word_control_options: wordControlOptions,
           debug_force_outline_agent_repair: developerMode && draftForceOutlineAgentRepair,
