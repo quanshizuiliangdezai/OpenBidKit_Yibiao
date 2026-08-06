@@ -4244,6 +4244,14 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
   const isExpansionWorkflow = storedPlan.workflowKind === 'existing-plan-expansion';
   const overview = storedPlan.projectOverview || '';
   const requirements = storedPlan.techRequirements || '';
+  const outlineMode = isExpansionWorkflow ? 'aligned' : (storedPlan.outlineMode || payload?.outline_mode || 'aligned');
+  const responseFileTask = storedPlan.bidAnalysisTasks?.responseFileRequirements;
+  const responseFileRequirements = outlineMode === 'response-file' && responseFileTask?.status === 'success'
+    ? String(responseFileTask.content || '').trim()
+    : '';
+  if (outlineMode === 'response-file' && !responseFileRequirements) {
+    throw new Error('请先在招标文件解析中完成“响应文件要求”，再按响应文件要求生成一级目录。');
+  }
 
   let wizard = storedPlan.outlineWizard || null;
   const forceRestart = Boolean(payload?.wizardRestart);
@@ -4306,6 +4314,8 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
     ...payload,
     overview,
     requirements,
+    outlineMode,
+    responseFileRequirements,
     outlineExpansionMode: wizard.outlineExpansionMode,
     wordControlOptions: wizard.wordControlOptions,
     reference_knowledge_document_ids: wizard.referenceKnowledgeDocumentIds,
@@ -4339,6 +4349,10 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
   } else if (step === 'main') {
     if (isExpansionWorkflow) {
       outline = await expansionComplementWorkflow(aiService, { ...baseTaskPayload, oldOutline: formatOldOutlineForPrompt(oldOutline) }, oldOutline, log);
+    } else if (outlineMode === 'response-file') {
+      const responseFileResult = await responseFileWorkflow(aiService, agentService, { ...baseTaskPayload, oldOutline: formatOldOutlineForPrompt(oldOutline) }, log, resumeOutline);
+      outline = responseFileResult.outline;
+      groups = responseFileResult.groups || [];
     } else {
       const alignedResult = await alignedWorkflow(aiService, agentService, { ...baseTaskPayload, oldOutline: formatOldOutlineForPrompt(oldOutline) }, log, resumeOutline);
       outline = alignedResult.outline;
@@ -4364,6 +4378,7 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
       groups,
       originalOutline: oldOutline,
       workflowKind: isExpansionWorkflow ? 'existing-plan-expansion' : 'technical-plan',
+      outlineMode,
       outlineExpansionMode: wizard.outlineExpansionMode,
       log,
     });
@@ -4402,6 +4417,7 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
         groups,
         originalOutline: oldOutline,
         workflowKind: isExpansionWorkflow ? 'existing-plan-expansion' : 'technical-plan',
+        outlineMode,
         outlineExpansionMode: wizard.outlineExpansionMode,
         wordControlOptions: wizard.wordControlOptions,
         wordControl,
