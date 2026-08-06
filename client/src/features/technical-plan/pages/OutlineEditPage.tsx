@@ -776,9 +776,14 @@ function OutlineEditPage({
   runWizardStepRef.current = runWizardStep;
   const outlineWizardRef = useRef(outlineWizard);
   outlineWizardRef.current = outlineWizard;
-  const autoAdvanceStateRef = useRef<{ lastTaskStatus: string | null; lastAdvancedKey: string }>({
+  const autoAdvanceStateRef = useRef<{
+    lastTaskStatus: string | null;
+    lastAdvancedKey: string;
+    timer: number | null;
+  }>({
     lastTaskStatus: null,
     lastAdvancedKey: '',
+    timer: null,
   });
 
   useEffect(() => {
@@ -828,12 +833,29 @@ function OutlineEditPage({
     }
     autoAdvanceStateRef.current.lastAdvancedKey = key;
 
-    // 给 backend 持久化 + 前端状态同步留一些缓冲，降低竞态概率。
-    const timer = window.setTimeout(() => {
-      void runWizardStepRef.current(nextStep, { restart: false });
-    }, 500);
-    return () => window.clearTimeout(timer);
+    // 关键修复：定时器存进 ref，不依赖 effect 的 cleanup 清除。
+    // 之前 effect 末尾 return () => clearTimeout(timer)，而 TechnicalPlanHome 的
+    // hydration 二次 loadState() 会让 task.status 在 done↔running 间抖动，effect 重跑时
+    // 把尚未执行的定时器清掉，导致下一步永不启动、进度永久卡在 55%。
+    // 现在定时器由 ref 持有，只在 timer 真正执行后才置空，允许后续步骤继续调度；
+    // 组件卸载时的清理由下方独立 effect 负责。
+    if (autoAdvanceStateRef.current.timer == null) {
+      autoAdvanceStateRef.current.timer = window.setTimeout(() => {
+        autoAdvanceStateRef.current.timer = null;
+        void runWizardStepRef.current(nextStep, { restart: false });
+      }, 500);
+    }
   }, [task?.status, outlineWizard?.active]);
+
+  // 组件卸载时清理尚未执行的自动推进定时器，避免卸载后误触发。
+  useEffect(() => {
+    return () => {
+      if (autoAdvanceStateRef.current.timer != null) {
+        window.clearTimeout(autoAdvanceStateRef.current.timer);
+        autoAdvanceStateRef.current.timer = null;
+      }
+    };
+  }, []);
 
   const toggleDraftKnowledgeDocument = (document: KnowledgeDocument) => {
     if (document.status !== 'success' || knowledgePickingDisabled) {
