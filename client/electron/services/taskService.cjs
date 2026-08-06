@@ -660,7 +660,15 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
   }
 
   function recoverInterruptedOutlineGenerationTask() {
-    // 始终清掉 activeTasks 里的残留任务对象（包括 zombie 记录——runner 因异常中断时 finally 没跑，
+    // 如果 runner 仍在内存中活跃执行，说明任务没有中断，不要 recover。
+    // 此前无条件先 delete activeTasks 再读 DB，会导致普通模式运行时前端刷新调用
+    // getActiveTasks 触发 recover，把正在正常推进的 running 任务误判为中断并标为 error。
+    const existingTask = activeTasks.get('outline-generation');
+    if (existingTask && isActiveTaskStatus(existingTask.status)) {
+      return;
+    }
+
+    // 清掉 activeTasks 里的残留任务对象（包括 zombie 记录——runner 因异常中断时 finally 没跑，
     // activeTasks 留下 status=running 的脏数据，会让 startManagedTask 误以为有任务在跑、
     // 跳过新任务导致死锁）。之前的 has 检查直接 return 反而保留了这个 zombie，
     // 用户反馈：进度卡在 mainComplete (55%) 1 小时不动，根因就在这里。
@@ -671,6 +679,16 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     const outlineTask = technicalPlan.outlineGenerationTask;
     if (!isActiveTaskStatus(outlineTask?.status)) {
       return;
+    }
+
+    // 二次保护：若 DB 里 running 任务 recently updated（runner 活跃但 activeTasks 刚好缺失），
+    // 也不应标为 error。这能覆盖极端并发/异步边界。
+    const ACTIVE_RUNNING_TASK_THRESHOLD_MS = 60_000;
+    if (outlineTask.status === 'running' && outlineTask.updated_at) {
+      const lastUpdated = new Date(outlineTask.updated_at).getTime();
+      if (Number.isFinite(lastUpdated) && Date.now() - lastUpdated < ACTIVE_RUNNING_TASK_THRESHOLD_MS) {
+        return;
+      }
     }
 
     const wizard = technicalPlan.outlineWizard || {};
