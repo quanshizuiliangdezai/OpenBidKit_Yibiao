@@ -4028,6 +4028,18 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
       };
       const finalLogs = [...logs, '目录生成完成。'];
       const finalTask = updateTask({ status: 'success', progress: OUTLINE_PROGRESS.complete, logs: finalLogs, stats: taskStats() });
+      const completedWizard = {
+        active: false,
+        completedSteps: ['extract'],
+        currentStep: 'extract',
+        workflowKind: storedPlan.workflowKind,
+        outlineExpansionMode,
+        wordControlOptions,
+        referenceKnowledgeDocumentIds,
+        originalOnly: true,
+        oldOutline,
+        groups: [],
+      };
       technicalPlan = workspaceStore.updateTechnicalPlan({
         outlineData: { ...oldOutline, project_overview: overview },
         outlineWordControlSnapshot: wordControlOptions,
@@ -4037,8 +4049,9 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
         contentGenerationRuntime: undefined,
         contentIllustrationPlan: undefined,
         outlineGenerationTask: finalTask,
+        outlineWizard: completedWizard,
       });
-      updateTask(finalTask, technicalPlan);
+      updateTask(finalTask, technicalPlan, { outlineData: { ...oldOutline, project_overview: overview }, outlineWizard: completedWizard });
       return;
     } else {
       outline = await expansionComplementWorkflow(aiService, taskPayload, oldOutline, log);
@@ -4123,6 +4136,19 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
   };
   const finalLogs = [...logs, '目录生成完成。', ...(wordControlWarning ? [wordControlWarning] : [])];
   const finalTask = updateTask({ status: 'success', progress: OUTLINE_PROGRESS.complete, logs: finalLogs, stats: taskStats() });
+  const wizardOrderedSteps = getOutlineWizardOrderedSteps({ isExpansionWorkflow, outlineExpansionMode });
+  const completedWizard = {
+    active: false,
+    completedSteps: wizardOrderedSteps,
+    currentStep: wizardOrderedSteps[wizardOrderedSteps.length - 1],
+    workflowKind: storedPlan.workflowKind,
+    outlineExpansionMode,
+    wordControlOptions,
+    referenceKnowledgeDocumentIds,
+    originalOnly: outlineExpansionMode === 'original-only',
+    oldOutline,
+    groups,
+  };
   technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineData: { ...outline, project_overview: overview },
     outlineWordControlSnapshot: wordControlOptions,
@@ -4132,8 +4158,9 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     contentGenerationRuntime: undefined,
     contentIllustrationPlan: undefined,
     outlineGenerationTask: finalTask,
+    outlineWizard: completedWizard,
   });
-  updateTask(finalTask, technicalPlan);
+  updateTask(finalTask, technicalPlan, { outlineData: { ...outline, project_overview: overview }, outlineWizard: completedWizard });
 }
 
 

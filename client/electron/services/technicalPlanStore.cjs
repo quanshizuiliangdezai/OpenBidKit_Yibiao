@@ -1536,6 +1536,32 @@ function createTechnicalPlanStore({ app, db, fileService }) {
     const bidAnalysisTasks = loadBidItems();
     const outlineData = loadOutlineData(meta);
     const tasks = loadTasks();
+
+    // 迁移：老版本普通模式生成目录后不会保存 outlineWizard，导致用户打开分步向导时
+    // 看到「未开始」。如果检测到目录已生成成功但缺少 wizard 状态，则自动补一个已完成
+    // 的分步向导，使进度与向导保持一致。
+    let outlineWizard = readOutlineWizardRuntime();
+    if (!outlineWizard && outlineData && tasks.outlineGenerationTask?.status === 'success') {
+      const wizardWorkflowKind = normalizeWorkflowKind(meta.workflow_kind);
+      const isExpansion = wizardWorkflowKind === 'existing-plan-expansion';
+      const wizardExpansionMode = isValidOutlineExpansionMode(meta.outline_expansion_mode) ? meta.outline_expansion_mode : 'ai-complement';
+      const wizardOrderedSteps = isExpansion
+        ? (wizardExpansionMode === 'original-only' ? ['extract'] : ['extract', 'main', 'knowledge', 'review', 'audit', 'word'])
+        : ['main', 'knowledge', 'review', 'audit', 'word'];
+      outlineWizard = {
+        active: false,
+        completedSteps: wizardOrderedSteps,
+        currentStep: wizardOrderedSteps[wizardOrderedSteps.length - 1],
+        workflowKind: wizardWorkflowKind,
+        outlineExpansionMode: wizardExpansionMode,
+        wordControlOptions: normalizeOutlineWordControlOptions(safeJsonParse(meta.outline_word_control_options_json, defaultOutlineWordControlOptions)),
+        referenceKnowledgeDocumentIds: loadReferenceDocumentIds(),
+        originalOnly: wizardExpansionMode === 'original-only',
+        oldOutline: null,
+        groups: [],
+      };
+      saveOutlineWizardRuntime(outlineWizard);
+    }
     const bidSections = normalizeBidSections(safeJsonParse(meta.bid_sections_json, []));
     const bidSectionExtractionTask = tasks.bidSectionExtractionTask;
     const tenderFiles = loadTenderSourceFiles(meta);
@@ -1597,7 +1623,7 @@ function createTechnicalPlanStore({ app, db, fileService }) {
       contentGenerationSections: loadContentSections(outlineData),
       contentGenerationPlans: loadContentPlans(),
       outlineData,
-      outlineWizard: readOutlineWizardRuntime(),
+      outlineWizard,
     };
   }
 
