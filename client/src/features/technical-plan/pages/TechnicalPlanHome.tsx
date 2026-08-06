@@ -825,12 +825,21 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
       if (!mounted || !latestState) {
         return;
       }
-      setState((prev) => ({
-        ...prev,
-        ...latestState,
+      setState((prev) => {
+        const merged: Record<string, unknown> = { ...(prev as unknown as Record<string, unknown>) };
+        const patch: Record<string, unknown> = latestState as unknown as Record<string, unknown>;
+        for (const [key, value] of Object.entries(patch)) {
+          // 只回填前端尚未从任务事件拿到值的字段，避免 event 已经推送的最新状态
+          // （如 recover 后的 wizard-step-done、main 完成后的 outlineData）被 loadState
+          // 读到的旧快照覆盖，导致目录树显示为空或 autoAdvance 漏触发。
+          if (value !== undefined && value !== null && (merged[key] === undefined || merged[key] === null)) {
+            merged[key] = value;
+          }
+        }
         // 工作流类型以当前 props 为准，不跟随缓存。
-        workflowKind: prev.workflowKind,
-      }));
+        merged.workflowKind = prev.workflowKind;
+        return merged as unknown as TechnicalPlanState;
+      });
     }).catch((error) => {
       console.warn('hydration 后刷新技术方案状态失败', error);
     });
