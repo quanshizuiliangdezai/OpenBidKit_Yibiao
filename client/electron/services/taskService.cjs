@@ -6,6 +6,16 @@ const { runGlobalFactsTask } = require('./globalFactsTask.cjs');
 const { runOutlineGenerationTask, runOutlineWizardStep } = require('./outlineGenerationTask.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
 
+// 仅 recover 需要的 OUTLINE_PROGRESS 子集（与 outlineGenerationTask.cjs 保持一致）。
+// 必须与 outlineGenerationTask.cjs 中的 OUTLINE_PROGRESS 同步修改。
+const OUTLINE_PROGRESS_VALUES = Object.freeze({
+  mainComplete: 55,
+  knowledgeEnhancementEnd: 65,
+  finalReviewEnd: 75,
+  complianceAuditEnd: 82,
+  complete: 100,
+});
+
 const taskDefinitions = {
   'bid-section-extraction': {
     label: '多标段识别',
@@ -657,6 +667,39 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const outlineTask = technicalPlan.outlineGenerationTask;
     if (!isActiveTaskStatus(outlineTask?.status)) {
+      return;
+    }
+
+    const wizard = technicalPlan.outlineWizard || {};
+    const completedSteps = Array.isArray(wizard.completedSteps) ? wizard.completedSteps : [];
+
+    if (completedSteps.length > 0 && wizard.active) {
+      // 分步向导有已完成步骤：说明 task 实际推进到某步后被中断。
+      // 不要标 error（会把整条向导标记为失败、要求用户手动重试），
+      // 而是把 task 状态修正为“最后完成步骤”的 wizard-step-done，
+      // 前端 autoAdvance 看到 wizard-step-done 会主动重启后续步骤，体验上“被中断后自动续上”。
+      const stepProgress = {
+        extract: OUTLINE_PROGRESS_VALUES.mainComplete,
+        main: OUTLINE_PROGRESS_VALUES.mainComplete,
+        knowledge: OUTLINE_PROGRESS_VALUES.knowledgeEnhancementEnd,
+        review: OUTLINE_PROGRESS_VALUES.finalReviewEnd,
+        audit: OUTLINE_PROGRESS_VALUES.complianceAuditEnd,
+        word: OUTLINE_PROGRESS_VALUES.complete,
+      };
+      const lastStep = completedSteps[completedSteps.length - 1];
+      const recoveredTask = {
+        ...outlineTask,
+        status: 'wizard-step-done',
+        progress: stepProgress[lastStep] != null
+          ? stepProgress[lastStep]
+          : Math.max(0, Math.min(99, Number(outlineTask.progress || 0) || 0)),
+        pause_requested: false,
+        error: null,
+        logs: [...(Array.isArray(outlineTask.logs) ? outlineTask.logs : []), `检测到上次分步生成被中断，已恢复到「${lastStep}」完成状态，前端将自动继续推进后续步骤。`],
+        updated_at: now(),
+      };
+      const state = technicalPlanStore.updateTechnicalPlan({ outlineGenerationTask: recoveredTask });
+      emit(recoveredTask, buildSnapshot(getTaskDefinition('outline-generation'), state, recoveredTask));
       return;
     }
 
