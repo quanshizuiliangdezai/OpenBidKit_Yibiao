@@ -80,7 +80,7 @@ jobs:
 
           # 根据本次提交信息判断 bump 级别
           # 用 git log 运行时读取，避免提交信息中的单引号破坏 bash 赋值（${{ }} 模板替换会提前闭合引号）
-          COMMIT_MSG="$(git -C "$GITHUB_WORKSPACE" log -1 --format=%B)"
+          COMMIT_MSG="$(git log -1 --format=%B)"
           BUMP="patch"
           if printf '%s' "$COMMIT_MSG" | grep -qiE 'BREAKING CHANGE|!:'; then
             BUMP="major"
