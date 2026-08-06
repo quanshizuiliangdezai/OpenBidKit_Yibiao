@@ -598,6 +598,62 @@ ${childrenOutlineFixedStructureRules()}`;
   return messages;
 }
 
+// 把 AI 返回的子树 id 重排为以 prefix 为根前缀（如 directionId），便于聚合方向挂到固定编号下。
+function renumberSubtree(items, prefix) {
+  return (items || []).map((item, index) => {
+    const id = `${prefix}.${index + 1}`;
+    const next = { ...item, id };
+    if (Array.isArray(item.children) && item.children.length) {
+      next.children = renumberSubtree(item.children, id);
+    }
+    return next;
+  });
+}
+
+// 面向“聚合方向”的子目录生成提示词。
+// 关键变化：不再把聚合一级目录当作通用容器让 AI 套骨架，而是让 AI 聚焦于该方向本身的真实招标文件内容，
+// 用思路引导它自行拆解，并给出同章其他并列方向作为差异化上下文（不是写死的禁止规则）。
+function generateAlignedDirectionChildrenMessages({ overview, requirements, responseFileRequirements, oldOutline }, outlineMode, parentItem, directionId, directionGroup, siblingTitles, suggestions) {
+  const detailLines = (directionGroup.detail_points || [])
+    .filter((item) => typeof item === 'string' && item.trim())
+    .map((item) => `- ${item}`)
+    .join('\n');
+  const sourceLabel = getTopLevelSourceLabel({ outlineMode });
+  const directionTitle = String(directionGroup.title || '').trim();
+  const siblingText = (siblingTitles || [])
+    .filter((title) => title && title !== directionTitle)
+    .map((title, index) => `${index + 1}. ${title}`)
+    .join('\n');
+  const instructionPrompt = `你是一个资深的技术标书架构师。现在需要为「${directionTitle}」这个具体技术方向设计它下属的技术方案目录。
+
+设计思路（请据此自行判断，不要套用固定模板）：
+- 这个方向是「${parentItem.title}」下面的一个并列子方向，它在招标文件中对应一组真实的评分要求。
+- 你应当基于下方“该方向对应的真实评分要求”（标题、描述、细项）来组织目录；目录内容要贴合该项目方向的实际技术组成、建设任务、交付物和验收口径，让章节从该方向真实的工作内容中自然长出来。
+- 同一章内还有其他并列方向（见下方列表），各方向的技术内容不同，请只围绕本方向的真实要求展开，不要与其他方向重复，也不要把通用项目管理流程（如“用户需求分析/标准规范/系统拓扑/建设实施/培训运维”这类万能骨架）机械套用到每个方向。
+- 如果招标文件对该方向给出了明确细项，优先用这些细项组织目录；没有明确细项时，再根据该方向的实际技术常识拆解。
+
+输出要求：
+1. 输出该方向下的二级和三级目录：二级是该方向自身拆解出的子主题，三级是具体技术任务、响应要点或验收口径。
+2. 每个二级目录至少包含两级展开（即至少两个三级目录）。
+3. 三级目录只包含 id、title、description，不要再嵌套第四层。
+4. 返回标准 JSON：{"children": [...]}，每个节点必须包含 id、title、description。
+5. 除了 JSON 结果外不要输出任何其他内容。`;
+  const messages = [
+    ...buildOutlineSharedContextMessages({ overview, requirements, responseFileRequirements, oldOutline }),
+    { role: 'user', content: instructionPrompt },
+    { role: 'user', content: `父级章节：\n编号：${parentItem.id}\n标题：${parentItem.title}` },
+    { role: 'user', content: `当前技术方向（本方向目录的主题）：\n标题：${directionGroup.title}\n描述：${directionGroup.description || ''}\n评分细项（请围绕这些真实要求组织目录）：\n${detailLines || '- 未提供明确细项，请基于方向标题和实际技术常识合理拆解'}` },
+    { role: 'user', content: `同一章内的其他并列技术方向（仅作差异化参考，不要照搬它们的内容）：\n${siblingText || '- 无'}` },
+    { role: 'user', content: childrenOutlineParentNumberingRules(directionId) },
+  ];
+  const suggestionText = formatSuggestions(suggestions).trim();
+  if (suggestionText) {
+    messages.push({ role: 'user', content: suggestionText });
+  }
+  messages.push({ role: 'user', content: `请基于以上资料，只返回「${directionTitle}」这个方向下的 {"children": [...]} JSON。` });
+  return messages;
+}
+
 function generateChildrenStructureRepairMessages({ invalidContent, issues }, parentItem, group, sourceLabel = '技术评分大类') {
   const detailLines = (group?.detail_points || [])
     .filter((item) => typeof item === 'string' && item.trim())
@@ -2903,6 +2959,19 @@ async function generateAlignedChildrenForGroup(aiService, payload, outlineMode, 
   return response;
 }
 
+async function generateAlignedDirectionChildrenForGroup(aiService, payload, outlineMode, parentItem, directionId, directionGroup, siblingTitles, suggestions, log, progress) {
+  const response = await collectJson(aiService, {
+    messages: generateAlignedDirectionChildrenMessages(payload, outlineMode, parentItem, directionId, directionGroup, siblingTitles, suggestions),
+    normalizer: (value) => normalizeChildrenResponse(value, new Set()),
+    validator: validateChildrenOutline,
+    repairMessagesBuilder: (context) => generateChildrenStructureRepairMessages(context, { id: directionId, title: directionGroup.title }, directionGroup, getTopLevelSourceLabel({ outlineMode })),
+    progressCallback: (message) => log(message, progress),
+    progressLabel: `方向 ${directionGroup.title || '未命名方向'} 子目录`,
+    failureMessage: '模型返回的目录数据格式无效',
+  });
+  return response;
+}
+
 async function generateExpansionTopLevelPlan(aiService, payload, log) {
   const response = await collectJson(aiService, {
     messages: buildExpansionTopLevelComplementMessages(payload),
@@ -3043,25 +3112,27 @@ async function buildAligned(aiService, payload, outlineMode, groups, suggestions
   const getExistingKey = (item) => String(item.source_requirement_id || item.source_requirement_title || normalizeTitleKey(item.title));
 
   // 为单个聚合项生成二三级目录。单评分项直接挂 AI 生成的二级+三级；
-  // 聚合多项时，每个原始评分项作为二级（细分方向），AI 生成的三级挂在其下，保持层级清晰。
+  // 聚合多项时，每个原始评分项作为二级（细分方向），由 AI 基于该方向真实招标文件内容生成其专业二三级目录，
+  // 不再复用通用容器 prompt，避免所有方向套同一套骨架。
   const buildChildrenForMerged = async (mergedGroup, parentItem) => {
     if (mergedGroup.items.length <= 1) {
       const childrenResponse = await generateAlignedChildrenForGroup(aiService, payload, outlineMode, parentItem, mergedGroup.items[0], suggestions, log, progressRange.start);
       return childrenResponse.children || [];
     }
+    const siblingTitles = mergedGroup.items.map((g) => String(g.title || '').trim()).filter(Boolean);
     const children = [];
+    let directionIndex = 0;
     for (const originalGroup of mergedGroup.items) {
-      const childrenResponse = await generateAlignedChildrenForGroup(aiService, payload, outlineMode, parentItem, originalGroup, suggestions, log, progressRange.start);
-      const grandChildren = [];
-      for (const level2 of (childrenResponse.children || [])) {
-        if (level2.children?.length) grandChildren.push(...level2.children);
-      }
+      directionIndex += 1;
+      const directionId = `${parentItem.id}.${directionIndex}`;
+      const childrenResponse = await generateAlignedDirectionChildrenForGroup(aiService, payload, outlineMode, parentItem, directionId, originalGroup, siblingTitles, suggestions, log, progressRange.start);
+      const directionChildren = renumberSubtree(childrenResponse.children || [], directionId);
       const subTitle = String(originalGroup.title || '').trim();
       children.push({
-        id: `${parentItem.id}.${children.length + 1}`,
+        id: directionId,
         title: subTitle,
         description: String(originalGroup.description || subTitle).trim(),
-        ...(grandChildren.length ? { children: grandChildren } : {}),
+        ...(directionChildren.length ? { children: directionChildren } : {}),
       });
     }
     return children;
