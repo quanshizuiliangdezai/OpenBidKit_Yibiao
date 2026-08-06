@@ -770,9 +770,12 @@ function OutlineEditPage({
 
   // 分步向导自动串联：某一步成功（wizard-step-done）且仍有后续步骤时，
   // 自动启动下一步；任一步失败（error）则停留在当前步，由用户手动「重试」，不自动重试。
-  // 用 ref 缓存会变的方法/对象，并把依赖收敛到 task?.status，避免重渲染 / 依赖变化清除已设置的定时器。
+  // 用 ref 缓存会变的方法/对象，并把依赖收敛到 task?.status / outlineWizard?.active，
+  // 避免 outlineWizard 对象引用变化清除已设置的定时器或提前记录 lastTaskStatus。
   const runWizardStepRef = useRef(runWizardStep);
   runWizardStepRef.current = runWizardStep;
+  const outlineWizardRef = useRef(outlineWizard);
+  outlineWizardRef.current = outlineWizard;
   const autoAdvanceStateRef = useRef<{ lastTaskStatus: string | null; lastAdvancedKey: string }>({
     lastTaskStatus: null,
     lastAdvancedKey: '',
@@ -781,37 +784,45 @@ function OutlineEditPage({
   useEffect(() => {
     const currentStatus = task?.status || null;
     const prevStatus = autoAdvanceStateRef.current.lastTaskStatus;
-    autoAdvanceStateRef.current.lastTaskStatus = currentStatus;
 
-    // 只在状态从非 wizard-step-done 首次变为 wizard-step-done 时触发一次。
-    // 注意：初始 lastTaskStatus 必须为 null，否则组件重新挂载时（如切换模块后切回）
-    // 若任务已完成（status 已是 wizard-step-done），会被下方的 prevStatus 判断直接拦掉，
-    // 导致后续步骤不再自动推进，只能手动重试。
+    // 非 wizard-step-done 时立即更新 lastTaskStatus，方便后续捕获从 running/error 到 done 的过渡。
     if (currentStatus !== 'wizard-step-done') {
+      autoAdvanceStateRef.current.lastTaskStatus = currentStatus;
       return;
     }
+
+    // 已经处理过该次 done 状态，避免重复触发。
     if (prevStatus === 'wizard-step-done') {
       return;
     }
 
+    // outlineWizard 尚未加载完成时先不标记状态，等 active 变为 true 后再判断，
+    // 防止 task 先变成 done、wizard 后加载时漏触发。
     if (!outlineWizard?.active) {
       return;
     }
 
-    const completedCount = outlineWizard.completedSteps.length;
-    const nextStep = effectiveWizardSteps[completedCount];
-    if (!nextStep || completedCount >= effectiveWizardSteps.length) {
+    autoAdvanceStateRef.current.lastTaskStatus = currentStatus;
+
+    const wizard = outlineWizardRef.current;
+    const steps = getWizardSteps(
+      wizard?.workflowKind === 'existing-plan-expansion',
+      wizard?.outlineExpansionMode ?? 'ai-complement',
+    );
+    const completedCount = wizard?.completedSteps?.length ?? 0;
+    const nextStep = steps[completedCount];
+    if (!nextStep || completedCount >= steps.length) {
       return;
     }
 
     // 防御：如果 nextStep 和 currentStep 相同，说明 completedSteps 尚未推进，
     // 此时自动推进会重复执行当前步骤并触发 backend 的顺序校验失败。
-    if (nextStep === outlineWizard.currentStep) {
+    if (nextStep === wizard?.currentStep) {
       return;
     }
 
     // 基于已完成步骤数和当前步骤生成稳定 key，避免对象引用变化导致重复或漏触发。
-    const key = `${completedCount}:${outlineWizard.currentStep ?? ''}`;
+    const key = `${completedCount}:${wizard?.currentStep ?? ''}`;
     if (autoAdvanceStateRef.current.lastAdvancedKey === key) {
       return;
     }
@@ -822,7 +833,7 @@ function OutlineEditPage({
       void runWizardStepRef.current(nextStep, { restart: false });
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [task?.status, outlineWizard]);
+  }, [task?.status, outlineWizard?.active]);
 
   const toggleDraftKnowledgeDocument = (document: KnowledgeDocument) => {
     if (document.status !== 'success' || knowledgePickingDisabled) {
