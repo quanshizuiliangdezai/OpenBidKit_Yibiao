@@ -3940,6 +3940,47 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     updateTask(task, technicalPlan);
   }
 
+  // 普通模式下同步维护 outlineWizard，使分步向导面板能实时看到当前执行到第几步。
+  // 分步向导每步完成后会更新 completedSteps；普通模式作为其“自动顺序执行版”，
+  // 在每个阶段结束后推进一次 completedSteps，保证两边进度一致。
+  let outlineWizard = null;
+  let wizardStepIndex = 0;
+  function getCurrentWizardSteps() {
+    return getOutlineWizardOrderedSteps({ isExpansionWorkflow, outlineExpansionMode });
+  }
+  function buildOutlineWizard({ active, completedSteps, currentStep, groups }) {
+    return {
+      active,
+      completedSteps,
+      currentStep,
+      workflowKind: storedPlan.workflowKind,
+      outlineExpansionMode: storedPlan.outlineExpansionMode || outlineExpansionMode,
+      wordControlOptions,
+      referenceKnowledgeDocumentIds,
+      originalOnly: outlineExpansionMode === 'original-only',
+      oldOutline,
+      groups: groups || [],
+    };
+  }
+  function emitOutlineWizard(wizard) {
+    const technicalPlan = workspaceStore.updateTechnicalPlan({ outlineWizard: wizard });
+    updateTask({ status: 'running', progress: currentProgress, logs, stats: taskStats() }, technicalPlan, { outlineWizard: wizard });
+    return technicalPlan;
+  }
+  function advanceWizardStep(groups) {
+    const steps = getCurrentWizardSteps();
+    const completedStep = steps[wizardStepIndex];
+    if (!completedStep) return;
+    wizardStepIndex += 1;
+    outlineWizard = buildOutlineWizard({
+      active: true,
+      completedSteps: steps.slice(0, wizardStepIndex),
+      currentStep: steps[wizardStepIndex] || steps[steps.length - 1],
+      groups: groups || outlineWizard?.groups,
+    });
+    emitOutlineWizard(outlineWizard);
+  }
+
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(payload);
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};
   const overview = storedPlan.projectOverview || '';
@@ -3967,14 +4008,21 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     wordControlOptions,
     reference_knowledge_document_ids: referenceKnowledgeDocumentIds,
   };
+  outlineWizard = buildOutlineWizard({
+    active: true,
+    completedSteps: [],
+    currentStep: getCurrentWizardSteps()[0],
+    groups: [],
+  });
   let technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineMode,
     outlineExpansionMode,
     outlineWordControlOptions: wordControlOptions,
     referenceKnowledgeDocumentIds,
     outlineGenerationTask: updateTask({ status: 'running', progress: OUTLINE_PROGRESS.start, logs, stats: taskStats() }),
+    outlineWizard,
   });
-  updateTask({ status: 'running', progress: OUTLINE_PROGRESS.start, logs, stats: taskStats() }, technicalPlan);
+  updateTask({ status: 'running', progress: OUTLINE_PROGRESS.start, logs, stats: taskStats() }, technicalPlan, { outlineWizard });
 
   let oldOutline = null;
   if (isExpansionWorkflow) {
@@ -4011,6 +4059,11 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
   });
   updateTask({ status: 'running', progress: currentProgress, logs, stats: taskStats() }, technicalPlan);
 
+  // 已有方案扩写流程：提取原方案目录（extract）作为向导第一步完成后，推进向导进度。
+  if (isExpansionWorkflow && outlineExpansionMode !== 'original-only') {
+    advanceWizardStep([]);
+  }
+
   const taskPayload = {
     ...baseTaskPayload,
     oldOutline: formatOldOutlineForPrompt(oldOutline),
@@ -4028,18 +4081,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
       };
       const finalLogs = [...logs, '目录生成完成。'];
       const finalTask = updateTask({ status: 'success', progress: OUTLINE_PROGRESS.complete, logs: finalLogs, stats: taskStats() });
-      const completedWizard = {
-        active: false,
-        completedSteps: ['extract'],
-        currentStep: 'extract',
-        workflowKind: storedPlan.workflowKind,
-        outlineExpansionMode,
-        wordControlOptions,
-        referenceKnowledgeDocumentIds,
-        originalOnly: true,
-        oldOutline,
-        groups: [],
-      };
+      const completedWizard = buildOutlineWizard({ active: false, completedSteps: ['extract'], currentStep: 'extract', groups: [] });
       technicalPlan = workspaceStore.updateTechnicalPlan({
         outlineData: { ...oldOutline, project_overview: overview },
         outlineWordControlSnapshot: wordControlOptions,
@@ -4063,9 +4105,11 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     outline = alignedResult.outline;
     groups = alignedResult.groups || [];
   }
+  advanceWizardStep(groups);
 
   const knowledgeItems = loadOutlineKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, log);
   outline = await enhanceOutlineWithKnowledgeAdditions(aiService, taskPayload, outline, knowledgeItems, log);
+  advanceWizardStep(groups);
   outlineStats = {
     ...outlineStats,
     phase: 'reviewing',
@@ -4085,6 +4129,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
   });
   outline = finalResult.outline;
   groups = finalResult.groups || groups;
+  advanceWizardStep(groups);
   outlineStats = {
     ...outlineStats,
     phase: 'reviewing',
@@ -4099,6 +4144,7 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
     log,
   });
   outline = auditResult.outline;
+  advanceWizardStep(groups);
   outlineStats = {
     ...outlineStats,
     phase: 'auditing',
@@ -4151,19 +4197,13 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
   };
   const finalLogs = [...logs, '目录生成完成。', ...(wordControlWarning ? [wordControlWarning] : [])];
   const finalTask = updateTask({ status: 'success', progress: OUTLINE_PROGRESS.complete, logs: finalLogs, stats: taskStats() });
-  const wizardOrderedSteps = getOutlineWizardOrderedSteps({ isExpansionWorkflow, outlineExpansionMode });
-  const completedWizard = {
+  const finalSteps = getCurrentWizardSteps();
+  const completedWizard = buildOutlineWizard({
     active: false,
-    completedSteps: wizardOrderedSteps,
-    currentStep: wizardOrderedSteps[wizardOrderedSteps.length - 1],
-    workflowKind: storedPlan.workflowKind,
-    outlineExpansionMode,
-    wordControlOptions,
-    referenceKnowledgeDocumentIds,
-    originalOnly: outlineExpansionMode === 'original-only',
-    oldOutline,
+    completedSteps: finalSteps,
+    currentStep: finalSteps[finalSteps.length - 1],
     groups,
-  };
+  });
   technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineData: { ...outline, project_overview: overview },
     outlineWordControlSnapshot: wordControlOptions,
