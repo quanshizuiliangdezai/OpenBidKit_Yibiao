@@ -614,30 +614,34 @@ function renumberSubtree(items, prefix) {
 // 关键变化：不再把聚合一级目录当作通用容器让 AI 套骨架，而是让 AI 聚焦于该方向本身的真实招标文件内容，
 // 用思路引导它自行拆解，并给出同章其他并列方向作为差异化上下文（不是写死的禁止规则）。
 function generateAlignedDirectionChildrenMessages({ overview, requirements, responseFileRequirements, oldOutline }, outlineMode, parentItem, directionId, directionGroup, siblingTitles, suggestions) {
-  const detailLines = (directionGroup.detail_points || [])
-    .filter((item) => typeof item === 'string' && item.trim())
-    .map((item) => `- ${item}`)
-    .join('\n');
+  const detailPoints = (directionGroup.detail_points || [])
+    .filter((item) => typeof item === 'string' && item.trim());
+  const detailLines = detailPoints.map((item) => `- ${item}`).join('\n');
+  const dimensionCount = detailPoints.length;
   const sourceLabel = getTopLevelSourceLabel({ outlineMode });
   const directionTitle = String(directionGroup.title || '').trim();
   const siblingText = (siblingTitles || [])
     .filter((title) => title && title !== directionTitle)
     .map((title, index) => `${index + 1}. ${title}`)
     .join('\n');
-  const instructionPrompt = `你是一个资深的技术标书架构师。现在需要为「${directionTitle}」这个具体技术方向设计它下属的技术方案目录。
+  const dimensionConstraint = dimensionCount > 0
+    ? `招标评分依据（必须逐条覆盖，缺项会被扣分）：
+本方向在招标文件「${parentItem.title}」下的评分标准共 ${dimensionCount} 个维度（见下方“该方向评分细项”）。每个维度对应评审打分项的考察内容，专家会逐条核对。请务必把这 ${dimensionCount} 个维度全部保留为三级目录，不得遗漏、不得合并、不得用无关的通用章节替代。`
+    : `本方向暂无明确评分细项，请基于「${directionTitle}」的实际技术常识合理拆解三级目录。`;
+  const instructionPrompt = `你是一个资深的技术标书架构师。现在需要为「${directionTitle}」这个具体技术方向设计它下属的技术方案三级目录。
 
-设计思路（请据此自行判断，不要套用固定模板）：
-- 这个方向是「${parentItem.title}」下面的一个并列子方向，它在招标文件中对应一组真实的评分要求。
-- 你应当基于下方“该方向对应的真实评分要求”（标题、描述、细项）来组织目录；目录内容要贴合该项目方向的实际技术组成、建设任务、交付物和验收口径，让章节从该方向真实的工作内容中自然长出来。
-- 同一章内还有其他并列方向（见下方列表），各方向的技术内容不同，请只围绕本方向的真实要求展开，不要与其他方向重复，也不要把通用项目管理流程（如“用户需求分析/标准规范/系统拓扑/建设实施/培训运维”这类万能骨架）机械套用到每个方向。
-- 如果招标文件对该方向给出了明确细项，优先用这些细项组织目录；没有明确细项时，再根据该方向的实际技术常识拆解。
+${dimensionConstraint}
+
+设计思路（请据此自行判断，不要套用通用项目管理模板）：
+- 这${dimensionCount > 0 ? ` ${dimensionCount} 个维度` : '些内容'}来自该方向在招标文件中的真实评分要求，是评审依据；但它们目前是通用表述（如“用户需求”“系统拓扑”“建设实施”）。你需要让每个三级目录的标题融入「${directionTitle}」的专业语境：用该方向的具体技术语言重写，使标题体现该方向真实的技术构成、建设任务与交付物，避免与其他方向雷同。
+- 同一章内还有其他并列方向（见下方列表），各方向技术内容不同，请只围绕本方向真实要求展开；但所覆盖的维度数量与对应关系不变。
+- 若某维度（如“各区域/功能模块设计方案”）确实需要按本方向的子系统进一步拆分，可引入一层二级目录承载多个三级目录，但必须覆盖所有维度。
 
 输出要求：
-1. 输出该方向下的二级和三级目录：二级是该方向自身拆解出的子主题，三级是具体技术任务、响应要点或验收口径。
-2. 每个二级目录至少包含两级展开（即至少两个三级目录）。
-3. 三级目录只包含 id、title、description，不要再嵌套第四层。
-4. 返回标准 JSON：{"children": [...]}，每个节点必须包含 id、title、description。
-5. 除了 JSON 结果外不要输出任何其他内容。`;
+1. 输出该方向下的三级目录：每个三级目录对应上方评分细项中的一条，标题需本地化到「${directionTitle}」，description 简述该维度在本方向下的具体响应内容。
+2. 三级目录只包含 id、title、description；除非上一点的二级拆分需要，不要再嵌套第四层。
+3. 返回标准 JSON：{"children": [...]}，每个节点必须包含 id、title、description。
+4. 除了 JSON 结果外不要输出任何其他内容。`;
   const messages = [
     ...buildOutlineSharedContextMessages({ overview, requirements, responseFileRequirements, oldOutline }),
     { role: 'user', content: instructionPrompt },
