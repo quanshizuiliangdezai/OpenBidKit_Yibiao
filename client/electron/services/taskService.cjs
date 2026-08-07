@@ -724,7 +724,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       return;
     }
 
-    const message = '上次目录生成未完成，请重新生成目录；如旧方案目录提取已有进度，将自动继续。';
+    const message = '上次目录生成未完成。当前为普通模式，不支持断点续传，请点击「重新生成目录」从头开始；如需自动继续进度，请使用「分步向导」。';
     const recoveredTask = {
       ...outlineTask,
       status: 'error',
