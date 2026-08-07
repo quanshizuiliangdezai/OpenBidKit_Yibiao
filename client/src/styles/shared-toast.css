@@ -13,6 +13,7 @@
   padding: 0;
   list-style: none;
   outline: none;
+  pointer-events: auto;
 }
 
 .app-toast {

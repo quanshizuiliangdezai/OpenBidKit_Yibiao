@@ -9,15 +9,8 @@ import { TemplatePreview } from '../../export-format/pages/ExportFormatPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import {
-  FloatingToolbar,
-  ToolbarArrowLeftIcon,
-  ToolbarArrowRightIcon,
-  ToolbarDocumentIcon,
-  useConfirmDialog,
-  useToast,
-} from '../../../shared/ui';
-import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
+import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, useToast } from '../../../shared/ui';
+import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
 import { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS } from '../../../shared/types';
 import type { OutlineData, OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from '../../../shared/types/exportFormat';
@@ -124,7 +117,7 @@ function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
 function isOutlineLeafCountOutsideRange(outlineData: OutlineData, options: OutlineWordControlOptions) {
   if (options.minimumWords === 0 && options.maximumWords === 0) return false;
   const effectiveSectionWords = options.sectionWords > 0 ? options.sectionWords : 3000;
-  const leafCount = collectLeafItems(outlineData.outline || []).length;
+  const leafCount = collectLeafItems(outlineData.outline || []).filter((item) => item.content_mode === 'ai-generate').length;
   const minimumLeafCount = options.minimumWords > 0 ? Math.ceil(options.minimumWords / effectiveSectionWords) : null;
   const maximumLeafCount = options.maximumWords > 0 ? Math.floor(options.maximumWords / effectiveSectionWords) : null;
   return (minimumLeafCount !== null && leafCount < minimumLeafCount)
@@ -200,14 +193,17 @@ function buildWordControlWarningDialog(task: BackgroundTaskState, state: Technic
     // 数量类：叶子数量未进入区间，展示预期与实际对比。
     const minimumLeafCount = outlineStats.minimum_leaf_count || 0;
     const maximumLeafCount = outlineStats.maximum_leaf_count || 0;
+    const targetLeafCount = outlineStats.target_leaf_count;
     const currentLeafCount = outlineStats.current_leaf_count || 0;
     return {
       taskId: task.task_id,
-      title: '目录叶子数量未达到预期',
+      title: 'AI生成小节数量未达到预期',
       message: outlineStats.word_adjustment_warning,
       metrics: [{
-        label: '目录叶子小节',
-        expected: formatCountRange(minimumLeafCount, maximumLeafCount, '个'),
+        label: 'AI生成小节',
+        expected: typeof targetLeafCount === 'number'
+          ? `${targetLeafCount.toLocaleString('zh-CN')} 个`
+          : formatCountRange(minimumLeafCount, maximumLeafCount, '个'),
         actual: `${currentLeafCount.toLocaleString('zh-CN')} 个`,
       }],
       sections: [],
@@ -222,7 +218,9 @@ function buildWordControlWarningDialog(task: BackgroundTaskState, state: Technic
   const sectionWords = contentStats.section_words || 0;
   const sectionMinimumWords = sectionWords > 0 ? Math.ceil(sectionWords * 0.8) : 0;
   const sectionMaximumWords = sectionWords > 0 ? Math.floor(sectionWords * 1.2) : 0;
-  const orderedLeaves = state.outlineData?.outline?.length ? collectLeafItems(state.outlineData.outline) : [];
+  const orderedLeaves = state.outlineData?.outline?.length
+    ? collectLeafItems(state.outlineData.outline).filter((item) => item.content_mode === 'ai-generate')
+    : [];
   const sectionSources = orderedLeaves.length
     ? orderedLeaves.map((item) => ({
         id: item.id,
@@ -318,9 +316,8 @@ function updateOutlineItemContent(items: OutlineItem[], itemId: string, content:
 }
 
 function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }: TechnicalPlanHomeProps) {
-  const { hydrated, state, setState } = useTechnicalPlanWorkflow(workflowKind);
+  const { hydrated, state, setState } = useTechnicalPlanWorkflow();
   const { showToast } = useToast();
-  const { confirm } = useConfirmDialog();
   const [tenderMarkdown, setTenderMarkdown] = useState('');
   const [originalPlanMarkdown, setOriginalPlanMarkdown] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
@@ -642,17 +639,9 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
 
   const goToOffset = async (offset: number) => {
     const nextStep = steps[activeIndex + offset];
-    if (!nextStep) {
-      return;
+    if (nextStep) {
+      await switchStep(nextStep);
     }
-    // 分步向导执行中（向导 active）切换模块会卸载并重挂载 OutlineEditPage，
-    // 导致 wizardMode 重置、后端重新广播 technicalPlan 时 running 中间态被 stale 状态覆盖，
-    // 切回后进度误显为「已完成 100%」。因此在向导进行中禁止用顶部导航离开目录生成模块。
-    if (state.outlineWizard?.active && state.step === 'outline-generation') {
-      showToast('目录生成（分步向导）正在执行中，请先停止生成或等待完成后，再切换步骤', 'info');
-      return;
-    }
-    await switchStep(nextStep);
   };
 
   useEffect(() => {
@@ -745,7 +734,6 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           return {
             ...prev,
             outlineGenerationTask: trimTaskLogs(technicalPlan.outlineGenerationTask) || latestTask,
-            outlineWizard: hasOwnField(technicalPlan, 'outlineWizard') ? technicalPlan.outlineWizard : prev.outlineWizard,
             outlineMode: technicalPlan.outlineMode ?? prev.outlineMode,
             outlineExpansionMode: technicalPlan.outlineExpansionMode ?? prev.outlineExpansionMode,
             outlineWordControlOptions: technicalPlan.outlineWordControlOptions ?? prev.outlineWordControlOptions,
@@ -818,43 +806,6 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
 
     return unsubscribe;
   }, [setState, showToast]);
-
-  // 缓存加载与任务事件订阅是并行的：useTechnicalPlanWorkflow 先发起 load-state，
-  // 随后本组件才订阅任务事件并触发 recover。主进程按队列先处理 load-state（可能读到 running），
-  // 再 recover 把 DB 改成 wizard-step-done 并 emit；前端先收到 event 更新状态，随后 load-state
-  // 返回又用缓存的 running 把状态覆盖，导致 autoAdvance 看不到 done。因此在 hydrated 后再拉一次
-  // 最新 state，覆盖可能过时的缓存。
-  useEffect(() => {
-    if (!hydrated) {
-      return;
-    }
-    let mounted = true;
-    window.yibiao?.technicalPlan.loadState().then((latestState) => {
-      if (!mounted || !latestState) {
-        return;
-      }
-      setState((prev) => {
-        const merged: Record<string, unknown> = { ...(prev as unknown as Record<string, unknown>) };
-        const patch: Record<string, unknown> = latestState as unknown as Record<string, unknown>;
-        for (const [key, value] of Object.entries(patch)) {
-          // 只回填前端尚未从任务事件拿到值的字段，避免 event 已经推送的最新状态
-          // （如 recover 后的 wizard-step-done、main 完成后的 outlineData）被 loadState
-          // 读到的旧快照覆盖，导致目录树显示为空或 autoAdvance 漏触发。
-          if (value !== undefined && value !== null && (merged[key] === undefined || merged[key] === null)) {
-            merged[key] = value;
-          }
-        }
-        // 工作流类型以当前 props 为准，不跟随缓存。
-        merged.workflowKind = prev.workflowKind;
-        return merged as unknown as TechnicalPlanState;
-      });
-    }).catch((error) => {
-      console.warn('hydration 后刷新技术方案状态失败', error);
-    });
-    return () => {
-      mounted = false;
-    };
-  }, [hydrated, setState]);
 
   useEffect(() => {
     if (state.step !== 'document-analysis') {
@@ -1058,13 +1009,9 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   };
 
   const resetTechnicalPlan = async () => {
-    const ok = await confirm({
-      title: '重置技术方案',
-      message: '会清空整个技术方案编写进度，是否确认？',
-      variant: 'danger',
-      confirmText: '确认清空',
-    });
-    if (!ok) return;
+    if (!window.confirm('会清空整个技术方案编写进度，是否确认？')) {
+      return;
+    }
 
     try {
       const result = await window.yibiao?.technicalPlan.clear();
@@ -1090,6 +1037,11 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   const saveOutline = async (request: SaveOutlineRequest) => {
     const saved = await window.yibiao?.technicalPlan.saveOutline(request);
     setState((prev) => ({ ...prev, ...(saved || {}), outlineData: saved?.outlineData || request.outlineData }));
+  };
+
+  const saveOutlineSelection = async (request: SaveOutlineSelectionRequest) => {
+    const saved = await window.yibiao?.technicalPlan.saveOutlineSelection(request);
+    setState((prev) => ({ ...prev, ...(saved || {}) }));
   };
 
   const saveOutlineConfig = async (config: {
@@ -1222,21 +1174,19 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
         />
       )}
       {state.step === 'outline-generation' && (
-        <OutlineEditPage
-          workflowKind={workflowKind}
-          projectOverview={state.projectOverview}
-          techRequirements={state.techRequirements}
-          outlineMode={state.outlineMode || 'aligned'}
-          outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
+          <OutlineEditPage
+            workflowKind={workflowKind}
+            projectOverview={state.projectOverview}
+            outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
           outlineWordControlOptions={state.outlineWordControlOptions}
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}
           referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           outlineData={state.outlineData}
-          outlineWizard={state.outlineWizard}
           task={state.outlineGenerationTask}
           contentTaskStatus={state.contentGenerationTask?.status}
           onOutlineConfigChange={saveOutlineConfig}
           onOutlineSaved={saveOutline}
+          onOutlineSelectionSaved={saveOutlineSelection}
           onSortGuardChange={(guard) => {
             sortGuardRef.current = guard;
           }}
@@ -1354,7 +1304,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           <Dialog.Content className="content-regenerate-card">
             <div className="content-regenerate-card-head">
               <span className="section-kicker">字数检查</span>
-              <Dialog.Title>目录叶子数量未达预期</Dialog.Title>
+              <Dialog.Title>AI生成小节数量未达预期</Dialog.Title>
               <Dialog.Description>您手动修改的目录可能导致生成正文字数不符合预期</Dialog.Description>
             </div>
             <div className="content-regenerate-actions">

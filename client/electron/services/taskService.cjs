@@ -3,18 +3,9 @@ const { runBidSectionExtractionTask } = require('./bidSectionExtractionTask.cjs'
 const { runBidAnalysisTask } = require('./bidAnalysisTask.cjs');
 const { runContentGenerationTask } = require('./contentGenerationTask.cjs');
 const { runGlobalFactsTask } = require('./globalFactsTask.cjs');
-const { runOutlineGenerationTask } = require('./outlineGenerationTask.cjs');
+const { runOutlineGenerationTaskV2 } = require('./outlineGenerationTaskV2.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
-
-// 仅 recover 需要的 OUTLINE_PROGRESS 子集（与 outlineGenerationTask.cjs 保持一致）。
-// 必须与 outlineGenerationTask.cjs 中的 OUTLINE_PROGRESS 同步修改。
-const OUTLINE_PROGRESS_VALUES = Object.freeze({
-  mainComplete: 55,
-  knowledgeEnhancementEnd: 65,
-  finalReviewEnd: 75,
-  complianceAuditEnd: 82,
-  complete: 100,
-});
+const { OUTLINE_AGENT_TASK_KEY } = require('./pi/piPersistentTaskStore.cjs');
 
 const taskDefinitions = {
   'bid-section-extraction': {
@@ -311,7 +302,8 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         'outlineWordControlOptions',
         'outlineWordControlSnapshot',
         'referenceKnowledgeDocumentIds',
-        'outlineWizard',
+        'globalFactsTask',
+        'globalFacts',
       ]);
       if (task.status === 'success' || state.outlineData === null || hasOwn(eventPatch, 'outlineData')) {
         copyPatchFields(patch, state, [
@@ -517,7 +509,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     };
   }
 
-  function startManagedTask(type, payload, runner, initialPartial = {}) {
+  function startManagedTask(type, payload, runner, initialPartial = {}, startOptions = {}) {
     const existingTask = activeTasks.get(type);
     if (existingTask && isActiveTaskStatus(existingTask.status)) {
       const nextPayloadSignature = getPayloadSignature(type, payload);
@@ -530,16 +522,25 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     }
 
     assertTaskCanStart(type, payload);
+    startOptions.beforeStart?.();
 
     const definition = getTaskDefinition(type);
-    const task = createTask(type, payload);
+    const task = startOptions.existingTask || createTask(type, payload);
     const queueScopeId = `${type}:${task.task_id}`;
     activeTasks.set(type, task);
     const taskField = getTaskField(type);
     let currentTask = task;
+    const abortController = new AbortController();
+    let resolveSettled;
+    const settledPromise = new Promise((resolve) => {
+      resolveSettled = resolve;
+    });
     const taskControl = {
       queueScopeId,
+      signal: abortController.signal,
       pauseRequested: false,
+      outlineSelectionWaiter: null,
+      outlineSelectionResult: null,
       isPauseRequested() {
         return this.pauseRequested;
       },
@@ -553,8 +554,41 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         emit(pausingTask, buildSnapshot(definition, state, pausingTask));
         return pausingTask;
       },
+      waitForOutlineSelection() {
+        if (abortController.signal.aborted) {
+          throw abortController.signal.reason || new Error('目录生成任务已取消');
+        }
+        if (this.outlineSelectionResult) return Promise.resolve(this.outlineSelectionResult);
+        if (this.outlineSelectionWaiter) return this.outlineSelectionWaiter.promise;
+        let resolve;
+        let reject;
+        const promise = new Promise((resolvePromise, rejectPromise) => {
+          resolve = resolvePromise;
+          reject = rejectPromise;
+        });
+        promise.catch(() => undefined);
+        this.outlineSelectionWaiter = { promise, resolve, reject };
+        return promise;
+      },
+      cancel(reason = '后台任务已取消') {
+        const error = new Error(reason);
+        error.code = 'TASK_CANCELLED';
+        this.outlineSelectionWaiter?.reject?.(error);
+        this.outlineSelectionWaiter = null;
+        if (!abortController.signal.aborted) abortController.abort(error);
+      },
+      waitForSettlement() {
+        return settledPromise;
+      },
+      dispose() {
+        this.outlineSelectionWaiter?.reject?.(new Error('目录生成任务已结束'));
+        this.outlineSelectionWaiter = null;
+      },
     };
     activeTaskControls.set(type, taskControl);
+    if (startOptions.restoreOutlineSelectionWaiter) {
+      taskControl.waitForOutlineSelection();
+    }
 
     const updateTask = (partial, workspaceState, eventPatch, options = {}) => {
       const nextStatus = currentTask.status === 'pausing' && partial.status === 'running'
@@ -583,8 +617,36 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       return currentTask;
     };
 
+    taskControl.confirmOutlineSelection = (request = {}) => {
+      if (type !== 'outline-generation' || request.taskId !== currentTask.task_id) {
+        throw new Error('一级目录生成结果已变化，请重新打开后再选择');
+      }
+      const waiter = taskControl.outlineSelectionWaiter;
+      if (!waiter) throw new Error('当前目录任务不在一级目录确认阶段');
+      const items = Array.isArray(request.items) ? request.items : [];
+      const selectedIds = Array.isArray(request.selectedIds) ? request.selectedIds : [];
+      currentTask = updateTask({
+        stats: {
+          ...(currentTask.stats || {}),
+          outline_selection: {
+            items,
+            selected_ids: selectedIds,
+            confirmed: true,
+          },
+        },
+      });
+      const confirmedState = updateWorkspaceState(definition, { [taskField]: currentTask });
+      emit(currentTask, buildSnapshot(definition, confirmedState, currentTask));
+      taskControl.outlineSelectionWaiter = null;
+      taskControl.outlineSelectionResult = { items, selectedIds };
+      waiter.resolve(taskControl.outlineSelectionResult);
+      return confirmedState;
+    };
+
     const previousState = loadWorkspaceState(definition) || {};
-    const state = updateWorkspaceState(definition, { ...initialPartial, [taskField]: currentTask });
+    const state = startOptions.skipInitialStateUpdate
+      ? previousState
+      : updateWorkspaceState(definition, { ...initialPartial, [taskField]: currentTask });
     emit(currentTask, buildSnapshot(definition, state, currentTask));
 
     const runnerWorkspaceStore = definition.stateKey === 'technicalPlan'
@@ -601,20 +663,31 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       const nextState = updateWorkspaceState(definition, { [taskField]: failedTask });
       emit(failedTask, buildSnapshot(definition, nextState, failedTask));
     }).finally(() => {
+      taskControl.dispose();
       if (aiService?.resumeQueueScope) {
         aiService.resumeQueueScope(queueScopeId);
       }
       activeTasks.delete(type);
       activeTaskControls.delete(type);
+      resolveSettled();
     });
 
     return currentTask;
   }
 
+  // 取消目录生成并等待其异步清理完成，避免重置后旧任务重新写回状态。
+  async function cancelOutlineGenerationForReset() {
+    const task = activeTasks.get('outline-generation');
+    const control = activeTaskControls.get('outline-generation');
+    if (!task || !isActiveTaskStatus(task.status) || !control?.cancel) return;
+    control.cancel('技术方案已重置，目录生成任务已取消');
+    await control.waitForSettlement();
+  }
+
   function recoverInterruptedContentGenerationTask() {
-    // 始终清掉 activeTasks 残留（防止 zombie 任务对象让 startManagedTask 跳过新任务导致死锁）
-    activeTasks.delete('content-generation');
-    activeTaskControls.delete('content-generation');
+    if (activeTasks.has('content-generation')) {
+      return;
+    }
 
     const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const contentTask = technicalPlan.contentGenerationTask;
@@ -660,20 +733,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
   }
 
   function recoverInterruptedOutlineGenerationTask() {
-    // 如果 runner 仍在内存中活跃执行，说明任务没有中断，不要 recover。
-    // 此前无条件先 delete activeTasks 再读 DB，会导致普通模式运行时前端刷新调用
-    // getActiveTasks 触发 recover，把正在正常推进的 running 任务误判为中断并标为 error。
-    const existingTask = activeTasks.get('outline-generation');
-    if (existingTask && isActiveTaskStatus(existingTask.status)) {
+    if (activeTasks.has('outline-generation')) {
       return;
     }
-
-    // 清掉 activeTasks 里的残留任务对象（包括 zombie 记录——runner 因异常中断时 finally 没跑，
-    // activeTasks 留下 status=running 的脏数据，会让 startManagedTask 误以为有任务在跑、
-    // 跳过新任务导致死锁）。之前的 has 检查直接 return 反而保留了这个 zombie，
-    // 用户反馈：进度卡在 mainComplete (55%) 1 小时不动，根因就在这里。
-    activeTasks.delete('outline-generation');
-    activeTaskControls.delete('outline-generation');
 
     const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const outlineTask = technicalPlan.outlineGenerationTask;
@@ -681,50 +743,52 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       return;
     }
 
-    // 二次保护：若 DB 里 running 任务 recently updated（runner 活跃但 activeTasks 刚好缺失），
-    // 也不应标为 error。这能覆盖极端并发/异步边界。
-    const ACTIVE_RUNNING_TASK_THRESHOLD_MS = 60_000;
-    if (outlineTask.status === 'running' && outlineTask.updated_at) {
-      const lastUpdated = new Date(outlineTask.updated_at).getTime();
-      if (Number.isFinite(lastUpdated) && Date.now() - lastUpdated < ACTIVE_RUNNING_TASK_THRESHOLD_MS) {
-        return;
-      }
-    }
-
-    const wizard = technicalPlan.outlineWizard || {};
-    const completedSteps = Array.isArray(wizard.completedSteps) ? wizard.completedSteps : [];
-
-    if (completedSteps.length > 0 && wizard.active) {
-      // 分步向导有已完成步骤：说明 task 实际推进到某步后被中断。
-      // 不要标 error（会把整条向导标记为失败、要求用户手动重试），
-      // 而是把 task 状态修正为“最后完成步骤”的 wizard-step-done，
-      // 前端 autoAdvance 看到 wizard-step-done 会主动重启后续步骤，体验上“被中断后自动续上”。
-      const stepProgress = {
-        extract: OUTLINE_PROGRESS_VALUES.mainComplete,
-        main: OUTLINE_PROGRESS_VALUES.mainComplete,
-        knowledge: OUTLINE_PROGRESS_VALUES.knowledgeEnhancementEnd,
-        review: OUTLINE_PROGRESS_VALUES.finalReviewEnd,
-        audit: OUTLINE_PROGRESS_VALUES.complianceAuditEnd,
-        word: OUTLINE_PROGRESS_VALUES.complete,
-      };
-      const lastStep = completedSteps[completedSteps.length - 1];
-      const recoveredTask = {
-        ...outlineTask,
-        status: 'wizard-step-done',
-        progress: stepProgress[lastStep] != null
-          ? stepProgress[lastStep]
-          : Math.max(0, Math.min(99, Number(outlineTask.progress || 0) || 0)),
-        pause_requested: false,
-        error: null,
-        logs: [...(Array.isArray(outlineTask.logs) ? outlineTask.logs : []), `检测到上次分步生成被中断，已恢复到「${lastStep}」完成状态，前端将自动继续推进后续步骤。`],
-        updated_at: now(),
-      };
-      const state = technicalPlanStore.updateTechnicalPlan({ outlineGenerationTask: recoveredTask });
-      emit(recoveredTask, buildSnapshot(getTaskDefinition('outline-generation'), state, recoveredTask));
+    const agentState = outlineTask.stats?.agent || {};
+    let persistentTask = null;
+    try {
+      persistentTask = agentService.loadPersistentTask(OUTLINE_AGENT_TASK_KEY);
+    } catch {}
+    const recoverableWaiting = persistentTask?.state?.run_id === outlineTask.task_id
+      && persistentTask.state.status === 'waiting-outline-selection'
+      && persistentTask.state.phase === 'outline-selection'
+      && persistentTask.state.agent_connection === 'idle'
+      && Boolean(persistentTask.state.session_file)
+      && agentService.hasPersistentTaskSession(OUTLINE_AGENT_TASK_KEY)
+      && Boolean(outlineTask.stats?.outline_selection?.items?.length)
+      && outlineTask.stats.outline_selection.confirmed !== true;
+    if (recoverableWaiting) {
+      startManagedTask('outline-generation', {
+        ...(agentState.resume_payload || {}),
+        agent_resume: {
+          phase: 'outline-selection',
+        },
+      }, runOutlineGenerationTaskV2, {}, {
+        existingTask: outlineTask,
+        skipInitialStateUpdate: true,
+        restoreOutlineSelectionWaiter: true,
+      });
       return;
     }
 
-    const message = '上次目录生成未完成。当前为普通模式，不支持断点续传，请点击「重新生成目录」从头开始；如需自动继续进度，请使用「分步向导」。';
+    const message = '上次目录生成未完成，请重新生成目录。';
+    if (persistentTask) {
+      try {
+        agentService.updatePersistentTask(OUTLINE_AGENT_TASK_KEY, {
+          status: 'interrupted',
+          agent_connection: 'idle',
+          error: message,
+        });
+      } catch {}
+    }
+    const recoveredStats = { ...(outlineTask.stats || {}) };
+    delete recoveredStats.outline_selection;
+    if (recoveredStats.agent) {
+      recoveredStats.agent = {
+        ...recoveredStats.agent,
+        status: 'interrupted',
+        agent_connection: 'idle',
+      };
+    }
     const recoveredTask = {
       ...outlineTask,
       status: 'error',
@@ -732,6 +796,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       pause_requested: false,
       error: message,
       logs: [...(Array.isArray(outlineTask.logs) ? outlineTask.logs : []), message],
+      stats: recoveredStats,
       updated_at: now(),
     };
     const state = technicalPlanStore.updateTechnicalPlan({ outlineGenerationTask: recoveredTask });
@@ -739,9 +804,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
   }
 
   function recoverInterruptedBidAnalysisTask() {
-    // 始终清掉 activeTasks 残留（防止 zombie 任务对象让 startManagedTask 跳过新任务导致死锁）
-    activeTasks.delete('bid-analysis');
-    activeTaskControls.delete('bid-analysis');
+    if (activeTasks.has('bid-analysis')) {
+      return;
+    }
 
     const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const bidAnalysisTask = technicalPlan.bidAnalysisTask;
@@ -783,9 +848,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
   }
 
   function recoverInterruptedBidSectionExtractionTask() {
-    // 始终清掉 activeTasks 残留（防止 zombie 任务对象让 startManagedTask 跳过新任务导致死锁）
-    activeTasks.delete('bid-section-extraction');
-    activeTaskControls.delete('bid-section-extraction');
+    if (activeTasks.has('bid-section-extraction')) {
+      return;
+    }
 
     const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const extractionTask = technicalPlan.bidSectionExtractionTask;
@@ -812,9 +877,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
   }
 
   function recoverInterruptedGlobalFactsTask() {
-    // 始终清掉 activeTasks 残留（防止 zombie 任务对象让 startManagedTask 跳过新任务导致死锁）
-    activeTasks.delete('global-facts-generation');
-    activeTaskControls.delete('global-facts-generation');
+    if (activeTasks.has('global-facts-generation')) {
+      return;
+    }
 
     const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
     const globalFactsTask = technicalPlan.globalFactsTask;
@@ -836,18 +901,12 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
   }
 
   function recoverInterruptedRejectionCheckTasks() {
-    // 始终清掉 activeTasks 残留（防止 zombie 任务对象让 startManagedTask 跳过新任务导致死锁）
-    activeTasks.delete('rejection-items-extraction');
-    activeTaskControls.delete('rejection-items-extraction');
-    activeTasks.delete('rejection-check-run');
-    activeTaskControls.delete('rejection-check-run');
-
     const staleExtractionMessage = '上次解析未完成，请重新解析';
     const staleCheckMessage = '上次检查未完成，请重新检查';
     const state = rejectionCheckStore.loadRejectionCheck() || {};
     const partial = {};
 
-    if (state.extractionTask?.status === 'running') {
+    if (!activeTasks.has('rejection-items-extraction') && state.extractionTask?.status === 'running') {
       partial.invalidBidAndRejectionItems = state.invalidBidAndRejectionItems?.status === 'running'
         ? { ...state.invalidBidAndRejectionItems, status: 'error', error: staleExtractionMessage, updatedAt: now() }
         : state.invalidBidAndRejectionItems;
@@ -861,7 +920,7 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       };
     }
 
-    if (state.checkTask?.status === 'running') {
+    if (!activeTasks.has('rejection-check-run') && state.checkTask?.status === 'running') {
       const markResult = (result) => result?.status === 'running'
         ? { ...result, status: 'error', error: staleCheckMessage, progressMessage: staleCheckMessage, updatedAt: now() }
         : result;
@@ -884,10 +943,9 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
   }
 
   function recoverInterruptedDuplicateCheckTask() {
-    // 始终清掉 activeTasks 残留（防止 zombie 任务对象让 startManagedTask 跳过新任务导致死锁）
-    activeTasks.delete('duplicate-analysis');
-    activeTaskControls.delete('duplicate-analysis');
-
+    if (activeTasks.has('duplicate-analysis')) {
+      return;
+    }
     const state = duplicateCheckStore.loadDuplicateCheck() || {};
     if (state.analysisTask?.status !== 'running') {
       return;
@@ -948,71 +1006,23 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
     startOutlineGeneration(payload) {
       const outlineMode = payload?.outline_mode === 'response-file' ? 'response-file' : 'aligned';
       const taskPayload = { ...payload, outline_mode: outlineMode };
-      return startManagedTask('outline-generation', taskPayload, runOutlineGenerationTask, {
+      return startManagedTask('outline-generation', taskPayload, runOutlineGenerationTaskV2, {
         outlineMode,
         outlineExpansionMode: payload?.outline_expansion_mode === 'original-only' ? 'original-only' : 'ai-complement',
         outlineWordControlOptions: payload?.word_control_options,
         referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids) ? payload.reference_knowledge_document_ids : [],
+        outlineData: null,
+        outlineWordControlSnapshot: undefined,
+        globalFactsTask: undefined,
+        globalFacts: [],
+        contentGenerationTask: undefined,
+        contentGenerationSections: {},
+        contentGenerationPlans: {},
+        contentIllustrationPlan: undefined,
+        contentGenerationRuntime: undefined,
+      }, {
+        beforeStart: () => agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY),
       });
-    },
-    startOutlineGenerationStep(payload) {
-      // 分步向导只是普通模式的辅助：底层始终是同一条 runOutlineGenerationTask，
-      // 这里把向导的「单步执行」请求翻译成「分阶段暂停」模式的统一入口，
-      // 不再有独立的 runOutlineWizardStep 并行流程。
-      const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
-      const outlineMode = payload?.outline_mode === 'response-file' ? 'response-file' : 'aligned';
-      const taskPayload = {
-        ...payload,
-        stepped: true,
-        resumeFrom: typeof payload?.wizardStep === 'string' ? payload.wizardStep : null,
-        wizardRestart: Boolean(payload?.wizardRestart),
-        outline_mode: outlineMode,
-      };
-      return startManagedTask('outline-generation', taskPayload, runOutlineGenerationTask, {
-        outlineMode,
-        outlineExpansionMode: payload?.outline_expansion_mode === 'original-only' ? 'original-only' : 'ai-complement',
-        outlineWordControlOptions: payload?.word_control_options,
-        // 非第一步（如 knowledge/review）payload 不会带 reference_knowledge_document_ids，
-        // 此时必须回退到已保存的 technicalPlan.referenceKnowledgeDocumentIds，
-        // 否则 initialPartial 传空数组会覆盖数据库里的有效选择，
-        // 导致用户点击「重试」后页面顶部显示「参考知识库：未选择」。
-        referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids)
-          ? payload.reference_knowledge_document_ids
-          : (technicalPlan.referenceKnowledgeDocumentIds || []),
-        outlineWizard: technicalPlan.outlineWizard || null,
-      });
-    },
-    cancelOutlineGeneration() {
-      const task = activeTasks.get('outline-generation');
-      const control = activeTaskControls.get('outline-generation');
-      if (task && isActiveTaskStatus(task.status) && control?.requestPause) {
-        return control.requestPause();
-      }
-      const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
-      const outlineTask = technicalPlan.outlineGenerationTask;
-      if (outlineTask?.status === 'pausing' || outlineTask?.status === 'paused') {
-        return outlineTask;
-      }
-      // Fallback：内存中无活跃 runner，但数据库仍显示任务处于活跃/待推进状态
-      //（典型场景：分步向导步骤刚完成、前端已自动触发下一步但 runner 尚未注册，
-      // 或页面刷新后 recover 到 wizard-step-done 而前端仍显示"运行中"）。
-      // 此时直接把 DB 任务标记为用户取消，停止 auto-advance 并给出一致的前端状态。
-      if (outlineTask && (isActiveTaskStatus(outlineTask.status) || outlineTask.status === 'wizard-step-done')) {
-        const definition = getTaskDefinition('outline-generation');
-        const taskField = getTaskField('outline-generation');
-        const cancelledTask = {
-          ...outlineTask,
-          status: 'error',
-          error: '用户已取消当前目录生成环节',
-          pause_requested: true,
-          updated_at: now(),
-          logs: [...(Array.isArray(outlineTask.logs) ? outlineTask.logs : []), '用户已请求停止目录生成。'],
-        };
-        const state = updateWorkspaceState(definition, { [taskField]: cancelledTask });
-        emit(cancelledTask, buildSnapshot(definition, state, cancelledTask));
-        return cancelledTask;
-      }
-      throw new Error('当前没有正在生成的目录任务。');
     },
     startGlobalFactsGeneration(payload) {
       return startManagedTask('global-facts-generation', payload, runGlobalFactsTask, {
@@ -1060,6 +1070,15 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
         throw new Error('标书查重任务服务尚未初始化');
       }
       return startManagedTask('duplicate-analysis', payload, duplicateCheckService.runAnalysisTask);
+    },
+    confirmOutlineSelection(payload) {
+      const control = activeTaskControls.get('outline-generation');
+      if (!control?.confirmOutlineSelection) throw new Error('当前没有等待确认的一级目录任务');
+      return control.confirmOutlineSelection(payload);
+    },
+    async resetTechnicalPlan() {
+      await cancelOutlineGenerationForReset();
+      return technicalPlanStore.clearTechnicalPlan();
     },
     getActiveTasks() {
       recoverInterruptedBidSectionExtractionTask();

@@ -13,13 +13,9 @@ function registerTaskIpc({ taskService }) {
     taskService.subscribe(event.sender);
     return taskService.startOutlineGeneration(payload);
   });
-  ipcMain.handle('tasks:start-outline-step', (event, payload) => {
+  ipcMain.handle('tasks:confirm-outline-selection', (event, payload) => {
     taskService.subscribe(event.sender);
-    return taskService.startOutlineGenerationStep(payload);
-  });
-  ipcMain.handle('tasks:cancel-outline-generation', (event) => {
-    taskService.subscribe(event.sender);
-    return taskService.cancelOutlineGeneration();
+    return taskService.confirmOutlineSelection(payload);
   });
   ipcMain.handle('tasks:start-global-facts-generation', (event, payload) => {
     taskService.subscribe(event.sender);
