@@ -3,7 +3,7 @@ const { runBidSectionExtractionTask } = require('./bidSectionExtractionTask.cjs'
 const { runBidAnalysisTask } = require('./bidAnalysisTask.cjs');
 const { runContentGenerationTask } = require('./contentGenerationTask.cjs');
 const { runGlobalFactsTask } = require('./globalFactsTask.cjs');
-const { runOutlineGenerationTask, runOutlineWizardStep } = require('./outlineGenerationTask.cjs');
+const { runOutlineGenerationTask } = require('./outlineGenerationTask.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
 
 // 仅 recover 需要的 OUTLINE_PROGRESS 子集（与 outlineGenerationTask.cjs 保持一致）。
@@ -956,9 +956,20 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       });
     },
     startOutlineGenerationStep(payload) {
+      // 分步向导只是普通模式的辅助：底层始终是同一条 runOutlineGenerationTask，
+      // 这里把向导的「单步执行」请求翻译成「分阶段暂停」模式的统一入口，
+      // 不再有独立的 runOutlineWizardStep 并行流程。
       const technicalPlan = technicalPlanStore.loadTechnicalPlan() || {};
-      return startManagedTask('outline-generation', payload, runOutlineWizardStep, {
-        outlineMode: 'aligned',
+      const outlineMode = payload?.outline_mode === 'response-file' ? 'response-file' : 'aligned';
+      const taskPayload = {
+        ...payload,
+        stepped: true,
+        resumeFrom: typeof payload?.wizardStep === 'string' ? payload.wizardStep : null,
+        wizardRestart: Boolean(payload?.wizardRestart),
+        outline_mode: outlineMode,
+      };
+      return startManagedTask('outline-generation', taskPayload, runOutlineGenerationTask, {
+        outlineMode,
         outlineExpansionMode: payload?.outline_expansion_mode === 'original-only' ? 'original-only' : 'ai-complement',
         outlineWordControlOptions: payload?.word_control_options,
         // 非第一步（如 knowledge/review）payload 不会带 reference_knowledge_document_ids，

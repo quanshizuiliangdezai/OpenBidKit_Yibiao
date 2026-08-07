@@ -3618,7 +3618,184 @@ async function adjustOutlineForWordControl({ aiService, agentService, workspaceS
   };
 }
 
-async function runOutlineGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, updateTask, payload }) {
+// 单一阶段执行器：普通模式一次性运行与分步向导逐步运行共用同一套逻辑，
+// 确保两种入口产出完全一致；分步模式只是在每个阶段完成后暂停等待用户确认。
+// 返回该阶段执行后的共享状态片段（outline/groups/oldOutline/outlineStats/字数警告）。
+async function runOutlineStage(step, ctx) {
+  const {
+    aiService,
+    agentService,
+    knowledgeBaseService,
+    workspaceStore,
+    log,
+    baseTaskPayload,
+    isExpansionWorkflow,
+    outlineMode,
+    wordControl,
+    wordControlOptions,
+    oldOutline,
+    groups,
+    outline,
+    resumeOutline,
+  } = ctx;
+  const stagePayload = { ...baseTaskPayload, oldOutline: formatOldOutlineForPrompt(oldOutline) };
+  let nextOutline = outline;
+  let nextGroups = groups;
+  let nextOldOutline = oldOutline;
+  let outlineStats;
+  let wordControlWarning = '';
+  let wordControlWarningKind = '';
+
+  if (step === 'extract') {
+    if (!isExpansionWorkflow) {
+      throw new Error('提取原方案目录仅适用于原方案扩充流程');
+    }
+    if (!workspaceStore.readOriginalPlanMarkdown) {
+      throw new Error('原方案读取服务尚未初始化');
+    }
+    const originalPlanMarkdown = workspaceStore.readOriginalPlanMarkdown();
+    if (!String(originalPlanMarkdown || '').trim()) {
+      throw new Error('请先上传原方案，再生成目录');
+    }
+    if (wordControlOptions.maximumWords > 0) {
+      const originalWords = countReadableWords(originalPlanMarkdown);
+      if (originalWords > wordControlOptions.maximumWords) {
+        throw new Error(`原方案当前约 ${originalWords} 字，已超过设置的最多 ${wordControlOptions.maximumWords} 字，无法继续生成目录。`);
+      }
+    }
+    nextOldOutline = isOriginalOutlineAgentModeEnabled(aiService)
+      ? await extractOriginalOutlineWithAgent(agentService, workspaceStore, stagePayload, originalPlanMarkdown, log)
+      : await extractOriginalOutline(aiService, workspaceStore, originalPlanMarkdown, log);
+    nextOutline = nextOldOutline;
+  } else if (step === 'main') {
+    if (isExpansionWorkflow) {
+      nextOutline = await expansionComplementWorkflow(aiService, stagePayload, nextOldOutline, log);
+    } else if (outlineMode === 'response-file') {
+      const responseFileResult = await responseFileWorkflow(aiService, agentService, stagePayload, log, resumeOutline);
+      nextOutline = responseFileResult.outline;
+      nextGroups = responseFileResult.groups || [];
+    } else {
+      const alignedResult = await alignedWorkflow(aiService, agentService, stagePayload, log, resumeOutline);
+      nextOutline = alignedResult.outline;
+      nextGroups = alignedResult.groups || [];
+    }
+    outlineStats = {
+      phase: 'generating',
+      current_leaf_count: countOutlineLeafItems(nextOutline?.outline || []),
+      ...(wordControl.minimumLeafCount === null ? {} : { minimum_leaf_count: wordControl.minimumLeafCount }),
+      ...(wordControl.maximumLeafCount === null ? {} : { maximum_leaf_count: wordControl.maximumLeafCount }),
+      word_adjustment_attempts: 0,
+    };
+  } else if (step === 'knowledge') {
+    if (!nextOutline || !nextOutline.outline) {
+      throw new Error('未找到上一步生成的主目录，请重新执行主目录生成');
+    }
+    const knowledgeItems = loadOutlineKnowledgeItems(knowledgeBaseService, baseTaskPayload.reference_knowledge_document_ids, log);
+    nextOutline = await enhanceOutlineWithKnowledgeAdditions(aiService, stagePayload, nextOutline, knowledgeItems, log);
+    outlineStats = {
+      phase: 'reviewing',
+      current_leaf_count: countOutlineLeafItems(nextOutline?.outline || []),
+      ...(wordControl.minimumLeafCount === null ? {} : { minimum_leaf_count: wordControl.minimumLeafCount }),
+      ...(wordControl.maximumLeafCount === null ? {} : { maximum_leaf_count: wordControl.maximumLeafCount }),
+      word_adjustment_attempts: 0,
+    };
+  } else if (step === 'review') {
+    if (!nextOutline || !nextOutline.outline) {
+      throw new Error('未找到上一步生成的主目录，请重新执行主目录生成');
+    }
+    const finalResult = await runFinalOutlineGate({
+      aiService,
+      agentService,
+      payload: stagePayload,
+      outline: nextOutline,
+      groups: nextGroups,
+      originalOutline: nextOldOutline,
+      workflowKind: isExpansionWorkflow ? 'existing-plan-expansion' : 'technical-plan',
+      outlineMode,
+      outlineExpansionMode: baseTaskPayload.outlineExpansionMode,
+      log,
+    });
+    nextOutline = finalResult.outline;
+    nextGroups = finalResult.groups || nextGroups;
+    outlineStats = {
+      phase: 'reviewing',
+      current_leaf_count: countOutlineLeafItems(nextOutline?.outline || []),
+      ...(wordControl.minimumLeafCount === null ? {} : { minimum_leaf_count: wordControl.minimumLeafCount }),
+      ...(wordControl.maximumLeafCount === null ? {} : { maximum_leaf_count: wordControl.maximumLeafCount }),
+      word_adjustment_attempts: 0,
+    };
+  } else if (step === 'audit') {
+    if (!nextOutline || !nextOutline.outline) {
+      throw new Error('未找到上一步生成的目录，请重新执行');
+    }
+    const auditResult = await runOutlineComplianceAudit({
+      aiService,
+      payload: stagePayload,
+      outline: nextOutline,
+      groups: nextGroups,
+      log,
+    });
+    nextOutline = auditResult.outline;
+  } else if (step === 'word') {
+    if (!nextOutline || !nextOutline.outline) {
+      throw new Error('未找到上一步生成的目录，请重新执行');
+    }
+    if (wordControl.minimumLeafCount !== null || wordControl.maximumLeafCount !== null) {
+      outlineStats = {
+        phase: 'word-adjusting',
+        current_leaf_count: countOutlineLeafItems(nextOutline?.outline || []),
+        ...(wordControl.minimumLeafCount === null ? {} : { minimum_leaf_count: wordControl.minimumLeafCount }),
+        ...(wordControl.maximumLeafCount === null ? {} : { maximum_leaf_count: wordControl.maximumLeafCount }),
+        word_adjustment_attempts: 0,
+      };
+      const adjusted = await adjustOutlineForWordControl({
+        aiService,
+        agentService,
+        workspaceStore,
+        payload: stagePayload,
+        outline: nextOutline,
+        groups: nextGroups,
+        originalOutline: nextOldOutline,
+        workflowKind: isExpansionWorkflow ? 'existing-plan-expansion' : 'technical-plan',
+        outlineMode,
+        outlineExpansionMode: baseTaskPayload.outlineExpansionMode,
+        wordControlOptions,
+        wordControl,
+        log,
+        onStats: ({ phase, attempts, leafCount }) => {
+          outlineStats = {
+            ...outlineStats,
+            phase,
+            current_leaf_count: leafCount,
+            word_adjustment_attempts: attempts,
+          };
+        },
+      });
+      nextOutline = adjusted.outline;
+      wordControlWarning = adjusted.warning;
+      wordControlWarningKind = adjusted.warningKind || '';
+      outlineStats = {
+        ...outlineStats,
+        current_leaf_count: adjusted.leafCount,
+        word_adjustment_attempts: adjusted.attempts,
+      };
+    } else {
+      outlineStats = {
+        phase: 'done',
+        current_leaf_count: countOutlineLeafItems(nextOutline?.outline || []),
+        ...(wordControl.minimumLeafCount === null ? {} : { minimum_leaf_count: wordControl.minimumLeafCount }),
+        ...(wordControl.maximumLeafCount === null ? {} : { maximum_leaf_count: wordControl.maximumLeafCount }),
+        word_adjustment_attempts: 0,
+      };
+    }
+  } else {
+    throw new Error(`未知的向导步骤：${step}`);
+  }
+
+  return { outline: nextOutline, groups: nextGroups, oldOutline: nextOldOutline, outlineStats, wordControlWarning, wordControlWarningKind };
+}
+
+async function runOutlineGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, updateTask, payload, taskControl }) {
   let logs = ['开始生成目录。'];
   let currentProgress = OUTLINE_PROGRESS.start;
   const wordControlOptions = normalizeOutlineWordControlOptions(payload?.word_control_options);
@@ -3632,6 +3809,11 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
   };
   const taskStats = () => ({ outline: { ...outlineStats } });
   function log(message, progress = currentProgress) {
+    // 用户在分步向导或普通模式下点击「停止」后，每个阶段/子步骤的 log 都会抛错中断，
+    // 使停止能真正生效（而不是一直跑到函数末尾）。
+    if (taskControl?.isPauseRequested?.()) {
+      throw new Error('用户已取消当前目录生成环节');
+    }
     currentProgress = Math.max(currentProgress, Math.min(progress, OUTLINE_PROGRESS.finalizing));
     logs = [...logs, message];
     const task = updateTask({ status: 'running', progress: currentProgress, logs, stats: taskStats() });
@@ -3675,145 +3857,162 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
   });
   updateTask({ status: 'running', progress: OUTLINE_PROGRESS.start, logs, stats: taskStats() }, technicalPlan);
 
-  let oldOutline = null;
-  if (isExpansionWorkflow) {
-    if (!storedPlan.originalPlanFile) {
-      throw new Error('请先上传原方案，再生成目录');
+  // ---- 统一执行核心 ----
+  // 无论是否分步，目录生成都走同一套阶段逻辑（runOutlineStage），
+  // 保证普通模式与分步向导产出完全一致；分步模式只是在每个阶段完成后暂停等待用户确认。
+  // 这是把「分步向导」从独立并行流程改为「普通模式的辅助控制台」的关键：
+  // 底层始终是同一条 runOutlineGenerationTask，开关只控制是否在阶段间暂停。
+  const stepped = Boolean(payload?.stepped);
+  const wizardRestart = Boolean(payload?.wizardRestart);
+  const orderedSteps = getOutlineWizardOrderedSteps({ isExpansionWorkflow, outlineExpansionMode });
+  const resumeFrom = typeof payload?.resumeFrom === 'string' ? payload.resumeFrom : null;
+
+  // 仅在分步模式下维护 outlineWizard 游标；普通模式一次性跑完，不写游标，
+  // 避免污染向导状态。wizard 为 null 表示当前是普通模式（无游标）。
+  let wizard = null;
+  let isFresh = true;
+  let startIndex = 0;
+  if (stepped) {
+    wizard = storedPlan.outlineWizard || null;
+    // 防御：残留向导的工作流与当前工作流不一致，强制全新开始。
+    if (wizard && wizard.workflowKind !== storedPlan.workflowKind) {
+      wizard = null;
     }
-    if (!workspaceStore.readOriginalPlanMarkdown) {
-      throw new Error('原方案读取服务尚未初始化');
-    }
-    const originalPlanMarkdown = workspaceStore.readOriginalPlanMarkdown();
-    if (!String(originalPlanMarkdown || '').trim()) {
-      throw new Error('请先上传原方案，再生成目录');
-    }
-    if (wordControlOptions.maximumWords > 0) {
-      const originalWords = countReadableWords(originalPlanMarkdown);
-      if (originalWords > wordControlOptions.maximumWords) {
-        throw new Error(`原方案当前约 ${originalWords} 字，已超过设置的最多 ${wordControlOptions.maximumWords} 字，无法继续生成目录。`);
+    isFresh = wizardRestart || !wizard || !wizard.active;
+    if (isFresh) {
+      // 全新开始时初始化持久化游标（completedSteps / oldOutline / groups 等）。
+      wizard = {
+        active: true,
+        completedSteps: [],
+        currentStep: null,
+        workflowKind: storedPlan.workflowKind,
+        outlineExpansionMode,
+        wordControlOptions,
+        referenceKnowledgeDocumentIds: normalizeReferenceDocumentIds(payload),
+        oldOutline: null,
+        groups: [],
+      };
+    } else if (resumeFrom) {
+      const idx = orderedSteps.indexOf(resumeFrom);
+      if (idx < 0 || idx !== wizard.completedSteps.length) {
+        throw new Error(`请按顺序执行下一步「${OUTLINE_WIZARD_STEP_LABELS[orderedSteps[wizard.completedSteps.length]]}」`);
       }
+      startIndex = idx;
+    } else {
+      startIndex = Math.min(wizard.completedSteps.length, orderedSteps.length - 1);
     }
-    oldOutline = isOriginalOutlineAgentModeEnabled(aiService)
-      ? await extractOriginalOutlineWithAgent(agentService, workspaceStore, baseTaskPayload, originalPlanMarkdown, log)
-      : await extractOriginalOutline(aiService, workspaceStore, originalPlanMarkdown, log);
   }
 
-  technicalPlan = workspaceStore.updateTechnicalPlan({
-    outlineData: null,
-    contentGenerationTask: undefined,
-    contentGenerationSections: {},
-    contentGenerationPlans: {},
-    contentGenerationRuntime: undefined,
-    contentIllustrationPlan: undefined,
-    outlineWordControlSnapshot: undefined,
-    outlineGenerationTask: updateTask({ status: 'running', progress: currentProgress, logs, stats: taskStats() }),
-  });
-  updateTask({ status: 'running', progress: currentProgress, logs, stats: taskStats() }, technicalPlan);
+  // 全新开始（普通模式每次都是；分步模式仅首次）清空中间态；
+  // 分步续传时保留 outlineData / outlineWizard。
+  if (!stepped || isFresh) {
+    technicalPlan = workspaceStore.updateTechnicalPlan({
+      outlineData: null,
+      contentGenerationTask: undefined,
+      contentGenerationSections: {},
+      contentGenerationPlans: {},
+      contentGenerationRuntime: undefined,
+      contentIllustrationPlan: undefined,
+      outlineWordControlSnapshot: undefined,
+      outlineGenerationTask: updateTask({ status: 'running', progress: currentProgress, logs, stats: taskStats() }),
+      outlineWizard: stepped ? wizard : null,
+    });
+    updateTask({ status: 'running', progress: currentProgress, logs, stats: taskStats() }, technicalPlan);
+  }
 
-  const taskPayload = {
-    ...baseTaskPayload,
-    oldOutline: formatOldOutlineForPrompt(oldOutline),
+  // 续传所需的共享配置取自持久化游标（避免后续步骤 payload 缺失而回退到空值）。
+  // 普通模式（wizard 为 null）直接用本次 payload 的配置。
+  const effectiveWordControlOptions = wizard ? (wizard.wordControlOptions || wordControlOptions) : wordControlOptions;
+  const effectiveWordControl = deriveOutlineWordControl(effectiveWordControlOptions);
+  const effectiveReferenceIds = wizard && Array.isArray(wizard.referenceKnowledgeDocumentIds)
+    ? wizard.referenceKnowledgeDocumentIds
+    : normalizeReferenceDocumentIds(payload);
+  const effectiveExpansionMode = wizard ? (wizard.outlineExpansionMode || outlineExpansionMode) : outlineExpansionMode;
+  const effectiveOutlineMode = isExpansionWorkflow ? 'aligned' : (storedPlan.outlineMode || payload?.outline_mode || 'aligned');
+  const stageBasePayload = {
+    ...payload,
+    overview,
+    requirements,
+    outlineMode: effectiveOutlineMode,
+    responseFileRequirements,
+    outlineExpansionMode: effectiveExpansionMode,
+    wordControlOptions: effectiveWordControlOptions,
+    reference_knowledge_document_ids: effectiveReferenceIds,
   };
 
-  let outline;
-  let groups = [];
-  if (isExpansionWorkflow) {
-    if (outlineExpansionMode === 'original-only') {
-      log('已选择仅使用原方案目录，跳过AI补充和知识库补目录。', OUTLINE_PROGRESS.finalizing);
+  let oldOutline = wizard ? (wizard.oldOutline || null) : null;
+  let groups = wizard && Array.isArray(wizard.groups) ? wizard.groups : [];
+  let outline = startIndex > 0 ? (storedPlan.outlineData || null) : null;
+  const resumeOutline = startIndex > 0 ? (storedPlan.outlineData || null) : null;
+  let wordControlWarning = '';
+  let wordControlWarningKind = '';
+
+  for (let i = startIndex; i < orderedSteps.length; i += 1) {
+    const step = orderedSteps[i];
+    const stageResult = await runOutlineStage(step, {
+      aiService,
+      agentService,
+      knowledgeBaseService,
+      workspaceStore,
+      log,
+      baseTaskPayload: stageBasePayload,
+      isExpansionWorkflow,
+      outlineMode: effectiveOutlineMode,
+      wordControl: effectiveWordControl,
+      wordControlOptions: effectiveWordControlOptions,
+      oldOutline,
+      groups,
+      outline,
+      resumeOutline,
+    });
+    outline = stageResult.outline;
+    groups = Array.isArray(stageResult.groups) ? stageResult.groups : groups;
+    if (stageResult.oldOutline !== undefined) oldOutline = stageResult.oldOutline;
+    if (stageResult.outlineStats) outlineStats = stageResult.outlineStats;
+    if (stageResult.wordControlWarning !== undefined) wordControlWarning = stageResult.wordControlWarning;
+    if (stageResult.wordControlWarningKind !== undefined) wordControlWarningKind = stageResult.wordControlWarningKind;
+
+    // 关键校验：任何阶段必须产出非空目录，否则后续阶段基于空目录空转，
+    // 最终显示完成但实际无目录（此前分步向导的已知 bug）。
+    if (!outline || !Array.isArray(outline.outline) || outline.outline.length === 0) {
+      throw new Error(`「${OUTLINE_WIZARD_STEP_LABELS[step]}」未产生有效目录，请检查招标文件解析内容是否完整，或点击重试。`);
+    }
+
+    const nextCompletedSteps = orderedSteps.slice(0, i + 1);
+    const nextStepIndex = i + 1;
+    const nextCurrentStep = orderedSteps[Math.min(nextStepIndex, orderedSteps.length - 1)];
+    const nextWizard = { ...wizard, completedSteps: nextCompletedSteps, currentStep: nextCurrentStep, oldOutline, groups };
+    const finalOutlineData = { ...outline, project_overview: overview };
+    const isLast = i === orderedSteps.length - 1;
+
+    if (stepped && !isLast) {
+      // 分步模式：当前阶段完成但未到末步，持久化进度并暂停，等待用户点「下一步」。
       outlineStats = {
         ...outlineStats,
         phase: 'done',
-        current_leaf_count: countOutlineLeafItems(oldOutline?.outline || []),
+        current_leaf_count: countOutlineLeafItems(outline.outline),
       };
-      const finalLogs = [...logs, '目录生成完成。'];
-      const finalTask = updateTask({ status: 'success', progress: OUTLINE_PROGRESS.complete, logs: finalLogs, stats: taskStats() });
-      technicalPlan = workspaceStore.updateTechnicalPlan({
-        outlineData: { ...oldOutline, project_overview: overview },
-        outlineWordControlSnapshot: wordControlOptions,
-        contentGenerationTask: undefined,
-        contentGenerationSections: {},
-        contentGenerationPlans: {},
-        contentGenerationRuntime: undefined,
-        contentIllustrationPlan: undefined,
-        outlineGenerationTask: finalTask,
+      const finalLogs = [...logs, `「${OUTLINE_WIZARD_STEP_LABELS[step]}」已完成，可继续执行下一步。`];
+      const finalTask = updateTask({
+        status: 'wizard-step-done',
+        progress: OUTLINE_WIZARD_STEP_PROGRESS[step] || OUTLINE_PROGRESS.mainComplete,
+        logs: finalLogs,
+        stats: taskStats(),
       });
-      updateTask(finalTask, technicalPlan);
+      const technicalPlan = workspaceStore.updateTechnicalPlan({
+        outlineData: finalOutlineData,
+        outlineGenerationTask: finalTask,
+        outlineWizard: nextWizard,
+      });
+      // 显式把 outlineData/outlineWizard 作为 eventPatch 推给前端，避免 buildSnapshot
+      // 从只更新了 task 的 persistedState 读到旧游标导致自动推进算错下一步。
+      updateTask(finalTask, technicalPlan, { outlineData: finalOutlineData, outlineWizard: nextWizard });
       return;
-    } else {
-      outline = await expansionComplementWorkflow(aiService, taskPayload, oldOutline, log);
     }
-  } else {
-    const alignedResult = outlineMode === 'response-file'
-      ? await responseFileWorkflow(aiService, agentService, taskPayload, log)
-      : await alignedWorkflow(aiService, agentService, taskPayload, log);
-    outline = alignedResult.outline;
-    groups = alignedResult.groups || [];
   }
 
-  const knowledgeItems = loadOutlineKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, log);
-  outline = await enhanceOutlineWithKnowledgeAdditions(aiService, taskPayload, outline, knowledgeItems, log);
-  outlineStats = {
-    ...outlineStats,
-    phase: 'reviewing',
-    current_leaf_count: countOutlineLeafItems(outline?.outline || []),
-  };
-  const finalResult = await runFinalOutlineGate({
-    aiService,
-    agentService,
-    payload: taskPayload,
-    outline,
-    groups,
-    originalOutline: oldOutline,
-    workflowKind: isExpansionWorkflow ? 'existing-plan-expansion' : 'technical-plan',
-    outlineMode,
-    outlineExpansionMode,
-    log,
-  });
-  outline = finalResult.outline;
-  groups = finalResult.groups || groups;
-  outlineStats = {
-    ...outlineStats,
-    phase: 'reviewing',
-    current_leaf_count: countOutlineLeafItems(outline?.outline || []),
-  };
-  let wordControlWarning = '';
-  let wordControlWarningKind = '';
-  if (wordControl.minimumLeafCount !== null || wordControl.maximumLeafCount !== null) {
-    const initialDistance = getLeafCountDistance(outlineStats.current_leaf_count, wordControl.minimumLeafCount, wordControl.maximumLeafCount);
-    if (initialDistance > 0) {
-      const adjusted = await adjustOutlineForWordControl({
-        aiService,
-        agentService,
-        workspaceStore,
-        payload: taskPayload,
-        outline,
-        groups,
-        originalOutline: oldOutline,
-        workflowKind: isExpansionWorkflow ? 'existing-plan-expansion' : 'technical-plan',
-        outlineMode,
-        outlineExpansionMode,
-        wordControlOptions,
-        wordControl,
-        log,
-        onStats: ({ phase, attempts, leafCount }) => {
-          outlineStats = {
-            ...outlineStats,
-            phase,
-            current_leaf_count: leafCount,
-            word_adjustment_attempts: attempts,
-          };
-        },
-      });
-      outline = adjusted.outline;
-      wordControlWarning = adjusted.warning;
-      wordControlWarningKind = adjusted.warningKind || '';
-      outlineStats = {
-        ...outlineStats,
-        current_leaf_count: adjusted.leafCount,
-        word_adjustment_attempts: adjusted.attempts,
-      };
-    }
-  }
+  // 全部阶段完成（或普通模式一次性跑完）→ 成功终态。
+  // original-only 流程只有 extract 一个阶段，也会落到这里。
   outlineStats = {
     ...outlineStats,
     phase: 'done',
@@ -3824,69 +4023,19 @@ async function runOutlineGenerationTask({ aiService, agentService, workspaceStor
   const finalTask = updateTask({ status: 'success', progress: OUTLINE_PROGRESS.complete, logs: finalLogs, stats: taskStats() });
   technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineData: { ...outline, project_overview: overview },
-    outlineWordControlSnapshot: wordControlOptions,
+    outlineWordControlSnapshot: effectiveWordControlOptions,
     contentGenerationTask: undefined,
     contentGenerationSections: {},
     contentGenerationPlans: {},
     contentGenerationRuntime: undefined,
     contentIllustrationPlan: undefined,
     outlineGenerationTask: finalTask,
+    outlineWizard: wizard ? { ...wizard, active: false } : null,
   });
   updateTask(finalTask, technicalPlan);
 }
 
-module.exports = { runOutlineGenerationTask, runOutlineWizardStep };
-function tryParsePartialOutlineFromOutput(outputContent) {
-  try {
-    const parsed = parseAgentJsonContent(outputContent);
-    if (parsed && Array.isArray(parsed.outline) && parsed.outline.length) {
-      return normalizeOutlineResponse(parsed, new Set());
-    }
-    if (Array.isArray(parsed)) {
-      return normalizeOutlineResponse({ outline: parsed }, new Set());
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
-// 根据当前已掌握的上下文，构造一个“尽力而为”的部分目录，用于失败时保存进度。
-function buildPartialOutline(context = {}) {
-  if (context.partialOutline && Array.isArray(context.partialOutline.outline)) {
-    return context.partialOutline;
-  }
-  if (context.outline && Array.isArray(context.outline.outline)) {
-    return context.outline;
-  }
-  if (context.agentPartialOutput) {
-    const fromOutput = tryParsePartialOutlineFromOutput(context.agentPartialOutput);
-    if (fromOutput) return fromOutput;
-  }
-  // 不要从 groups 构造只有一级目录的“平目录”作为进度保存：
-  // 用户中断时这会误导前端和后续续写，让界面显示一个已完成但无下级的目录。
-  return null;
-}
-
-// 失败时把已有进度写回 workspaceStore，并让错误对象带上 partialOutline，方便调用方/UI 提示。
-function persistPartialOutlineOnError(workspaceStore, context, error) {
-  const partialOutline = buildPartialOutline({
-    outline: context.outline,
-    groups: context.groups,
-    agentPartialOutput: error?.agentPartialOutput,
-  });
-  if (partialOutline) {
-    try {
-      workspaceStore.updateTechnicalPlan({ outlineData: partialOutline });
-    } catch {
-      // 持久化失败不应掩盖原始错误
-    }
-    if (error && typeof error === 'object') {
-      error.partialOutline = partialOutline;
-    }
-  }
-  return partialOutline;
-}
+module.exports = { runOutlineGenerationTask };
 
 const OUTLINE_WIZARD_STEP_LABELS = Object.freeze({
   extract: '提取原方案目录',
@@ -3915,324 +4064,3 @@ function getOutlineWizardOrderedSteps({ isExpansionWorkflow, outlineExpansionMod
   }
   return ['main', 'knowledge', 'review', 'audit', 'word'];
 }
-
-// 分步向导：按 payload.wizardStep 逐步执行目录生成各阶段，每步持久化中间结果，
-// 非末步置 wizard-step-done 等待用户确认下一步；末步置 success 完成向导。
-// 与一次性 runOutlineGenerationTask 互不干扰，作为“分步生成”的替代入口。
-async function runOutlineWizardStep({ aiService, agentService, workspaceStore, knowledgeBaseService, updateTask, payload, taskControl }) {
-  const step = payload?.wizardStep;
-  if (!step) {
-    throw new Error('缺少向导步骤参数 wizardStep');
-  }
-
-  let logs = ['开始分步生成目录（向导模式）。'];
-  let currentProgress = OUTLINE_PROGRESS.start;
-  const wordControlOptions = normalizeOutlineWordControlOptions(payload?.word_control_options);
-  const wordControl = deriveOutlineWordControl(wordControlOptions);
-  let outlineStats = {
-    phase: 'generating',
-    current_leaf_count: 0,
-    ...(wordControl.minimumLeafCount === null ? {} : { minimum_leaf_count: wordControl.minimumLeafCount }),
-    ...(wordControl.maximumLeafCount === null ? {} : { maximum_leaf_count: wordControl.maximumLeafCount }),
-    word_adjustment_attempts: 0,
-  };
-  const taskStats = () => ({ outline: { ...outlineStats } });
-  function log(message, progress = currentProgress) {
-    if (taskControl?.isPauseRequested?.()) {
-      throw new Error('用户已取消当前目录生成环节');
-    }
-    currentProgress = Math.max(currentProgress, Math.min(progress, OUTLINE_PROGRESS.finalizing));
-    logs = [...logs, message];
-    const task = updateTask({ status: 'running', progress: currentProgress, logs, stats: taskStats() });
-    const technicalPlan = workspaceStore.updateTechnicalPlan({ outlineGenerationTask: task });
-    updateTask(task, technicalPlan);
-  }
-
-  const storedPlan = workspaceStore.loadTechnicalPlan() || {};
-  const missingRequiredBidAnalysisLabels = getMissingRequiredBidAnalysisLabels(storedPlan);
-  if (missingRequiredBidAnalysisLabels.length) {
-    throw new Error(`请先完成关键招标文件解析项：${missingRequiredBidAnalysisLabels.join('、')}`);
-  }
-  const isExpansionWorkflow = storedPlan.workflowKind === 'existing-plan-expansion';
-  const overview = storedPlan.projectOverview || '';
-  const requirements = storedPlan.techRequirements || '';
-  const outlineMode = isExpansionWorkflow ? 'aligned' : (storedPlan.outlineMode || payload?.outline_mode || 'aligned');
-  const responseFileTask = storedPlan.bidAnalysisTasks?.responseFileRequirements;
-  const responseFileRequirements = outlineMode === 'response-file' && responseFileTask?.status === 'success'
-    ? String(responseFileTask.content || '').trim()
-    : '';
-  if (outlineMode === 'response-file' && !responseFileRequirements) {
-    throw new Error('请先在招标文件解析中完成“响应文件要求”，再按响应文件要求生成一级目录。');
-  }
-
-  let wizard = storedPlan.outlineWizard || null;
-  const forceRestart = Boolean(payload?.wizardRestart);
-  // 防御：残留向导的工作流与当前工作流不一致（例如曾用生成技术方案跑过向导，
-  // 再切到已有方案扩写但未清向导状态），强制当作全新第一步重置，避免沿用旧
-  // workflowKind 算出错误步骤数或误判为已完成。
-  if (wizard && wizard.workflowKind !== storedPlan.workflowKind) {
-    wizard = null;
-  }
-  const effectiveExpansionMode = wizard
-    ? wizard.outlineExpansionMode
-    : (isExpansionWorkflow ? normalizeOutlineExpansionMode(payload, storedPlan) : 'aligned');
-  const orderedSteps = getOutlineWizardOrderedSteps({ isExpansionWorkflow, outlineExpansionMode: effectiveExpansionMode });
-
-  const isFirstStep = forceRestart || !wizard || !wizard.active;
-  const previousTask = storedPlan.outlineGenerationTask;
-  const isResumeFromFailure = !isFirstStep && previousTask?.status === 'error';
-  const resumeOutline = isResumeFromFailure ? storedPlan.outlineData : null;
-  if (resumeOutline?.outline?.length) {
-    log('检测到上次目录生成失败，将从已保存进度续写。', OUTLINE_PROGRESS.start);
-  }
-
-  if (isFirstStep) {
-    if (step !== orderedSteps[0]) {
-      throw new Error(`请先从第一步「${OUTLINE_WIZARD_STEP_LABELS[orderedSteps[0]]}」开始分步生成目录`);
-    }
-    const outlineExpansionMode = isExpansionWorkflow ? normalizeOutlineExpansionMode(payload, storedPlan) : 'aligned';
-    wizard = {
-      active: true,
-      completedSteps: [],
-      currentStep: null,
-      workflowKind: storedPlan.workflowKind,
-      outlineExpansionMode,
-      wordControlOptions,
-      referenceKnowledgeDocumentIds: normalizeReferenceDocumentIds(payload),
-      originalOnly: outlineExpansionMode === 'original-only',
-      oldOutline: null,
-      groups: [],
-    };
-    workspaceStore.updateTechnicalPlan({
-      outlineData: null,
-      outlineGenerationTask: undefined,
-      contentGenerationTask: undefined,
-      contentGenerationSections: {},
-      contentGenerationPlans: {},
-      contentGenerationRuntime: undefined,
-      contentIllustrationPlan: undefined,
-      outlineWordControlSnapshot: undefined,
-      outlineWizard: null,
-    });
-  } else {
-    const expectedStep = orderedSteps[wizard.completedSteps.length];
-    if (step !== expectedStep) {
-      throw new Error(`请按顺序执行下一步「${OUTLINE_WIZARD_STEP_LABELS[expectedStep]}」`);
-    }
-  }
-
-  log(`向导步骤：开始「${OUTLINE_WIZARD_STEP_LABELS[step]}」。`, OUTLINE_PROGRESS.start);
-
-  const baseTaskPayload = {
-    ...payload,
-    overview,
-    requirements,
-    outlineMode,
-    responseFileRequirements,
-    outlineExpansionMode: wizard.outlineExpansionMode,
-    wordControlOptions: wizard.wordControlOptions,
-    reference_knowledge_document_ids: wizard.referenceKnowledgeDocumentIds,
-  };
-
-  let oldOutline = wizard.oldOutline;
-  let groups = Array.isArray(wizard.groups) ? wizard.groups : [];
-  let outline = null;
-  let wordControlWarning = '';
-  let wordControlWarningKind = '';
-
-  try {
-  if (step === 'extract') {
-    if (!isExpansionWorkflow) {
-      throw new Error('提取原方案目录仅适用于原方案扩充流程');
-    }
-    if (!storedPlan.originalPlanFile) {
-      throw new Error('请先上传原方案，再生成目录');
-    }
-    if (!workspaceStore.readOriginalPlanMarkdown) {
-      throw new Error('原方案读取服务尚未初始化');
-    }
-    const originalPlanMarkdown = workspaceStore.readOriginalPlanMarkdown();
-    if (!String(originalPlanMarkdown || '').trim()) {
-      throw new Error('请先上传原方案，再生成目录');
-    }
-    oldOutline = isOriginalOutlineAgentModeEnabled(aiService)
-      ? await extractOriginalOutlineWithAgent(agentService, workspaceStore, baseTaskPayload, originalPlanMarkdown, log)
-      : await extractOriginalOutline(aiService, workspaceStore, originalPlanMarkdown, log);
-    outline = oldOutline;
-  } else if (step === 'main') {
-    if (isExpansionWorkflow) {
-      outline = await expansionComplementWorkflow(aiService, { ...baseTaskPayload, oldOutline: formatOldOutlineForPrompt(oldOutline) }, oldOutline, log);
-    } else if (outlineMode === 'response-file') {
-      const responseFileResult = await responseFileWorkflow(aiService, agentService, { ...baseTaskPayload, oldOutline: formatOldOutlineForPrompt(oldOutline) }, log, resumeOutline);
-      outline = responseFileResult.outline;
-      groups = responseFileResult.groups || [];
-    } else {
-      const alignedResult = await alignedWorkflow(aiService, agentService, { ...baseTaskPayload, oldOutline: formatOldOutlineForPrompt(oldOutline) }, log, resumeOutline);
-      outline = alignedResult.outline;
-      groups = alignedResult.groups || [];
-    }
-  } else if (step === 'knowledge') {
-    outline = storedPlan.outlineData;
-    if (!outline || !outline.outline) {
-      throw new Error('未找到上一步生成的主目录，请重新执行主目录生成');
-    }
-    const knowledgeItems = loadOutlineKnowledgeItems(knowledgeBaseService, wizard.referenceKnowledgeDocumentIds, log);
-    outline = await enhanceOutlineWithKnowledgeAdditions(aiService, { ...baseTaskPayload, oldOutline: formatOldOutlineForPrompt(oldOutline) }, outline, knowledgeItems, log);
-  } else if (step === 'review') {
-    outline = storedPlan.outlineData;
-    if (!outline || !outline.outline) {
-      throw new Error('未找到上一步生成的主目录，请重新执行主目录生成');
-    }
-    const finalResult = await runFinalOutlineGate({
-      aiService,
-      agentService,
-      payload: { ...baseTaskPayload, oldOutline: formatOldOutlineForPrompt(oldOutline) },
-      outline,
-      groups,
-      originalOutline: oldOutline,
-      workflowKind: isExpansionWorkflow ? 'existing-plan-expansion' : 'technical-plan',
-      outlineMode,
-      outlineExpansionMode: wizard.outlineExpansionMode,
-      log,
-    });
-    outline = finalResult.outline;
-    groups = finalResult.groups || groups;
-  } else if (step === 'audit') {
-    outline = storedPlan.outlineData;
-    if (!outline || !outline.outline) {
-      throw new Error('未找到上一步生成的目录，请重新执行');
-    }
-    const auditResult = await runOutlineComplianceAudit({
-      aiService,
-      payload: baseTaskPayload,
-      outline,
-      groups,
-      log,
-    });
-    outline = auditResult.outline;
-  } else if (step === 'word') {
-    outline = storedPlan.outlineData;
-    if (!outline || !outline.outline) {
-      throw new Error('未找到上一步生成的目录，请重新执行');
-    }
-    if (wordControl.minimumLeafCount !== null || wordControl.maximumLeafCount !== null) {
-      outlineStats = {
-        ...outlineStats,
-        phase: 'word-adjusting',
-        current_leaf_count: countOutlineLeafItems(outline?.outline || []),
-      };
-      const adjusted = await adjustOutlineForWordControl({
-        aiService,
-        agentService,
-        workspaceStore,
-        payload: { ...baseTaskPayload, oldOutline: formatOldOutlineForPrompt(oldOutline) },
-        outline,
-        groups,
-        originalOutline: oldOutline,
-        workflowKind: isExpansionWorkflow ? 'existing-plan-expansion' : 'technical-plan',
-        outlineMode,
-        outlineExpansionMode: wizard.outlineExpansionMode,
-        wordControlOptions: wizard.wordControlOptions,
-        wordControl,
-        log,
-        onStats: ({ phase, attempts, leafCount }) => {
-          outlineStats = {
-            ...outlineStats,
-            phase,
-            current_leaf_count: leafCount,
-            word_adjustment_attempts: attempts,
-          };
-        },
-      });
-      outline = adjusted.outline;
-      wordControlWarning = adjusted.warning;
-      wordControlWarningKind = adjusted.warningKind || '';
-      outlineStats = {
-        ...outlineStats,
-        current_leaf_count: adjusted.leafCount,
-        word_adjustment_attempts: adjusted.attempts,
-      };
-    } else {
-      outlineStats = {
-        ...outlineStats,
-        phase: 'done',
-        current_leaf_count: countOutlineLeafItems(outline?.outline || []),
-      };
-    }
-  } else {
-    throw new Error(`未知的向导步骤：${step}`);
-  }
-
-  // 关键校验：主目录生成步骤必须产生非空目录；否则后续步骤会基于空目录空转，
-  // 最终向导显示全部完成但实际没有任何目录。知识库/审核/字数等步骤也依赖有效目录，
-  // 若因主步骤异常导致传入空目录，同样应在此处失败而不是继续推进 completedSteps。
-  if (!outline || !Array.isArray(outline.outline) || outline.outline.length === 0) {
-    throw new Error(`「${OUTLINE_WIZARD_STEP_LABELS[step]}」未产生有效目录，请检查招标文件解析内容是否完整，或点击重试。`);
-  }
-  } catch (error) {
-    persistPartialOutlineOnError(workspaceStore, { outline, groups, partialOutline: error?.partialOutline, agentPartialOutput: error?.agentPartialOutput }, error);
-    throw error;
-  }
-
-  const isLastStep = orderedSteps[orderedSteps.length - 1] === step;
-  const nextCompletedSteps = [...wizard.completedSteps, step];
-  // 完成当前步骤后，currentStep 应该指向下一步（或最后一步），而不是刚完成的步骤。
-  // 前端 autoAdvance 与 wizard 面板都依赖 currentStep 来判断“现在该执行哪一步”。
-  const nextStepIndex = nextCompletedSteps.length;
-  const nextCurrentStep = orderedSteps[Math.min(nextStepIndex, orderedSteps.length - 1)];
-  const nextWizard = { ...wizard, completedSteps: nextCompletedSteps, currentStep: nextCurrentStep, oldOutline, groups };
-  const finalOutlineData = { ...outline, project_overview: overview };
-
-  if (!isLastStep) {
-    outlineStats = {
-      ...outlineStats,
-      phase: 'done',
-      current_leaf_count: countOutlineLeafItems(outline?.outline || []),
-    };
-    const finalLogs = [...logs, `「${OUTLINE_WIZARD_STEP_LABELS[step]}」已完成，可继续执行下一步。`];
-    const finalTask = updateTask({
-      status: 'wizard-step-done',
-      progress: OUTLINE_WIZARD_STEP_PROGRESS[step] || OUTLINE_PROGRESS.mainComplete,
-      logs: finalLogs,
-      stats: taskStats(),
-    });
-    const technicalPlan = workspaceStore.updateTechnicalPlan({
-      outlineData: finalOutlineData,
-      outlineGenerationTask: finalTask,
-      outlineWizard: nextWizard,
-    });
-    // 必须显式把 outlineWizard/outlineData 作为 eventPatch 推给前端，
-    // 否则 buildSnapshot 可能从只更新了 task 的 persistedState 中读到旧 outlineWizard，
-    // 导致前端自动推进用旧 completedSteps 计算出错误下一步而触发顺序校验失败。
-    updateTask(finalTask, technicalPlan, { outlineData: finalOutlineData, outlineWizard: nextWizard });
-    return;
-  }
-
-  outlineStats = {
-    ...outlineStats,
-    phase: 'done',
-    current_leaf_count: countOutlineLeafItems(outline?.outline || []),
-    ...(wordControlWarning ? { word_adjustment_warning: wordControlWarning, word_adjustment_warning_kind: wordControlWarningKind } : {}),
-  };
-  const finalLogs = [...logs, '目录生成完成。', ...(wordControlWarning ? [wordControlWarning] : [])];
-  const finalTask = updateTask({
-    status: 'success',
-    progress: OUTLINE_PROGRESS.complete,
-    logs: finalLogs,
-    stats: taskStats(),
-  });
-  const finalWizard = { ...nextWizard, active: false };
-  const technicalPlan = workspaceStore.updateTechnicalPlan({
-    outlineData: finalOutlineData,
-    outlineWordControlSnapshot: wizard.wordControlOptions,
-    contentGenerationTask: undefined,
-    contentGenerationSections: {},
-    contentGenerationPlans: {},
-    contentGenerationRuntime: undefined,
-    contentIllustrationPlan: undefined,
-    outlineGenerationTask: finalTask,
-    outlineWizard: finalWizard,
-  });
-  updateTask(finalTask, technicalPlan, { outlineData: finalOutlineData, outlineWizard: finalWizard });
-}
-
