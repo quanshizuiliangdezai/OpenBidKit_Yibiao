@@ -642,9 +642,17 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
 
   const goToOffset = async (offset: number) => {
     const nextStep = steps[activeIndex + offset];
-    if (nextStep) {
-      await switchStep(nextStep);
+    if (!nextStep) {
+      return;
     }
+    // 分步向导执行中（向导 active）切换模块会卸载并重挂载 OutlineEditPage，
+    // 导致 wizardMode 重置、后端重新广播 technicalPlan 时 running 中间态被 stale 状态覆盖，
+    // 切回后进度误显为「已完成 100%」。因此在向导进行中禁止用顶部导航离开目录生成模块。
+    if (state.outlineWizard?.active && state.step === 'outline-generation') {
+      showToast('目录生成（分步向导）正在执行中，请先停止生成或等待完成后，再切换步骤', 'info');
+      return;
+    }
+    await switchStep(nextStep);
   };
 
   useEffect(() => {
