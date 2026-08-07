@@ -1099,24 +1099,48 @@ async function runOutlineAgentRecovery(agentService, context, log) {
   const agentContext = { ...context, outputFile };
   log(agentContext.startLogMessage || '已切换到 Agent 自主修复目录。', agentContext.startProgress ?? OUTLINE_PROGRESS.finalRepairStart);
   let validatedResult = null;
-  const agentResult = await agentService.runTask({
-    title: agentContext.title || '技术方案目录自主修复',
-    prompt: buildOutlineAgentRecoveryPrompt(agentContext),
-    output_file: outputFile,
-    files: buildOutlineAgentRecoveryFiles(agentContext),
-    timeout_ms: FINAL_AGENT_TIMEOUT_MS,
-    max_retries: 1,
-    validateOutput: (resultForValidation) => {
-      const contentForValidation = String(resultForValidation?.output_content || resultForValidation?.assistant_text || '').trim();
-      if (!contentForValidation) {
-        throw new Error('Agent 未返回目录修复结果');
+  let agentResult;
+  try {
+    agentResult = await agentService.runTask({
+      title: agentContext.title || '技术方案目录自主修复',
+      prompt: buildOutlineAgentRecoveryPrompt(agentContext),
+      output_file: outputFile,
+      files: buildOutlineAgentRecoveryFiles(agentContext),
+      timeout_ms: FINAL_AGENT_TIMEOUT_MS,
+      max_retries: 1,
+      validateOutput: (resultForValidation) => {
+        const contentForValidation = String(resultForValidation?.output_content || resultForValidation?.assistant_text || '').trim();
+        if (!contentForValidation) {
+          throw new Error('Agent 未返回目录修复结果');
+        }
+        const parsedForValidation = parseAgentJsonContent(contentForValidation);
+        validatedResult = normalizeAgentOutlineResult(parsedForValidation, agentContext);
+        return validatedResult;
+      },
+      onActivity: createAgentActivityLogHandler(log, agentContext.agentProgress ?? agentContext.startProgress ?? OUTLINE_PROGRESS.finalRepairActivity),
+    });
+  } catch (error) {
+    // Agent 执行过程中某个工具（如 read）偶发失败，但最终输出文件可能已生成且有效。
+    // 此时与其直接失败，不如尝试从已持久化的输出中解析目录；若解析成功则视为修复成功，
+    // 避免工具级噪声导致目录生成流程整体失败。
+    const toolErrors = error?.piToolErrors;
+    const partialOutput = error?.agentPartialOutput;
+    if (Array.isArray(toolErrors) && toolErrors.length && typeof partialOutput === 'string' && partialOutput.trim()) {
+      try {
+        const parsedPartial = parseAgentJsonContent(partialOutput.trim());
+        const partialResult = normalizeAgentOutlineResult(parsedPartial, agentContext);
+        const partialOutline = partialResult?.outline;
+        if (partialOutline && Array.isArray(partialOutline.outline) && partialOutline.outline.length > 0) {
+          log(`Agent 工具曾报错（${toolErrors.map((e) => `${e.tool}${e.message ? `: ${e.message}` : ''}`).join('；')}），但输出文件已生成有效目录，将忽略工具错误并继续。`, agentContext.validationProgress ?? OUTLINE_PROGRESS.finalRepairValidation);
+          log(agentContext.successLogMessage || 'Agent 修复结果通过程序校验，准备返回目录。', agentContext.successProgress ?? OUTLINE_PROGRESS.finalReviewEnd);
+          return partialResult;
+        }
+      } catch {
+        // 解析失败则按原错误抛出
       }
-      const parsedForValidation = parseAgentJsonContent(contentForValidation);
-      validatedResult = normalizeAgentOutlineResult(parsedForValidation, agentContext);
-      return validatedResult;
-    },
-    onActivity: createAgentActivityLogHandler(log, agentContext.agentProgress ?? agentContext.startProgress ?? OUTLINE_PROGRESS.finalRepairActivity),
-  });
+    }
+    throw error;
+  }
   if (isAgentBusyResult(agentResult)) {
     throw createAgentBusyError();
   }
