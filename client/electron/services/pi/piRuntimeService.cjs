@@ -562,12 +562,6 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           if (activeController.signal.aborted) throw activeController.signal.reason;
           await session.prompt(prompt, { expandPromptTemplates: false });
           if (activeController.signal.aborted) throw activeController.signal.reason;
-          if (sessionSubscription?.hasToolErrors?.()) {
-            const errors = sessionSubscription.getToolErrors();
-            const error = new Error(`Agent 工具执行失败：${errors.map((e) => `${e.tool}${e.message ? `（${e.message}）` : ''}`).join('；')}。请检查工具环境或重试。`);
-            error.piToolErrors = errors;
-            throw error;
-          }
           const assistantError = getAssistantError(session.messages);
           if (assistantError) {
             const error = new Error(assistantError);
