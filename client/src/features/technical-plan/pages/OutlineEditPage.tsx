@@ -426,14 +426,19 @@ function OutlineEditPage({
   // 向导仍在进行中（outlineWizard.active=true）时，即使 outlineData 已存在（每步完成都会落盘），
   // 也不能当作「已完成」，否则切回模块/退出向导时会误显 100%。
   const outlineWizardActive = outlineWizard?.active === true;
+  // 真实目录数据是否有效：向导进度/完成状态必须以此为准，不能只看 task.status。
+  // 否则「重新分步生成」清空 outlineData 后，task 仍残留 success 会让界面误显完成。
+  const outlineDataValid = Boolean(outlineData && Array.isArray(outlineData.outline) && outlineData.outline.length > 0);
   const progress = generating
     ? Math.max(5, Math.min(99, task?.progress || 5))
     : taskFailed
       ? Math.max(0, Math.min(99, task?.progress || 0))
-      : (outlineData && !outlineWizardActive) || task?.status === 'success'
+      : outlineDataValid && (!outlineWizard || !outlineWizardActive)
         ? 100
-        : 0;
-  const statusText = generating ? '运行中' : taskCancelled ? '已停止' : taskFailed ? '失败' : (outlineData && !outlineWizardActive) ? '已完成' : (outlineWizardActive ? '分步生成进行中' : '未开始');
+        : (outlineWizardActive
+          ? Math.max(5, Math.min(99, task?.progress || 5))
+          : 0);
+  const statusText = generating ? '运行中' : taskCancelled ? '已停止' : taskFailed ? '失败' : (outlineDataValid && (!outlineWizard || !outlineWizardActive)) ? '已完成' : (outlineWizardActive ? '分步生成进行中' : '未开始');
   const aiStatusTitle = generating ? 'AI 正在工作' : taskCancelled ? '生成已停止' : taskFailed ? '生成失败' : outlineData ? '目录已生成' : '等待生成';
   const statusMessage = taskCancelled
     ? '目录生成已被停止，可点击“重新生成目录”从头开始，或在分步向导中继续当前步骤。'
@@ -721,7 +726,9 @@ function OutlineEditPage({
     ? getWizardSteps(outlineWizard.workflowKind === 'existing-plan-expansion', outlineWizard.outlineExpansionMode)
     : getWizardSteps(isExpansionWorkflow, isExpansionWorkflow ? (draftOutlineExpansionMode || outlineExpansionMode) : 'ai-complement');
   const wizardCurrentIndex = outlineWizard ? outlineWizard.completedSteps.length : 0;
-  const wizardDone = Boolean(outlineWizard) && !wizardActive && (outlineWizard?.completedSteps.length || 0) >= effectiveWizardSteps.length;
+  // 向导完成不仅要看 completedSteps 满，还必须确认真实目录数据有效。
+  // 否则「生成主目录」产出空目录但 completedSteps 被推进时，会误显全部完成。
+  const wizardDone = Boolean(outlineWizard) && !wizardActive && (outlineWizard?.completedSteps.length || 0) >= effectiveWizardSteps.length && outlineDataValid;
   const runningWizardStep = task?.status === 'running' && effectiveWizardSteps[wizardCurrentIndex] ? effectiveWizardSteps[wizardCurrentIndex] : null;
   const failedWizardStep = task?.status === 'error' && effectiveWizardSteps[wizardCurrentIndex] ? effectiveWizardSteps[wizardCurrentIndex] : null;
   const wizardStatusText = !outlineWizard
@@ -1522,7 +1529,7 @@ function OutlineEditPage({
           {!wizardCollapsed && (
             <ol className="outline-wizard-steps">
               {effectiveWizardSteps.map((step, index) => {
-                const isDone = index < wizardCurrentIndex;
+                const isDone = index < wizardCurrentIndex && outlineDataValid;
                 const isCurrent = index === wizardCurrentIndex;
                 const isRunning = runningWizardStep === step;
                 const isFailed = failedWizardStep === step;

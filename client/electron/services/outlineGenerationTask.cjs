@@ -4005,6 +4005,7 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
     };
     workspaceStore.updateTechnicalPlan({
       outlineData: null,
+      outlineGenerationTask: undefined,
       contentGenerationTask: undefined,
       contentGenerationSections: {},
       contentGenerationPlans: {},
