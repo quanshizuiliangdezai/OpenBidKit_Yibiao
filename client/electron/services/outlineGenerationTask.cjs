@@ -4137,6 +4137,13 @@ async function runOutlineWizardStep({ aiService, agentService, workspaceStore, k
   } else {
     throw new Error(`未知的向导步骤：${step}`);
   }
+
+  // 关键校验：主目录生成步骤必须产生非空目录；否则后续步骤会基于空目录空转，
+  // 最终向导显示全部完成但实际没有任何目录。知识库/审核/字数等步骤也依赖有效目录，
+  // 若因主步骤异常导致传入空目录，同样应在此处失败而不是继续推进 completedSteps。
+  if (!outline || !Array.isArray(outline.outline) || outline.outline.length === 0) {
+    throw new Error(`「${OUTLINE_WIZARD_STEP_LABELS[step]}」未产生有效目录，请检查招标文件解析内容是否完整，或点击重试。`);
+  }
   } catch (error) {
     persistPartialOutlineOnError(workspaceStore, { outline, groups, partialOutline: error?.partialOutline, agentPartialOutput: error?.agentPartialOutput }, error);
     throw error;
