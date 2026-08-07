@@ -573,12 +573,14 @@ function generateAlignedChildrenMessages({ overview, requirements, responseFileR
 要求：
 1. 一级目录标题和顺序已经固定，不能修改、重命名、合并或删除一级目录。
 2. 只输出当前一级目录下的二级和三级目录，不要重复输出一级目录本身。
-3. 二级和三级目录要覆盖当前${sourceLabel}及其细项，不能越界写入其他一级目录内容。
-4. 技术评分要求和响应文件要求只能作为编写约束、扣分口径、判定标准和注意事项参考，用于完善目录说明和响应重点；不得偏离当前一级目录主题。
-5. 如果提供了原方案目录基础，当前输出是补充候选目录，应尽量复用原目录中相关表达，只补充缺失内容，不要提出删除或重排原目录。
-6. 一个二级目录下至少有两个三级目录。
-7. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
-8. 除了 JSON 结果外，不要输出任何其他内容。
+3. 二级目录应优先按当前章节内的并列技术方向、子系统或分项进行拆分；若章节描述或细项中存在多个并列方向/子系统，则每个方向/子系统必须作为一个独立的二级目录，不得把所有方向混合成无序的三级目录。
+4. 三级目录必须覆盖当前章节评分细项（见下方“细项”）中的每一条，不得遗漏、合并或把细项直接作为没有子节点的二级目录。
+5. 二级和三级目录要覆盖当前${sourceLabel}及其细项，不能越界写入其他一级目录内容。
+6. 技术评分要求和响应文件要求只能作为编写约束、扣分口径、判定标准和注意事项参考，用于完善目录说明和响应重点；不得偏离当前一级目录主题。
+7. 如果提供了原方案目录基础，当前输出是补充候选目录，应尽量复用原目录中相关表达，只补充缺失内容，不要提出删除或重排原目录。
+8. 一个二级目录下至少有两个三级目录。
+9. 返回标准 JSON，格式为 {"children": [...]}，每个节点必须包含 id、title、description。
+10. 除了 JSON 结果外，不要输出任何其他内容。
 
 ${childrenOutlineFixedStructureRules()}`;
   const messages = [
@@ -3837,9 +3839,8 @@ function buildPartialOutline(context = {}) {
     const fromOutput = tryParsePartialOutlineFromOutput(context.agentPartialOutput);
     if (fromOutput) return fromOutput;
   }
-  if (Array.isArray(context.groups) && context.groups.length) {
-    return { outline: buildTopLevelOutlineFromGroups(context.groups) };
-  }
+  // 不要从 groups 构造只有一级目录的“平目录”作为进度保存：
+  // 用户中断时这会误导前端和后续续写，让界面显示一个已完成但无下级的目录。
   return null;
 }
 
