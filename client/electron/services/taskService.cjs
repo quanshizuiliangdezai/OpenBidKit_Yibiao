@@ -982,6 +982,25 @@ function createTaskService({ aiService, agentService, technicalPlanStore, reject
       if (outlineTask?.status === 'pausing' || outlineTask?.status === 'paused') {
         return outlineTask;
       }
+      // Fallback：内存中无活跃 runner，但数据库仍显示任务处于活跃/待推进状态
+      //（典型场景：分步向导步骤刚完成、前端已自动触发下一步但 runner 尚未注册，
+      // 或页面刷新后 recover 到 wizard-step-done 而前端仍显示"运行中"）。
+      // 此时直接把 DB 任务标记为用户取消，停止 auto-advance 并给出一致的前端状态。
+      if (outlineTask && (isActiveTaskStatus(outlineTask.status) || outlineTask.status === 'wizard-step-done')) {
+        const definition = getTaskDefinition('outline-generation');
+        const taskField = getTaskField('outline-generation');
+        const cancelledTask = {
+          ...outlineTask,
+          status: 'error',
+          error: '用户已取消当前目录生成环节',
+          pause_requested: true,
+          updated_at: now(),
+          logs: [...(Array.isArray(outlineTask.logs) ? outlineTask.logs : []), '用户已请求停止目录生成。'],
+        };
+        const state = updateWorkspaceState(definition, { [taskField]: cancelledTask });
+        emit(cancelledTask, buildSnapshot(definition, state, cancelledTask));
+        return cancelledTask;
+      }
       throw new Error('当前没有正在生成的目录任务。');
     },
     startGlobalFactsGeneration(payload) {
