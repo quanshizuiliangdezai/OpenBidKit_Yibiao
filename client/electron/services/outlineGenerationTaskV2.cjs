@@ -344,66 +344,6 @@ function readJson(content, label) {
   }
 }
 
-// 校验评分项规划的交叉引用，保证生成前每个评分项都有唯一去向。
-function validateScoreDirectoryPlan(groupsPayload, plan, lockedRoots) {
-  const groups = Array.isArray(groupsPayload?.groups) ? groupsPayload.groups : [];
-  const branches = Array.isArray(plan?.branches) ? plan.branches : [];
-  if (!groups.length) throw new Error('技术评分项结构化结果不能为空');
-  if (!branches.length) throw new Error('技术评分项目录规划不能为空');
-
-  const groupIds = groups.map((group) => String(group?.requirement_id || '').trim());
-  if (new Set(groupIds).size !== groupIds.length) throw new Error('技术评分项 requirement_id 不能重复');
-  const branchIds = branches.map((branch) => String(branch?.branch_id || '').trim());
-  if (new Set(branchIds).size !== branchIds.length) throw new Error('技术方案分支编号不能重复');
-  const branchIdSet = new Set(branchIds);
-  const mappedIds = [];
-
-  branches.forEach((branch) => {
-    const rootDepth = String(branch.root_id || '').split('.').filter(Boolean).length;
-    if (Number(branch.score_item_level) < rootDepth) {
-      throw new Error(`技术方案分支 ${branch.branch_id} 的评分项目标层级不能高于分支根节点`);
-    }
-    const titleCounts = new Map();
-    (branch.mappings || []).forEach((mapping) => {
-      mappedIds.push(String(mapping.requirement_id || '').trim());
-      const title = String(mapping.target_title || '').trim();
-      titleCounts.set(title, (titleCounts.get(title) || 0) + 1);
-    });
-    (branch.mappings || []).forEach((mapping) => {
-      const title = String(mapping.target_title || '').trim();
-      if ((titleCounts.get(title) || 0) > 1 && !String(mapping.adjustment_note || '').trim()) {
-        throw new Error(`技术方案分支 ${branch.branch_id} 合并评分项到“${title}”时必须记录调整说明`);
-      }
-      if (Array.isArray(mapping.additional_titles) && mapping.additional_titles.length && !String(mapping.adjustment_note || '').trim()) {
-        throw new Error(`技术方案分支 ${branch.branch_id} 拆分评分项 ${mapping.requirement_id} 时必须记录调整说明`);
-      }
-    });
-  });
-
-  const mappedIdSet = new Set(mappedIds);
-  const missingIds = groupIds.filter((id) => !mappedIdSet.has(id));
-  const duplicateIds = mappedIds.filter((id, index) => mappedIds.indexOf(id) !== index);
-  const unknownIds = mappedIds.filter((id) => !groupIds.includes(id));
-  if (missingIds.length) throw new Error(`以下技术评分项未规划目录：${missingIds.join('、')}`);
-  if (duplicateIds.length) throw new Error(`以下技术评分项被重复规划：${[...new Set(duplicateIds)].join('、')}`);
-  if (unknownIds.length) throw new Error(`目录规划包含未知技术评分项：${[...new Set(unknownIds)].join('、')}`);
-  (plan.extra_titles || []).forEach((item) => {
-    if (!branchIdSet.has(String(item.branch_id || '').trim())) {
-      throw new Error(`新增大项目录引用了未知技术方案分支：${item.branch_id}`);
-    }
-  });
-
-  const technicalRootIds = [...new Set(branches.map((branch) => String(branch.root_id || '').split('.')[0]).filter(Boolean))];
-  if (!plan.allow_root_changes) {
-    const allowedRoots = new Set(lockedRoots
-      .filter((item) => item.attr === '技术' && item.content_mode === AI_CONTENT_MODE)
-      .map((item) => item.id));
-    const invalidRoots = technicalRootIds.filter((id) => !allowedRoots.has(id));
-    if (invalidRoots.length) throw new Error(`目录规划引用了未确认为“AI生成”的技术一级目录：${invalidRoots.join('、')}`);
-  }
-  return { groups, technicalRootIds };
-}
-
 function normalizeReferenceDocumentIds(storedPlan) {
   const ids = storedPlan?.referenceKnowledgeDocumentIds || [];
   return Array.isArray(ids) ? [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))] : [];
@@ -417,44 +357,6 @@ function buildKnowledgeFiles(knowledgeBaseService, documentIds) {
     if (content) files.push({ path: `参考知识库/参考资料-${index + 1}.md`, content });
   });
   return files;
-}
-
-function normalizeAllocationResult(value, technicalRootIds) {
-  const allowedIds = new Set(technicalRootIds);
-  const allocations = Array.isArray(value?.allocations) ? value.allocations : [];
-  const counts = new Map();
-  allocations.forEach((item) => {
-    const id = String(item?.root_id || '').trim();
-    const count = Math.floor(Number(item?.leaf_count));
-    if (allowedIds.has(id) && Number.isFinite(count) && count >= 2) counts.set(id, count);
-  });
-  return {
-    allocations: technicalRootIds.map((rootId) => ({
-      root_id: rootId,
-      leaf_count: counts.get(rootId) || 2,
-    })),
-  };
-}
-
-function correctAllocationTotal(allocations, targetLeafCount, outlineOrder) {
-  const order = new Map(outlineOrder.map((id, index) => [id, index]));
-  const next = allocations.map((item) => ({ ...item }));
-  let total = next.reduce((sum, item) => sum + item.leaf_count, 0);
-  while (total > targetLeafCount) {
-    const candidate = [...next]
-      .filter((item) => item.leaf_count > 2)
-      .sort((left, right) => right.leaf_count - left.leaf_count || order.get(left.root_id) - order.get(right.root_id))[0];
-    if (!candidate) break;
-    candidate.leaf_count -= 1;
-    total -= 1;
-  }
-  while (total < targetLeafCount) {
-    const candidate = [...next]
-      .sort((left, right) => left.leaf_count - right.leaf_count || order.get(left.root_id) - order.get(right.root_id))[0];
-    candidate.leaf_count += 1;
-    total += 1;
-  }
-  return next;
 }
 
 function createInitialPrompt(taskInstruction) {
@@ -867,19 +769,13 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
       }
 
       if (meta.stage === 1) {
-        const groupsPayload = readJson(await meta.readFile(TECHNICAL_SCORE_GROUPS_FILE), TECHNICAL_SCORE_GROUPS_FILE);
         scoreDirectoryPlan = readJson(await meta.readFile(SCORE_DIRECTORY_PLAN_FILE), SCORE_DIRECTORY_PLAN_FILE);
-        const validatedPlan = validateScoreDirectoryPlan(groupsPayload, scoreDirectoryPlan, lockedRoots);
-        technicalRootIds = validatedPlan.technicalRootIds;
+        technicalRootIds = [...new Set(scoreDirectoryPlan.branches.map((branch) => branch.root_id.split('.')[0]))];
         allowRootChanges = scoreDirectoryPlan.allow_root_changes === true;
-        if (!technicalRootIds.length) throw new Error('请至少确认一个需要生成子目录的技术方案一级目录');
         const technicalRootIdSet = new Set(technicalRootIds);
         fixedAiLeafCount = lockedRoots
           .filter((root) => !technicalRootIdSet.has(root.id) && root.content_mode === AI_CONTENT_MODE).length;
         allocatedAiLeafCount = targetLeafCount === null ? null : targetLeafCount - fixedAiLeafCount;
-        if (allocatedAiLeafCount !== null && allocatedAiLeafCount < technicalRootIds.length * 2) {
-          throw new Error('所设置总字数太少或每小节字数太多，无法为技术目录分配足够的 AI 生成小节');
-        }
         if (allocatedAiLeafCount !== null && technicalRootIds.length > 1) {
           childrenGenerationResultStage = 3;
           publish('技术方案目录已确认，Agent 正在分配 AI 生成小节', 50);
@@ -907,9 +803,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
 
       if (meta.stage === 2 && childrenGenerationResultStage === 3) {
         const allocationPayload = readJson(await meta.readFile(LEAF_ALLOCATION_FILE), LEAF_ALLOCATION_FILE);
-        const normalized = normalizeAllocationResult(allocationPayload, technicalRootIds);
-        const allocations = correctAllocationTotal(normalized.allocations, allocatedAiLeafCount, technicalRootIds);
-        return continueWithChildrenGeneration(allocations);
+        return continueWithChildrenGeneration(allocationPayload.allocations);
       }
 
       const candidateOutline = readJson(candidate.output_content, OUTLINE_OUTPUT_FILE);
