@@ -310,7 +310,6 @@ export interface AgentRunResult {
   diff?: unknown[];
   session_id?: string;
   retry_count?: number;
-  model_retry_count?: number;
   retry_attempts?: AgentRetryAttempt[];
   validation_result?: unknown;
   active_task?: AgentRuntimeActiveTask | null;
@@ -368,7 +367,6 @@ export interface AgentMonitorEvent {
   output_content?: string;
   assistant_text?: string;
   retry_count?: number;
-  model_retry_count?: number;
 }
 
 export interface AgentMonitorSnapshot {
