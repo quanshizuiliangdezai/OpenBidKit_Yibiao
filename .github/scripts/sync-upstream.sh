@@ -271,6 +271,17 @@ npm ci --production=false 2>/dev/null || npm install 2>/dev/null || {
   }
 }
 
+# 同步 lock：上游升级依赖（如 adm-zip CVE 修复）只改 package.json，merge 后
+# package-lock.json 不会自动更新，会导致下游 auto-build 的 `npm ci` 因 lock/package.json
+# 不一致而失败。上面 npm install 已就地修正 lock，必须提交，否则坏 lock 会被 push 出去。
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+if ! git -C "$ROOT_DIR" diff --quiet "$ROOT_DIR/client/package-lock.json" 2>/dev/null; then
+  git -C "$ROOT_DIR" add client/package-lock.json
+  git -C "$ROOT_DIR" commit -m "chore: sync package-lock.json with package.json [skip ci]" 2>/dev/null \
+    && log "  package-lock.json synced with package.json and committed." \
+    || warn "  Failed to commit package-lock.json sync (auto-build's npm ci may fail)."
+fi
+
 TSC_RESULT=0
 log "Running tsc --noEmit..."
 npx tsc --noEmit 2>&1 || TSC_RESULT=$?
