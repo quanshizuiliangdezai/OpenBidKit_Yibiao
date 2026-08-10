@@ -1096,6 +1096,54 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
   // 记录每个本地文档对应的库类型（team/personal），用于 startMatching 等无 libraryType 场景回写判断。
   const documentLibraryType = new Map();
 
+  // 清理本地知识库中已被服务器删除的孤儿文档。
+  // 原因：标书生成弹窗读取的是本地库（knowledgeBaseStore），左侧知识库页面删除的是服务器库文档/文件夹；
+  // 若不在删除时同步清理，本地水合过的旧文档会继续出现在弹窗中。
+  async function cleanupOrphanLocalDocuments() {
+    const localIndex = knowledgeBaseStore.list();
+    if (!localIndex.documents.length) return;
+
+    const serverDocIds = new Set();
+    try {
+      if (kbTeamService?.getTree) {
+        const teamTree = await kbTeamService.getTree();
+        (teamTree?.documents || []).forEach((document) => {
+          if (document?.id) serverDocIds.add(String(document.id));
+        });
+      }
+    } catch (error) {
+      debugLog('cleanup', 'team-tree-failed', { message: error?.message || String(error) });
+    }
+
+    try {
+      if (kbPersonalService?.getTree) {
+        const personalTree = await kbPersonalService.getTree();
+        (personalTree?.documents || []).forEach((document) => {
+          if (document?.id) serverDocIds.add(String(document.id));
+        });
+      }
+    } catch (error) {
+      debugLog('cleanup', 'personal-tree-failed', { message: error?.message || String(error) });
+    }
+
+    if (!serverDocIds.size) return;
+
+    let deletedCount = 0;
+    for (const document of localIndex.documents) {
+      if (!serverDocIds.has(String(document.id))) {
+        try {
+          knowledgeBaseStore.deleteDocument(document.id);
+          deletedCount += 1;
+        } catch (error) {
+          debugLog(document.id, 'cleanup:delete-failed', { message: error?.message || String(error) });
+        }
+      }
+    }
+    if (deletedCount) {
+      debugLog('cleanup', 'orphan-documents-deleted', { count: deletedCount });
+    }
+  }
+
   function updateDocument(documentId, partial, webContents) {
     const document = knowledgeBaseStore.updateDocument(documentId, { ...partial, updated_at: now() });
     if (document) emitProgress(webContents, document);
@@ -2128,8 +2176,13 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       return { ...result, index: knowledgeBaseStore.list() };
     },
 
-    list() {
+    async list() {
       recoverInterruptedDocuments();
+      try {
+        await cleanupOrphanLocalDocuments();
+      } catch (error) {
+        console.error('[knowledgeBaseService.list] cleanupOrphanLocalDocuments failed:', error);
+      }
       return knowledgeBaseStore.list();
     },
 

@@ -350,8 +350,8 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerExportIpc({ exportService });
   registerSystemFontIpc({ systemFontService });
   registerKbAuthIpc({ kbAuthService, mainWindow });
-  registerKbTeamIpc({ kbTeamService, kbAuthService });
-  registerKbPersonalIpc({ kbAuthService, app, personalService: kbPersonalService });
+  registerKbTeamIpc({ kbTeamService, kbAuthService, knowledgeBaseStore });
+  registerKbPersonalIpc({ kbAuthService, app, personalService: kbPersonalService, knowledgeBaseStore });
   registerPluginIpc(ipcMain, app, {
     taskService: null,
     technicalPlanStore: null,

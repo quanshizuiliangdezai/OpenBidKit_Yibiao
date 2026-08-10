@@ -8,7 +8,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 
-function registerKbPersonalIpc({ kbAuthService, app, personalService: injectedService }) {
+function registerKbPersonalIpc({ kbAuthService, app, personalService: injectedService, knowledgeBaseStore }) {
   const { ipcMain, dialog, BrowserWindow } = require('electron');
   // 优先使用外部注入的共享实例（供 knowledgeBaseService 水合复用同一 service）；
   // 未注入时内部自建，保持向后兼容。
@@ -123,6 +123,11 @@ function registerKbPersonalIpc({ kbAuthService, app, personalService: injectedSe
   ipcMain.handle('kb-personal:delete-folder', async (_event, folderId) => {
     try {
       const result = await personalService.deleteFolder(folderId);
+      try {
+        knowledgeBaseStore?.deleteFolder?.(folderId);
+      } catch {
+        // 本地知识库可能不存在此文件夹，忽略
+      }
       return { success: true, data: result };
     } catch (err) {
       return { error: err.message || '删除文件夹失败' };
@@ -133,6 +138,11 @@ function registerKbPersonalIpc({ kbAuthService, app, personalService: injectedSe
   ipcMain.handle('kb-personal:delete-document', async (_event, documentId) => {
     try {
       const result = await personalService.deleteDocument(documentId);
+      try {
+        knowledgeBaseStore?.deleteDocument?.(documentId);
+      } catch {
+        // 本地知识库可能不存在此文档，忽略
+      }
       return { success: true, data: result };
     } catch (err) {
       return { error: err.message || '删除文档失败' };

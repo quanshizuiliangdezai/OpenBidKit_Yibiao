@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 
 // 方案 D 中央知识库服务器团队库通道（文件夹/文档 CRUD）。
-function registerKbTeamIpc({ kbTeamService, kbAuthService }) {
+function registerKbTeamIpc({ kbTeamService, kbAuthService, knowledgeBaseStore }) {
   // 获取整棵树（文件夹 + 文档）
   ipcMain.handle('kb-team:get-tree', async () => {
     try {
@@ -38,6 +38,11 @@ function registerKbTeamIpc({ kbTeamService, kbAuthService }) {
         return { success: false, error: '未登录团队库', needLogin: true };
       }
       const result = await kbTeamService.deleteFolder(folderId);
+      try {
+        knowledgeBaseStore?.deleteFolder?.(folderId);
+      } catch {
+        // 本地知识库可能不存在此文件夹，忽略
+      }
       return { success: true, data: result };
     } catch (error) {
       console.error('[kb-team:delete-folder] error:', error);
@@ -52,6 +57,11 @@ function registerKbTeamIpc({ kbTeamService, kbAuthService }) {
         return { success: false, error: '未登录团队库', needLogin: true };
       }
       const result = await kbTeamService.deleteDocument(documentId);
+      try {
+        knowledgeBaseStore?.deleteDocument?.(documentId);
+      } catch {
+        // 本地知识库可能不存在此文档，忽略
+      }
       return { success: true, data: result };
     } catch (error) {
       return { success: false, error: error?.message || '删除文档失败' };
