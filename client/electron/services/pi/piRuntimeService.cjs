@@ -320,9 +320,10 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       sdkVersion = codingAgent.VERSION || '';
       proxy = createAgentOpenAiProxy({
         app,
-        configStore,
+        aiService,
         runtime,
-        timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
+        normalRequestTimeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
+        streamIdleTimeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
         diagnostics,
         onActivity: touchActivity,
         getActivityContext: () => activeTask ? { task_token: activeTask.task_token, task_id: activeTask.task_id } : null,
