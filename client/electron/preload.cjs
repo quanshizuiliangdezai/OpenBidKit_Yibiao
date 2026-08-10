@@ -70,6 +70,16 @@ const bridge = {
       return () => ipcRenderer.removeListener('ai:http-error', listener);
     },
   },
+  autoConfirmation: {
+    getState: () => ipcRenderer.invoke('auto-confirmation:get-state'),
+    setEnabled: (enabled) => ipcRenderer.invoke('auto-confirmation:set-enabled', enabled),
+    onChanged: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('auto-confirmation:state', listener);
+      ipcRenderer.send('auto-confirmation:subscribe');
+      return () => ipcRenderer.removeListener('auto-confirmation:state', listener);
+    },
+  },
   agent: {
     run: (payload) => ipcRenderer.invoke('agent:run', payload),
     selfCheck: (runtimeId) => ipcRenderer.invoke('agent:self-check', runtimeId),
@@ -79,8 +89,7 @@ const bridge = {
     listRuntimes: () => ipcRenderer.invoke('agent:list-runtimes'),
     getPendingQuestion: () => ipcRenderer.invoke('agent:get-pending-question'),
     answerQuestion: (payload) => ipcRenderer.invoke('agent:answer-question', payload),
-    getAutoAnswerState: () => ipcRenderer.invoke('agent:get-auto-answer-state'),
-    setAutoAnswerEnabled: (enabled) => ipcRenderer.invoke('agent:set-auto-answer-enabled', enabled),
+    suppressQuestionAutoAnswer: (payload) => ipcRenderer.invoke('agent:suppress-question-auto-answer', payload),
     onStatus: (callback) => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('agent:status', listener);
@@ -92,12 +101,6 @@ const bridge = {
       ipcRenderer.on('agent:question-state', listener);
       ipcRenderer.send('agent:subscribe');
       return () => ipcRenderer.removeListener('agent:question-state', listener);
-    },
-    onAutoAnswerChanged: (callback) => {
-      const listener = (_event, payload) => callback(payload);
-      ipcRenderer.on('agent:auto-answer-state', listener);
-      ipcRenderer.send('agent:subscribe');
-      return () => ipcRenderer.removeListener('agent:auto-answer-state', listener);
     },
   },
   developerTokenStats: {
@@ -204,6 +207,7 @@ const bridge = {
     startOutlineGeneration: (payload) => ipcRenderer.invoke('tasks:start-outline-generation', payload),
     startOutlineGenerationStep: (payload) => ipcRenderer.invoke('tasks:start-outline-step', payload),
     cancelOutlineGeneration: () => ipcRenderer.invoke('tasks:cancel-outline-generation'),
+    suppressOutlineSelectionAutoConfirmation: (payload) => ipcRenderer.invoke('tasks:suppress-outline-selection-auto-confirmation', payload),
     startGlobalFactsGeneration: (payload) => ipcRenderer.invoke('tasks:start-global-facts-generation', payload),
     startContentGeneration: (payload) => ipcRenderer.invoke('tasks:start-content-generation', payload),
     pauseContentGeneration: () => ipcRenderer.invoke('tasks:pause-content-generation'),

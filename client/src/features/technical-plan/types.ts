@@ -51,6 +51,7 @@ export interface OutlineSelectionState {
   items: OutlineSelectionItem[];
   selected_ids: string[];
   confirmed: boolean;
+  auto_answer_at?: string;
 }
 
 export interface SaveOutlineSelectionRequest {

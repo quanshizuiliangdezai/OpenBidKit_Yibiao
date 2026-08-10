@@ -36,11 +36,7 @@ function registerAgentIpc({ agentService, mainWindow }) {
     return agentService.getPendingQuestion();
   });
   ipcMain.handle('agent:answer-question', async (_event, payload) => agentService.answerQuestion(payload));
-  ipcMain.handle('agent:get-auto-answer-state', async (event) => {
-    subscribe(event.sender);
-    return agentService.getAutoAnswerState();
-  });
-  ipcMain.handle('agent:set-auto-answer-enabled', async (_event, enabled) => agentService.setAutoAnswerEnabled(enabled));
+  ipcMain.handle('agent:suppress-question-auto-answer', async (_event, payload) => agentService.suppressQuestionAutoAnswer(payload));
   ipcMain.on('agent:subscribe', (event) => subscribe(event.sender));
 
   agentService.onStatus?.((status) => {
@@ -51,9 +47,6 @@ function registerAgentIpc({ agentService, mainWindow }) {
     broadcast('agent:question-state', question);
   });
 
-  agentService.onAutoAnswerChanged?.((state) => {
-    broadcast('agent:auto-answer-state', state);
-  });
 }
 
 module.exports = {
