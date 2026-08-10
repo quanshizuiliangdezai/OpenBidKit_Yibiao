@@ -357,8 +357,10 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerExportIpc({ exportService });
   registerSystemFontIpc({ systemFontService });
   registerKbAuthIpc({ kbAuthService, mainWindow });
-  registerKbTeamIpc({ kbTeamService, kbAuthService, knowledgeBaseStore });
-  registerKbPersonalIpc({ kbAuthService, app, personalService: kbPersonalService, knowledgeBaseStore });
+  // knowledgeBaseStore 仅在 registerWorkspaceDatabaseServices 内注册 IPC 时使用（fence 服务实例）；
+  // 在主流程里尚未创建，因此不在此传入。kbTeamIpc/kbPersonalIpc 内部用 optional chaining 兼容。
+  registerKbTeamIpc({ kbTeamService, kbAuthService });
+  registerKbPersonalIpc({ kbAuthService, app, personalService: kbPersonalService });
   registerPluginIpc(ipcMain, app, {
     taskService: null,
     technicalPlanStore: null,
