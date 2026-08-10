@@ -1,9 +1,9 @@
 const http = require('node:http');
 const net = require('node:net');
-const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { getDeveloperLogsDir } = require('../../utils/paths.cjs');
+const { enqueueJsonLine } = require('../../utils/silentFileLog.cjs');
 const {
   markAiRequestError,
 } = require('../../utils/aiRetry.cjs');
@@ -84,16 +84,11 @@ function appendProxyDeveloperLog(app, config, runtimeMeta, payload) {
 
   try {
     const logDir = getDeveloperLogsDir(app, runtimeMeta.logModule);
-    fs.mkdirSync(logDir, { recursive: true });
     const fileName = `${new Date().toISOString().slice(0, 10)}.jsonl`;
-    fs.appendFileSync(
-      path.join(logDir, fileName),
-      `${JSON.stringify({
-        created_at: new Date().toISOString(),
-        ...payload,
-      })}\n`,
-      'utf-8',
-    );
+    enqueueJsonLine(path.join(logDir, fileName), {
+      created_at: new Date().toISOString(),
+      ...payload,
+    });
   } catch {
     // 开发日志不能影响主流程。
   }
@@ -455,6 +450,41 @@ function normalizeNormalToolCalls(toolCalls, responseData) {
   });
 }
 
+// 将普通响应的兼容用量字段统一转换为 Pi 可识别的 OpenAI usage。
+function createPiSseUsage(responseData) {
+  const rawUsage = extractUsageFromPayload(responseData);
+  if (!rawUsage || typeof rawUsage !== 'object' || Array.isArray(rawUsage)) return null;
+
+  const normalized = normalizeTokenUsage(rawUsage);
+  const promptDetailsSource = rawUsage.prompt_tokens_details || rawUsage.promptTokensDetails;
+  const completionDetailsSource = rawUsage.completion_tokens_details || rawUsage.completionTokensDetails;
+  const promptDetails = promptDetailsSource && typeof promptDetailsSource === 'object' && !Array.isArray(promptDetailsSource)
+    ? promptDetailsSource
+    : null;
+  const completionDetails = completionDetailsSource && typeof completionDetailsSource === 'object' && !Array.isArray(completionDetailsSource)
+    ? completionDetailsSource
+    : null;
+
+  return {
+    ...rawUsage,
+    prompt_tokens: normalized.prompt_tokens,
+    completion_tokens: normalized.completion_tokens,
+    total_tokens: normalized.total_tokens,
+    ...(promptDetails || normalized.cached_tokens > 0 ? {
+      prompt_tokens_details: {
+        ...(promptDetails || {}),
+        cached_tokens: normalized.cached_tokens,
+      },
+    } : {}),
+    ...(completionDetails || normalized.reasoning_tokens > 0 ? {
+      completion_tokens_details: {
+        ...(completionDetails || {}),
+        reasoning_tokens: normalized.reasoning_tokens,
+      },
+    } : {}),
+  };
+}
+
 // 将标准非流式 Chat Completion 确定性编码为 OpenAI SSE Chunk。
 function createPiSseFromNormalCompletion(responseData) {
   if (!responseData || typeof responseData !== 'object' || Array.isArray(responseData)) {
@@ -506,6 +536,7 @@ function createPiSseFromNormalCompletion(responseData) {
   };
   if (responseData.system_fingerprint !== undefined) base.system_fingerprint = responseData.system_fingerprint;
   if (responseData.service_tier !== undefined) base.service_tier = responseData.service_tier;
+  const usage = createPiSseUsage(responseData);
 
   const chunks = [
     {
@@ -517,8 +548,8 @@ function createPiSseFromNormalCompletion(responseData) {
       choices: [{ index: Number.isFinite(Number(choice.index)) ? Number(choice.index) : 0, delta: {}, finish_reason: choice.finish_reason }],
     },
   ];
-  if (responseData.usage && typeof responseData.usage === 'object') {
-    chunks.push({ ...base, choices: [], usage: responseData.usage });
+  if (usage) {
+    chunks.push({ ...base, choices: [], usage });
   }
 
   return `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join('')}data: [DONE]\n\n`;

@@ -106,6 +106,7 @@ export interface ClientConfig extends AiConfig {
   components: ComponentsConfig;
   agent_runtime: AgentRuntimeId;
   agent_mode_scenarios: AgentModeScenariosConfig;
+  agent_auto_answer_enabled?: boolean;
   update_channel?: UpdateChannel;
   gpu_hardware_acceleration_enabled?: boolean;
   gpu_hardware_acceleration_configured?: boolean;
