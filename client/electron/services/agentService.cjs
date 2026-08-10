@@ -5,7 +5,7 @@ const { dialog } = require('electron');
 const { createPiRuntimeService } = require('./pi/piRuntimeService.cjs');
 const { buildPiSelfCheckReportMarkdown } = require('./pi/piSelfCheckService.cjs');
 const { createAgentErrorReporter } = require('./agent/agentErrorReporter.cjs');
-const { listAgentRuntimeDescriptors, normalizeAgentRuntimeId } = require('./agent/agentRuntimeRegistry.cjs');
+const { resolveAgentAbortReason } = require('./agent/agentInterruption.cjs');
 const {
   deletePersistentAgentTask,
   getPersistentAgentSessionPath,
@@ -382,7 +382,7 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
   }
 
   function createAbortError(signal) {
-    return signal?.reason instanceof Error ? signal.reason : new Error(safeText(signal?.reason) || 'Agent 任务已取消');
+    return resolveAgentAbortReason(signal);
   }
 
   function removeQueuedEntry(entry, error) {
@@ -497,14 +497,19 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     }
   }
 
-  // 为后台父任务绑定最新诊断上下文，不再绑定或选择运行时。
-  function bindTaskContext(userTaskContextProvider) {
+  // 为后台父任务绑定最新诊断上下文和统一 AI 队列作用域。
+  function bindTaskContext(userTaskContextProvider, options = {}) {
+    const queueScopeId = safeText(options.queueScopeId || options.queue_scope_id);
     return {
-      runTask: (payload) => enqueueTask(payload, userTaskContextProvider),
+      runTask: (payload = {}) => enqueueTask({
+        ...payload,
+        ...(queueScopeId && !payload.queueScopeId && !payload.queue_scope_id ? { queue_scope_id: queueScopeId } : {}),
+      }, userTaskContextProvider),
       getStatus,
       hasPersistentTaskSession,
       loadPersistentTask,
       updatePersistentTask,
+      deletePersistentTask,
     };
   }
 
@@ -514,12 +519,11 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     return getStatus();
   }
 
-  async function selfCheck(rawRuntimeId) {
-    const runtimeId = normalizeAgentRuntimeId(rawRuntimeId);
+  async function selfCheck() {
     if (activeEntry || queue.length) {
       return {
         success: false,
-        runtime_id: runtimeId,
+        runtime_id: PI_RUNTIME_ID,
         runtime_name: PI_RUNTIME_NAME,
         status: 'busy',
         message: 'Agent 正在处理其他任务，请耐心等待',
@@ -538,7 +542,7 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
       };
     }
     const entry = {
-      taskId: `${runtimeId}-self-check`,
+      taskId: `${PI_RUNTIME_ID}-self-check`,
       title: `${PI_RUNTIME_NAME} 自检`,
       queuedAt: nowIso(),
       startedAt: nowIso(),
@@ -629,10 +633,6 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     emitStatus();
   }
 
-  function listRuntimes() {
-    return listAgentRuntimeDescriptors();
-  }
-
   return {
     bindTaskContext,
     deletePersistentTask,
@@ -653,7 +653,6 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     suppressQuestionAutoAnswer,
     onQuestion,
     exportSelfCheckReport,
-    listRuntimes,
     close,
   };
 }
