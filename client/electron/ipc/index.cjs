@@ -43,6 +43,7 @@ const { registerKbTeamIpc } = require('./kbTeamIpc.cjs');
 const { registerKbPersonalIpc } = require('./kbPersonalIpc.cjs');
 const { registerSyncIpc } = require('./syncIpc.cjs');
 const { registerKbQaIpc } = require('./kbQaIpc.cjs');
+const { registerKbVaultIpc } = require('./kbVaultIpc.cjs');
 const { createKbQaRetrievalService } = require('../services/kbQaRetrieval.cjs');
 const { createKbQaSessionService } = require('../services/kbQaSessionService.cjs');
 const { checkRequiredOnlineServices, getRequiredOnlineServiceStatus } = require('../services/requiredOnlineServices.cjs');
@@ -361,6 +362,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   // 在主流程里尚未创建，因此不在此传入。kbTeamIpc/kbPersonalIpc 内部用 optional chaining 兼容。
   registerKbTeamIpc({ kbTeamService, kbAuthService });
   registerKbPersonalIpc({ kbAuthService, app, personalService: kbPersonalService });
+  registerKbVaultIpc({ app, knowledgeBaseStore });
   registerPluginIpc(ipcMain, app, {
     taskService: null,
     technicalPlanStore: null,

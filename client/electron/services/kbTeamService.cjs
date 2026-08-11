@@ -201,7 +201,7 @@ function createKbTeamService({ kbAuthService, app }) {
    * 知识库问答召回：返回含 content_text 片段的匹配文档。
    * 服务端契约：GET /api/kb-qa/team?q=<kw>&limit=3
    */
-  async function qaRetrieve(query, limit = 3) {
+  async function qaRetrieve(query, limit = 10) {
     const params = new URLSearchParams();
     params.set('q', query);
     params.set('limit', String(limit));

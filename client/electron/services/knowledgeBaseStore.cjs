@@ -584,6 +584,21 @@ function createKnowledgeBaseStore({ app, db }) {
     return getDocument(documentId);
   }
 
+  // 直接覆盖文档的 Markdown 正文（不触发重新分析）。供 Obsidian Vault 写回本地库使用：
+  // 仅更新 content.md 文件与元数据，不触碰 blocks/items 等分析结果，避免破坏 QA 与标书引用。
+  function writeMarkdown(documentId, markdown, parserLabel) {
+    const document = getDocument(documentId);
+    const markdownPath = resolvePath(document.markdown_path);
+    try {
+      fs.mkdirSync(path.dirname(markdownPath), { recursive: true });
+      fs.writeFileSync(markdownPath, String(markdown || ''), 'utf-8');
+    } catch (err) {
+      console.warn('[kbStore] writeMarkdown file failed:', err);
+      throw err;
+    }
+    return updateMarkdownMetadata(documentId, String(markdown || ''), parserLabel ? String(parserLabel) : null);
+  }
+
   function replaceBlocks(documentId, blocks, filteredBlocks) {
     db.prepare('DELETE FROM knowledge_blocks WHERE document_id = ?').run(documentId);
     const insert = db.prepare(`
@@ -1463,6 +1478,7 @@ function createKnowledgeBaseStore({ app, db }) {
     moveDocument,
     updateDocument,
     updateMarkdownMetadata,
+    writeMarkdown,
     getDocument,
     recoverInterruptedDocuments,
     getDocumentStep,

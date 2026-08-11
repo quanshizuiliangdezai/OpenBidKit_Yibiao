@@ -970,7 +970,13 @@ export interface YibiaoBridge {
     importFromTeam: (documentIds: Array<string | number>, folderIds?: Array<string | number>) => Promise<{ success: boolean; data?: { synced: Array<{ id: number; ok: boolean; personal_id?: string; folder_id?: string; file_name?: string; msg: string }> }; error?: string }>;
     getAnalysisStatus: (documentId: string | number) => Promise<{ success: boolean; data?: { status: string; progress: number; message: string; item_count?: number; candidate_item_count?: number; block_count?: number; filtered_block_count?: number }; error?: string; needLogin?: boolean }>;
     retryAnalysis: (documentId: string | number) => Promise<{ success: boolean; data?: { success?: boolean; message?: string }; error?: string; needLogin?: boolean }>;
-  },
+  };
+  kbVault: {
+    getPath: () => Promise<{ success: boolean; data?: { vaultPath: string }; error?: string }>;
+    setPath: (p: string) => Promise<{ success: boolean; data?: { vaultPath: string }; error?: string }>;
+    export: () => Promise<{ success: boolean; exported?: number; skipped?: number; vaultPath?: string; error?: string }>;
+    import: () => Promise<{ success: boolean; changed?: Array<{ id: string; file: string }>; vaultPath?: string; error?: string }>;
+  };
 }
 
 export type OfflinePluginInstallResult =

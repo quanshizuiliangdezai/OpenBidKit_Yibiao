@@ -321,6 +321,12 @@ const bridge = {
     addMessage: (sessionId, payload) => ipcRenderer.invoke('kb-qa-session:add-message', sessionId, payload),
     updateMessage: (messageId, payload) => ipcRenderer.invoke('kb-qa-session:update-message', messageId, payload),
   },
+  kbVault: {
+    getPath: () => ipcRenderer.invoke('kb-vault:get-path'),
+    setPath: (p) => ipcRenderer.invoke('kb-vault:set-path', p),
+    export: () => ipcRenderer.invoke('kb-vault:export'),
+    import: () => ipcRenderer.invoke('kb-vault:import'),
+  },
   plugins: {
     getAvailablePlugins: () => ipcRenderer.invoke('plugins:getAvailablePlugins'),
     install: (pluginId) => ipcRenderer.invoke('plugins:install', pluginId),

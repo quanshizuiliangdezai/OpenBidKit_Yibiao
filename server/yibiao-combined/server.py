@@ -2385,8 +2385,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
         finally:
             conn.close()
 
-    def _qa_personal_retrieve(self, kw, employee, limit=3, snippet_chars=2500):
-        """个人库 QA 召回：按正文/标题多词 OR 匹配，返回含 content_text 片段的文档列表。"""
+    def _qa_personal_retrieve(self, kw, employee, limit=10, snippet_chars=2500):
+        """个人库 QA 召回（Obsidian 风格：相关度加权排序，无 embedding 依赖）。
+        文件名权重3、正文权重1，按加权分降序；个人库主键为 TEXT 不支持 FTS 外部内容，故用 LIKE 加权。
+        不再按 created_at 排序——旧文档只要相关度高也能被召回。"""
         conn = _master_db_conn()
         if conn is None:
             return []
@@ -2404,14 +2406,20 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             if 'content_text' not in cols:
                 return []
             or_clauses = []
+            score_parts = []
             pat_args = []
             for pat in patterns:
                 or_clauses.append("(file_name LIKE ? OR COALESCE(content_text,'') LIKE ?)")
                 pat_args.extend([pat, pat])
-            q = ("SELECT document_id,folder_id,file_name,COALESCE(content_text,'') AS content_text,created_at "
+                score_parts.append(
+                    "(CASE WHEN file_name LIKE ? THEN 3 ELSE 0 END + "
+                    "CASE WHEN COALESCE(content_text,'') LIKE ? THEN 1 ELSE 0 END)")
+                pat_args.extend([pat, pat])
+            q = ("SELECT document_id,folder_id,file_name,COALESCE(content_text,'') AS content_text,created_at,"
+                 " (" + " + ".join(score_parts) + ") AS score "
                  "FROM knowledge_documents "
                  "WHERE (deleted_at IS NULL OR deleted_at='') AND (" + " OR ".join(or_clauses) + ")" + owner_filter +
-                 " ORDER BY created_at DESC LIMIT ?")
+                 " ORDER BY score DESC, created_at DESC LIMIT ?")
             rows = conn.execute(q, tuple(pat_args) + tuple(args) + (limit,)).fetchall()
             out = []
             for r in rows:

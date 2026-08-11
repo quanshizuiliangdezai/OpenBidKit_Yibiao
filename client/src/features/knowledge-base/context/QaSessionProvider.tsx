@@ -470,7 +470,7 @@ export function QaSessionProvider({ children }: { children: ReactNode }) {
         // 4) 回退：关键词检索
         let keywordError: string | undefined;
         if (docs.length === 0) {
-          const limit = 3;
+          const limit = 10;
           const [teamRes, personalRes] = await Promise.all([
             source === 'team' || source === 'both'
               ? window.yibiao?.kbTeam.qaRetrieve(question, limit)

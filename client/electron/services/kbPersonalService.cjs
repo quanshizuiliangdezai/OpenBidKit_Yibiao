@@ -140,7 +140,7 @@ function createKbPersonalService({ app, kbAuthService }) {
    * 知识库问答召回：返回含 content_text 片段的匹配文档。
    * 服务端契约：GET /api/kb-qa/personal?q=<kw>&limit=3
    */
-  async function qaRetrieve(keyword, limit = 3) {
+  async function qaRetrieve(keyword, limit = 10) {
     try {
       const params = new URLSearchParams();
       params.set('q', keyword);
