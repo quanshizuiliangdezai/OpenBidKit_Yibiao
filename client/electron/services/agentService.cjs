@@ -6,6 +6,7 @@ const { createPiRuntimeService } = require('./pi/piRuntimeService.cjs');
 const { buildPiSelfCheckReportMarkdown } = require('./pi/piSelfCheckService.cjs');
 const { createAgentErrorReporter } = require('./agent/agentErrorReporter.cjs');
 const { resolveAgentAbortReason } = require('./agent/agentInterruption.cjs');
+const { listAgentRuntimeDescriptors } = require('./agent/agentRuntimeRegistry.cjs');
 const {
   deletePersistentAgentTask,
   getPersistentAgentSessionPath,
@@ -633,6 +634,10 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     emitStatus();
   }
 
+  function listRuntimes() {
+    return listAgentRuntimeDescriptors();
+  }
+
   return {
     bindTaskContext,
     deletePersistentTask,
@@ -653,6 +658,7 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     suppressQuestionAutoAnswer,
     onQuestion,
     exportSelfCheckReport,
+    listRuntimes,
     close,
   };
 }
