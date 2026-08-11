@@ -36,6 +36,14 @@ function registerKbVaultIpc({ app, knowledgeBaseStore }) {
       return { success: false, error: error?.message || '从 Vault 写回失败' };
     }
   });
+
+  ipcMain.handle('kb-vault:open', async () => {
+    try {
+      return await vault.openVault();
+    } catch (error) {
+      return { success: false, error: error?.message || '打开 Vault 失败' };
+    }
+  });
 }
 
 module.exports = { registerKbVaultIpc };

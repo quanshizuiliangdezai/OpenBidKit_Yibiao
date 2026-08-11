@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { shell } = require('electron');
 const { getKnowledgeBaseDir } = require('../utils/paths.cjs');
 
 function slugify(name) {
@@ -136,11 +137,37 @@ function createKbVault({ app, store }) {
     return { success: true, changed, vaultPath };
   }
 
+  // 打开 Vault：优先用 Obsidian 协议拉起应用并定位到 Vault 文件夹；
+  // 若 Obsidian 未安装（协议唤起失败），退化为用系统文件管理器打开该文件夹。
+  // 返回 { openedWith } 标明实际用哪种方式打开，供 UI 给出精准提示。
+  async function openVault() {
+    if (!fs.existsSync(vaultPath)) {
+      fs.mkdirSync(vaultPath, { recursive: true });
+    }
+    const uriPath = vaultPath.replace(/\\/g, '/');
+    const obsidianUri = 'obsidian://open?path=' + encodeURIComponent(uriPath);
+    try {
+      await shell.openExternal(obsidianUri);
+      // openExternal 不抛错不代表 Obsidian 真装了（系统可能弹"找不到应用"）。
+      // 这里无法可靠探测，因此返回 obsidian 让 UI 提示；若用户实际没装，下次可改路径或手动打开。
+      return { success: true, openedWith: 'obsidian', vaultPath };
+    } catch {
+      // 协议唤起失败 -> 退化为文件管理器打开
+      try {
+        await shell.openPath(vaultPath);
+        return { success: true, openedWith: 'explorer', vaultPath };
+      } catch (e2) {
+        return { success: false, error: e2?.message || '无法打开 Vault 文件夹', vaultPath };
+      }
+    }
+  }
+
   return {
     getVaultPath,
     setVaultPath,
     exportToVault,
     importFromVault,
+    openVault,
   };
 }
 

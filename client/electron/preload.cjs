@@ -326,6 +326,7 @@ const bridge = {
     setPath: (p) => ipcRenderer.invoke('kb-vault:set-path', p),
     export: () => ipcRenderer.invoke('kb-vault:export'),
     import: () => ipcRenderer.invoke('kb-vault:import'),
+    open: () => ipcRenderer.invoke('kb-vault:open'),
   },
   plugins: {
     getAvailablePlugins: () => ipcRenderer.invoke('plugins:getAvailablePlugins'),

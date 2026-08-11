@@ -32,10 +32,26 @@ export default function ObsidianVaultPanel() {
         `已导出 ${res.exported ?? 0} 个文档到 Obsidian Vault（跳过 ${res.skipped ?? 0} 个空文档）\n路径：${res.vaultPath}`,
         'success',
       );
+      // 导出成功后自动调起 Obsidian 定位到 Vault（没装则退化为文件管理器）。
+      await handleOpen();
     } catch (e) {
       showToast(e instanceof Error ? e.message : '导出失败', 'error');
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleOpen() {
+    try {
+      const res = await window.yibiao?.kbVault.open();
+      if (!res?.success) throw new Error(res?.error || '打开失败');
+      if (res.openedWith === 'explorer') {
+        showToast('未检测到 Obsidian，已用文件管理器打开 Vault 文件夹（如已安装 Obsidian 可直接打开该文件夹）', 'info');
+      } else {
+        showToast('已尝试用 Obsidian 打开 Vault', 'success');
+      }
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '打开 Vault 失败', 'error');
     }
   }
 
@@ -116,6 +132,9 @@ export default function ObsidianVaultPanel() {
             </button>
             <button type="button" className="secondary-action" disabled={busy} onClick={() => void handleImport()}>
               写回
+            </button>
+            <button type="button" className="secondary-action" onClick={() => void handleOpen()}>
+              打开
             </button>
           </div>
         </div>

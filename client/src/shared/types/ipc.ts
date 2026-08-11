@@ -976,6 +976,7 @@ export interface YibiaoBridge {
     setPath: (p: string) => Promise<{ success: boolean; data?: { vaultPath: string }; error?: string }>;
     export: () => Promise<{ success: boolean; exported?: number; skipped?: number; vaultPath?: string; error?: string }>;
     import: () => Promise<{ success: boolean; changed?: Array<{ id: string; file: string }>; vaultPath?: string; error?: string }>;
+    open: () => Promise<{ success: boolean; openedWith?: 'obsidian' | 'explorer'; vaultPath?: string; error?: string }>;
   };
 }
 
