@@ -2308,8 +2308,10 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             uniq.append('%' + p + '%')
         return uniq[:16]
 
-    def _qa_team_retrieve(self, kw, limit=3, snippet_chars=2500):
-        """团队库 QA 召回：按正文/标题多词 OR 匹配，返回含 content_text 片段的文档列表。"""
+    def _qa_team_retrieve(self, kw, limit=10, snippet_chars=2500):
+        """团队库 QA 召回（Obsidian 风格：相关度排序全文检索，无 embedding 依赖）。
+        优先 FTS5(trigram) + bm25 相关度排序；FTS 不可用/查询过短则回退 LIKE 命中计数排序。
+        不再按 created_at 排序——旧文档只要相关度高也能被召回。"""
         import sqlite3 as _sql
         patterns = self._qa_keyword_patterns(kw)
         if not patterns:
@@ -2321,18 +2323,52 @@ class CombinedHandler(http.server.BaseHTTPRequestHandler):
             cols = [c[1] for c in conn.execute("PRAGMA table_info(knowledge_documents)").fetchall()]
             if 'content_text' not in cols:
                 return []
-            or_clauses = []
-            args = []
-            for pat in patterns:
-                or_clauses.append("(title LIKE ? OR file_name LIKE ? OR COALESCE(content_text,'') LIKE ?)")
-                args.extend([pat, pat, pat])
-            q = ("SELECT id, folder_id, title, file_name, mime_type, content_text, created_at "
-                 "FROM knowledge_documents "
-                 "WHERE (deleted_at IS NULL OR deleted_at='') AND (" + " OR ".join(or_clauses) + ") "
-                 "ORDER BY created_at DESC LIMIT ?")
-            rows = conn.execute(q, tuple(args) + (limit,)).fetchall()
+            ranked_ids = None
+            fts_q = (kw or '').replace('"', '').strip()
+            if len(fts_q) >= 3:
+                try:
+                    kb_db.ensure_fts(conn)
+                    frows = conn.execute(
+                        "SELECT rowid FROM kb_fts WHERE kb_fts MATCH ? ORDER BY bm25(kb_fts) LIMIT ?",
+                        (fts_q, max(limit * 3, 30))).fetchall()
+                    if frows:
+                        ranked_ids = [r['rowid'] for r in frows]
+                except Exception:
+                    ranked_ids = None
+            if not ranked_ids:
+                # LIKE 命中计数排序（标题/文件名/正文加权不同），兼容无 FTS 或极短查询
+                or_clauses = []
+                args = []
+                score_parts = []
+                for pat in patterns:
+                    or_clauses.append("(title LIKE ? OR file_name LIKE ? OR COALESCE(content_text,'') LIKE ?)")
+                    args.extend([pat, pat, pat])
+                    score_parts.append(
+                        "(CASE WHEN title LIKE ? THEN 3 ELSE 0 END + "
+                        "CASE WHEN file_name LIKE ? THEN 2 ELSE 0 END + "
+                        "CASE WHEN COALESCE(content_text,'') LIKE ? THEN 1 ELSE 0 END)")
+                q = ("SELECT id, (" + " + ".join(score_parts) + ") AS score "
+                     "FROM knowledge_documents "
+                     "WHERE (deleted_at IS NULL OR deleted_at='') AND (" + " OR ".join(or_clauses) + ") "
+                     "ORDER BY score DESC, created_at DESC LIMIT ?")
+                score_args = []
+                for pat in patterns:
+                    score_args.extend([pat, pat, pat])
+                rows = conn.execute(q, tuple(args) + tuple(score_args) + (limit,)).fetchall()
+                ranked_ids = [r['id'] for r in rows]
+            if not ranked_ids:
+                return []
+            ph = ','.join('?' * len(ranked_ids))
+            rows = conn.execute(
+                "SELECT id, folder_id, title, file_name, mime_type, content_text, created_at "
+                "FROM knowledge_documents WHERE (deleted_at IS NULL OR deleted_at='') AND id IN (%s)" % ph,
+                tuple(ranked_ids)).fetchall()
+            by_id = {r['id']: r for r in rows}
             out = []
-            for r in rows:
+            for rid in ranked_ids:
+                r = by_id.get(rid)
+                if not r:
+                    continue
                 text = (r['content_text'] or '')
                 if len(text) > snippet_chars:
                     text = text[:snippet_chars] + '\n...（内容已截断）'

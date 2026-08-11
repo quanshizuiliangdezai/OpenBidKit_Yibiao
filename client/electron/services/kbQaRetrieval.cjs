@@ -74,14 +74,22 @@ function createKbQaRetrievalService({ db, aiService, kbAuthService }) {
     const { ok, status, data } = await api(path);
     if (!ok) throw new Error(`拉取知识库语料失败（${status}）`);
     const docs = Array.isArray(data?.data) ? data.data : [];
-    return docs.map((doc) => ({
-      id: String(doc.id),
-      title: doc.title || doc.file_name || '',
-      file_name: doc.file_name || '',
-      folder_id: doc.folder_id ?? null,
-      created_at: doc.created_at || '',
-      content_text: String(doc.content_text || '').slice(0, MAX_DOC_CHARS),
-    }));
+    return docs.map((doc) => {
+      const title = doc.title || doc.file_name || '';
+      const body = String(doc.content_text || '').trim();
+      // 把标题注入正文前，避免用户按文档名提问时语义检索只扫正文而漏召回。
+      const contentText = body
+        ? `文档标题：${title}\n\n${body}`.slice(0, MAX_DOC_CHARS)
+        : `文档标题：${title}`;
+      return {
+        id: String(doc.id),
+        title,
+        file_name: doc.file_name || '',
+        folder_id: doc.folder_id ?? null,
+        created_at: doc.created_at || '',
+        content_text: contentText,
+      };
+    });
   }
 
   // ---- 索引维护（增量：content_hash + embedding_model 变化才重建）----
