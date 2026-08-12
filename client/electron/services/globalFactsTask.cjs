@@ -207,16 +207,17 @@ function loadKnowledgeItems(knowledgeBaseService, documentIds, log) {
     log('未选择参考知识库，本次只基于招标文件、Step02 解析结果和目录预设关键信息。', 12);
     return [];
   }
-  if (!knowledgeBaseService?.readItems) {
+  if (!knowledgeBaseService?.readReferences) {
     log('未找到知识库读取服务，本次不使用知识库条目。', 12);
     return [];
   }
 
   const items = [];
-  for (const documentId of documentIds) {
-    try {
-      const documentItems = knowledgeBaseService.readItems(documentId);
-      for (const item of Array.isArray(documentItems) ? documentItems : []) {
+  try {
+    const references = knowledgeBaseService.readReferences(documentIds);
+    for (const reference of Array.isArray(references) ? references : []) {
+      const documentId = String(reference?.document?.id || '').trim();
+      for (const item of Array.isArray(reference?.items) ? reference.items : []) {
         const title = singleLine(item?.title);
         const content = String(item?.content || '').trim();
         if (!title || !content) continue;
@@ -227,9 +228,9 @@ function loadKnowledgeItems(knowledgeBaseService, documentIds, log) {
           content,
         });
       }
-    } catch (error) {
-      log(`读取知识库条目失败，已跳过文档 ${documentId}：${error.message || String(error)}`, 12);
     }
+  } catch (error) {
+    log(`读取知识库条目失败，已跳过：${error.message || String(error)}`, 12);
   }
   log(items.length ? `已读取 ${items.length} 条知识库完整条目。` : '未读取到可用知识库完整条目。', 14);
   return items;
@@ -770,14 +771,13 @@ async function finalizeGlobalFacts(aiService, context, log) {
   });
 }
 
-async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseService, updateTask }) {
+async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseService, updateTask, checkpointTask }) {
   let logs = ['开始生成全局事实变量。'];
   let currentProgress = 5;
   function log(message, progress = currentProgress) {
     currentProgress = Math.max(currentProgress, Math.min(progress, 99));
     logs = [...logs, message];
-    const technicalPlan = workspaceStore.updateTechnicalPlan({ globalFactsTask: updateTask({ status: 'running', progress: currentProgress, logs }) });
-    updateTask({ status: 'running', progress: currentProgress, logs }, technicalPlan);
+    updateTask({ status: 'running', progress: currentProgress, logs });
   }
 
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};
@@ -804,15 +804,9 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
     throw new Error('请先生成目录，再生成全局事实');
   }
 
-  let technicalPlan = workspaceStore.updateTechnicalPlan({
+  checkpointTask({ status: 'running', progress: 5, logs }, {
     globalFacts: [],
-    contentGenerationTask: undefined,
-    contentGenerationSections: {},
-    contentGenerationPlans: {},
-    contentGenerationRuntime: undefined,
-    globalFactsTask: updateTask({ status: 'running', progress: 5, logs }),
   });
-  updateTask({ status: 'running', progress: 5, logs }, technicalPlan);
 
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
   const bidAnalysisFactsText = formatBidAnalysisFactsForPrompt(storedPlan);
@@ -842,14 +836,12 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
   log('第一步：正在按招标文件分段提取全局事实变量。', 22);
   const tenderFacts = await runTenderGlobalFactsExtraction(aiService, baseContext, tenderMarkdown, log);
   let groups = tenderFacts.groups;
-  technicalPlan = workspaceStore.updateTechnicalPlan({ globalFacts: groups });
-  updateTask({ status: 'running', progress: 48, logs }, technicalPlan);
+  checkpointTask({ status: 'running', progress: 48, logs }, { globalFacts: groups });
 
   const knowledgePatch = await runKnowledgeGlobalFactPatches(aiService, { ...baseContext, groups }, knowledgeItems, log);
   if (knowledgePatch.patches?.length) {
     groups = mergeGlobalFactPatches(groups, knowledgePatch.patches);
-    technicalPlan = workspaceStore.updateTechnicalPlan({ globalFacts: groups });
-    updateTask({ status: 'running', progress: 66, logs }, technicalPlan);
+    checkpointTask({ status: 'running', progress: 66, logs }, { globalFacts: groups });
     log(`知识库全局事实补充已应用：${knowledgePatch.patches.length} 条。`, 66);
   } else if (knowledgeItems.length) {
     log('知识库未返回需要补充的全局事实变量。', 66);
@@ -859,8 +851,7 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
     const originalPatch = await runOriginalPlanGlobalFactPatches(aiService, { ...baseContext, groups }, originalPlanMarkdown, log);
     if (originalPatch.patches?.length) {
       groups = mergeGlobalFactPatches(groups, originalPatch.patches);
-      technicalPlan = workspaceStore.updateTechnicalPlan({ globalFacts: groups });
-      updateTask({ status: 'running', progress: 86, logs }, technicalPlan);
+      checkpointTask({ status: 'running', progress: 86, logs }, { globalFacts: groups });
       log(`原方案全局事实补充已应用：${originalPatch.patches.length} 条。`, 86);
     } else {
       log('原方案未返回需要补充的全局事实变量。', 86);
@@ -870,11 +861,10 @@ async function runGlobalFactsTask({ aiService, workspaceStore, knowledgeBaseServ
   const finalFacts = await finalizeGlobalFacts(aiService, { ...baseContext, groups }, log);
   groups = finalFacts.groups;
   log(`全局事实变量合并完成：${groups.length} 个大项。`, 92);
-  technicalPlan = workspaceStore.updateTechnicalPlan({
-    globalFacts: groups,
-    globalFactsTask: updateTask({ status: 'success', progress: 100, logs: [...logs, '全局事实变量生成完成。'] }),
-  });
-  updateTask({ status: 'success', progress: 100, logs: [...logs, '全局事实变量生成完成。'] }, technicalPlan);
+  checkpointTask(
+    { status: 'success', progress: 100, logs: [...logs, '全局事实变量生成完成。'] },
+    { globalFacts: groups },
+  );
 }
 
 module.exports = {

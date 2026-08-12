@@ -7,23 +7,8 @@ export type BidAnalysisTaskStatus = 'idle' | 'running' | 'success' | 'error';
 export type BidSectionMode = 'single' | 'multiple';
 export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error';
 export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'global-facts-generation' | 'content-generation';
-export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error' | 'wizard-step-done';
-
-export type OutlineWizardStep = 'extract' | 'main' | 'knowledge' | 'review' | 'audit' | 'word';
-
-export interface OutlineWizardState {
-  active: boolean;
-  completedSteps: OutlineWizardStep[];
-  currentStep: OutlineWizardStep | null;
-  workflowKind: TechnicalPlanWorkflowKind;
-  outlineExpansionMode: OutlineExpansionMode;
-  wordControlOptions: OutlineWordControlOptions;
-  referenceKnowledgeDocumentIds: string[];
-  originalOnly: boolean;
-  oldOutline: OutlineData | null;
-  groups: unknown[];
-}
-export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
+export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
+export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error' | 'ignored';
 export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'section-word-adjusting' | 'original-auditing' | 'auditing' | 'table-cleaning' | 'final-section-word-adjusting' | 'total-word-adjusting' | 'illustration-planning' | 'illustration-generating' | 'done';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
 export type ConsistencyRepairMode = 'agent' | 'normal';
@@ -187,6 +172,8 @@ export interface BackgroundTaskState {
       illustration_generation_html_total?: number;
       illustration_generation_html_completed?: number;
       illustration_generation_step_label?: string;
+      awaiting_content_decision?: boolean;
+      ignored_section_count?: number;
     };
   };
 }
@@ -296,6 +283,7 @@ export interface ContentGenerationRuntimeState {
   word_adjustment_round_start_words?: number;
   target_item_id?: string;
   regenerate_requirement?: string;
+  awaiting_content_decision?: boolean;
   updated_at?: string;
 }
 
@@ -385,5 +373,4 @@ export interface TechnicalPlanState {
   contentIllustrationPlan?: ContentIllustrationPlanState;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   outlineData: OutlineData | null;
-  outlineWizard?: OutlineWizardState | null;
 }

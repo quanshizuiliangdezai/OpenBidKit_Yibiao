@@ -1,8 +1,8 @@
 import type { AiHttpErrorPayload, ChatCompletionRequest, JsonCompletionRequest } from './ai';
-import type { DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
+import type { DuplicateCheckWorkspacePatch, DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelInfoResult, ModelListResult, TextModelTestResult, UpdateChannel } from './config';
-import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMigrationResult, KnowledgeBaseMigrationStatus, KnowledgeBaseMutationResult, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
-import type { RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
+import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMutationResult, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
+import type { RejectionCheckWorkspacePatch, RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
 import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../../features/technical-plan/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
 import type { OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from './outline';
@@ -17,7 +17,9 @@ export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown, TDu
   contentPlan?: { nodeId: string; value: ContentGenerationPlanState | null };
   contentRuntime?: ContentGenerationRuntimeState;
   rejectionCheck?: TRejectionCheckState;
+  rejectionCheckPatch?: RejectionCheckWorkspacePatch;
   duplicateCheck?: TDuplicateCheckState;
+  duplicateCheckPatch?: DuplicateCheckWorkspacePatch;
 }
 
 export interface WordExportProgressEvent {
@@ -759,8 +761,6 @@ export interface YibiaoBridge {
     selectDuplicateCheckFiles: (options?: { multiple?: boolean }) => Promise<FileSelectionResult>;
   };
   knowledgeBase: {
-    getMigrationStatus: () => Promise<KnowledgeBaseMigrationStatus>;
-    migrateLegacy: () => Promise<KnowledgeBaseMigrationResult>;
     list: () => Promise<KnowledgeBaseIndex>;
     createFolder: (name: string) => Promise<KnowledgeFolder>;
     renameFolder: (folderId: string, name: string) => Promise<KnowledgeFolder>;
@@ -798,7 +798,6 @@ export interface YibiaoBridge {
     importTenderDocument: () => Promise<{
       success: boolean;
       message?: string;
-      state?: TechnicalPlanState;
       markdown?: string;
       fileName?: string;
       parserLabel?: string | null;
@@ -806,41 +805,40 @@ export interface YibiaoBridge {
     importOriginalPlanDocument: () => Promise<{
       success: boolean;
       message?: string;
-      state?: TechnicalPlanState;
       markdown?: string;
     }>;
     checkBidSections: () => Promise<{ hasMultiple: boolean; totalDeclared?: number | null }>;
-    selectBidSection: (selectedSection: DetectedBidSection) => Promise<{ success: boolean; message?: string; state: TechnicalPlanState; markdown: string }>;
+    selectBidSection: (selectedSection: DetectedBidSection) => Promise<{ success: boolean; message?: string; markdown: string }>;
     readTenderMarkdown: () => Promise<string>;
     readTenderSourceMarkdown: (sourceId: string) => Promise<string>;
     readOriginalPlanMarkdown: () => Promise<string>;
-    updateStep: (step: TechnicalPlanStep) => Promise<TechnicalPlanState>;
-    setWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
-    switchWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<TechnicalPlanState>;
-    saveBidAnalysisConfig: (payload: { mode: BidAnalysisMode; selectedTaskIds: string[]; bidSectionMode?: BidSectionMode }) => Promise<TechnicalPlanState>;
-    saveOutlineConfig: (payload: { referenceKnowledgeDocumentIds: string[]; outlineMode?: OutlineMode; outlineExpansionMode?: OutlineExpansionMode; wordControlOptions: OutlineWordControlOptions }) => Promise<TechnicalPlanState>;
-    saveOutlineSelection: (payload: SaveOutlineSelectionRequest) => Promise<TechnicalPlanState>;
-    saveOutline: (payload: SaveOutlineRequest) => Promise<TechnicalPlanState>;
-    saveGlobalFacts: (globalFacts: GlobalFactGroupState[]) => Promise<TechnicalPlanState>;
-    saveContentGenerationOptions: (options: ContentGenerationOptions) => Promise<TechnicalPlanState>;
-    saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<TechnicalPlanState>;
-    clear: () => Promise<{ success: boolean; message?: string; state: TechnicalPlanState }>;
+    updateStep: (step: TechnicalPlanStep) => Promise<void>;
+    setWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<void>;
+    switchWorkflowKind: (workflowKind: TechnicalPlanWorkflowKind) => Promise<void>;
+    saveBidAnalysisConfig: (payload: { mode: BidAnalysisMode; selectedTaskIds: string[]; bidSectionMode?: BidSectionMode }) => Promise<void>;
+    saveOutlineConfig: (payload: { referenceKnowledgeDocumentIds: string[]; outlineMode?: OutlineMode; outlineExpansionMode?: OutlineExpansionMode; wordControlOptions: OutlineWordControlOptions }) => Promise<void>;
+    saveOutlineSelection: (payload: SaveOutlineSelectionRequest) => Promise<{ success: boolean }>;
+    saveOutline: (payload: SaveOutlineRequest) => Promise<Partial<TechnicalPlanState>>;
+    saveGlobalFacts: (globalFacts: GlobalFactGroupState[]) => Promise<Partial<TechnicalPlanState>>;
+    saveContentGenerationOptions: (options: ContentGenerationOptions) => Promise<Partial<TechnicalPlanState>>;
+    saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<Partial<TechnicalPlanState>>;
+    clear: () => Promise<{ success: boolean; message?: string }>;
   };
   duplicateCheck: {
     loadState: () => Promise<DuplicateCheckWorkspaceState>;
-    saveFiles: (payload: Pick<DuplicateCheckWorkspaceState, 'tenderFile' | 'tenderFiles' | 'bidFiles'> & Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<DuplicateCheckWorkspaceState>;
-    saveUiState: (payload: Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<DuplicateCheckWorkspaceState>;
-    updateState: (partial: Partial<DuplicateCheckWorkspaceState>) => Promise<DuplicateCheckWorkspaceState>;
-    clear: () => Promise<{ success: boolean; message?: string; state: DuplicateCheckWorkspaceState }>;
+    saveFiles: (payload: Pick<DuplicateCheckWorkspaceState, 'tenderFile' | 'tenderFiles' | 'bidFiles'> & Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<void>;
+    saveUiState: (payload: Partial<Pick<DuplicateCheckWorkspaceState, 'step' | 'activeAnalysisTab'>>) => Promise<void>;
+    updateState: (partial: DuplicateCheckWorkspacePatch) => Promise<void>;
+    clear: () => Promise<{ success: boolean; message?: string }>;
   };
   rejectionCheck: {
     loadState: () => Promise<RejectionCheckWorkspaceState>;
-    importDocument: (role: RejectionDocumentRole) => Promise<{ success: boolean; message?: string; state: RejectionCheckWorkspaceState }>;
-    importTenderFromTechnicalPlan: () => Promise<{ success: boolean; message?: string; state: RejectionCheckWorkspaceState }>;
-    removeDocument: (role: RejectionDocumentRole, documentId?: string) => Promise<RejectionCheckWorkspaceState>;
-    saveUiState: (payload: Partial<Pick<RejectionCheckWorkspaceState, 'step' | 'activeDocumentTab' | 'activeResultTab' | 'activeCheckResultTab' | 'customCheckItems' | 'checkOptions'>>) => Promise<RejectionCheckWorkspaceState>;
-    updateState: (partial: Partial<RejectionCheckWorkspaceState>) => Promise<RejectionCheckWorkspaceState>;
-    clear: () => Promise<{ success: boolean; message?: string; state: RejectionCheckWorkspaceState }>;
+    importDocument: (role: RejectionDocumentRole) => Promise<{ success: boolean; message?: string }>;
+    importTenderFromTechnicalPlan: () => Promise<{ success: boolean; message?: string }>;
+    removeDocument: (role: RejectionDocumentRole, documentId?: string) => Promise<void>;
+    saveUiState: (payload: Partial<Pick<RejectionCheckWorkspaceState, 'step' | 'activeDocumentTab' | 'activeResultTab' | 'activeCheckResultTab' | 'customCheckItems' | 'checkOptions'>>) => Promise<void>;
+    updateState: (partial: RejectionCheckWorkspacePatch) => Promise<void>;
+    clear: () => Promise<{ success: boolean; message?: string }>;
   };
   templates: {
     list: () => Promise<ExportTemplateRecord[]>;

@@ -419,7 +419,8 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
 
     try {
       setSwitchingWorkflow(true);
-      const saved = await window.yibiao.technicalPlan.switchWorkflowKind(targetWorkflowKind);
+      await window.yibiao.technicalPlan.switchWorkflowKind(targetWorkflowKind);
+      const saved = await window.yibiao.technicalPlan.loadState();
       lastExecutedWorkflowSwitchRef.current = targetWorkflowKind;
       setState((prev) => ({ ...prev, ...saved, workflowKind: targetWorkflowKind }));
       setOriginalPlanMarkdown('');
@@ -754,16 +755,15 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
 
         if (taskType === 'global-facts-generation') {
           const hasGlobalFacts = hasOwnField(technicalPlan, 'globalFacts');
-          const globalFactsChanged = hasGlobalFacts && technicalPlan.globalFacts !== prev.globalFacts;
           return {
             ...prev,
             globalFactsTask: trimTaskLogs(technicalPlan.globalFactsTask) || latestTask,
             globalFacts: hasGlobalFacts ? (technicalPlan.globalFacts || []) : prev.globalFacts,
-            contentGenerationTask: globalFactsChanged ? undefined : prev.contentGenerationTask,
-            contentGenerationSections: globalFactsChanged ? {} : prev.contentGenerationSections,
-            contentGenerationPlans: globalFactsChanged ? {} : prev.contentGenerationPlans,
-            contentIllustrationPlan: globalFactsChanged ? undefined : prev.contentIllustrationPlan,
-            contentGenerationRuntime: globalFactsChanged ? undefined : prev.contentGenerationRuntime,
+            contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : prev.contentGenerationTask,
+            contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : prev.contentGenerationSections,
+            contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
+            contentIllustrationPlan: hasOwnField(technicalPlan, 'contentIllustrationPlan') ? technicalPlan.contentIllustrationPlan : prev.contentIllustrationPlan,
+            contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
           };
         }
 
@@ -1015,7 +1015,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
 
     try {
       const result = await window.yibiao?.technicalPlan.clear();
-      setState(result?.state || { ...resetState, workflowKind });
+      setState({ ...resetState, workflowKind });
       setTenderMarkdown('');
       setOriginalPlanMarkdown('');
       showToast(result?.message || '技术方案已重置', 'success');
@@ -1036,12 +1036,30 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
 
   const saveOutline = async (request: SaveOutlineRequest) => {
     const saved = await window.yibiao?.technicalPlan.saveOutline(request);
-    setState((prev) => ({ ...prev, ...(saved || {}), outlineData: saved?.outlineData || request.outlineData }));
+    setState((prev) => {
+      if (request.reason !== 'sort') {
+        return { ...prev, ...(saved || {}), outlineData: saved?.outlineData || request.outlineData };
+      }
+      const contentGenerationSections = Object.fromEntries(Object.entries(prev.contentGenerationSections).map(([nodeId, section]) => {
+        const nextId = request.idMap?.[nodeId] || nodeId;
+        return [nextId, { ...section, id: nextId }];
+      }));
+      const contentGenerationPlans = Object.fromEntries(Object.entries(prev.contentGenerationPlans).map(([nodeId, plan]) => [
+        request.idMap?.[nodeId] || nodeId,
+        plan,
+      ]));
+      return {
+        ...prev,
+        ...(saved || {}),
+        outlineData: saved?.outlineData || request.outlineData,
+        contentGenerationSections,
+        contentGenerationPlans,
+      };
+    });
   };
 
   const saveOutlineSelection = async (request: SaveOutlineSelectionRequest) => {
-    const saved = await window.yibiao?.technicalPlan.saveOutlineSelection(request);
-    setState((prev) => ({ ...prev, ...(saved || {}) }));
+    await window.yibiao?.technicalPlan.saveOutlineSelection(request);
   };
 
   const saveOutlineConfig = async (config: {
@@ -1050,10 +1068,9 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     outlineExpansionMode: TechnicalPlanState['outlineExpansionMode'];
     wordControlOptions: OutlineWordControlOptions;
   }) => {
-    const saved = await window.yibiao!.technicalPlan.saveOutlineConfig(config);
+    await window.yibiao!.technicalPlan.saveOutlineConfig(config);
     setState((prev) => ({
       ...prev,
-      ...saved,
       outlineMode: config.outlineMode,
       outlineExpansionMode: config.outlineExpansionMode,
       outlineWordControlOptions: config.wordControlOptions,

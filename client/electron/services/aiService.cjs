@@ -241,10 +241,11 @@ function createOperationTimeout(timeoutMs) {
   };
 }
 
-async function runWithOperationTimeout(runner, timeoutMs = AI_REQUEST_TIMEOUT_MS) {
+async function runWithOperationTimeout(runner, timeoutMs = AI_REQUEST_TIMEOUT_MS, parentSignal) {
   const timeout = createOperationTimeout(timeoutMs);
   try {
-    return await timeout.run(runner(timeout.signal));
+    const signal = parentSignal ? AbortSignal.any([timeout.signal, parentSignal]) : timeout.signal;
+    return await timeout.run(runner(signal));
   } finally {
     timeout.clear();
   }
@@ -368,10 +369,10 @@ function createAiResponseDataError(message, responseData) {
   return error;
 }
 
-async function downloadImage(url) {
+async function downloadImage(url, options = {}) {
   let response = null;
   try {
-    response = await fetch(url, { dispatcher: directAgent });
+    response = await fetch(url, { dispatcher: directAgent, signal: options.signal });
   } catch (error) {
     throw markAiRequestError(error, { retryable: true });
   }
@@ -691,7 +692,7 @@ function normalizeJsonPayload(request, parsed) {
   return normalized;
 }
 
-async function repairJsonResponse(app, config, invalidContent, issues, responseFormat, progressCallback, progressLabel, repairMessagesBuilder, logTitle) {
+async function repairJsonResponse(app, config, invalidContent, issues, responseFormat, progressCallback, progressLabel, repairMessagesBuilder, logTitle, signal) {
   await emitProgress(progressCallback, `${progressLabel}格式校验失败，正在基于当前结果进行修复。`);
   return chatWithConfig(app, config, {
     messages: repairMessagesBuilder
@@ -699,6 +700,7 @@ async function repairJsonResponse(app, config, invalidContent, issues, responseF
       : buildJsonRepairMessages(invalidContent, issues, progressLabel),
     response_format: responseFormat,
     logTitle: logTitle ? `${logTitle}修复` : `${progressLabel}修复`,
+    signal,
   });
 }
 
@@ -723,6 +725,7 @@ async function parseOrRepairJsonResponseWithConfig(app, config, request, content
         progressLabel,
         request.repairMessagesBuilder,
         logTitle,
+        request.signal,
       );
       return normalizeJsonPayload(request, parseJsonContent(repairedContent));
     } catch {
@@ -747,6 +750,7 @@ async function collectJsonResponseWithConfig(app, config, request) {
       timeout_ms: request.timeout_ms,
       timeout_message: request.timeout_message,
       logTitle,
+      signal: request.signal,
     });
 
     try {
@@ -767,6 +771,7 @@ async function collectJsonResponseWithConfig(app, config, request) {
           progressLabel,
           request.repairMessagesBuilder,
           logTitle,
+          request.signal,
         );
         const repairedParsed = parseJsonContent(repairedContent);
         return normalizeJsonPayload(request, repairedParsed);
@@ -1145,7 +1150,7 @@ async function requestOpenAICompatibleImageData(baseUrl, apiKey, requestBody, fa
   }
 }
 
-async function createImageFromOpenAICompatibleItem(item) {
+async function createImageFromOpenAICompatibleItem(item, options = {}) {
   if (item?.b64_json) {
     return {
       buffer: Buffer.from(item.b64_json, 'base64'),
@@ -1154,7 +1159,7 @@ async function createImageFromOpenAICompatibleItem(item) {
   }
 
   if (item?.url) {
-    return downloadImage(item.url);
+    return downloadImage(item.url, options);
   }
 
   return null;
@@ -1312,7 +1317,7 @@ async function chatWithConfig(app, config, request) {
         requestBody = createChatRequestBody(config, request, { omitResponseFormat: true, stream: requestMode === 'stream' });
         return requestTextAi(app, config, requestBody, { signal, requestMode });
       }
-    }, timeoutMs));
+    }, timeoutMs, request.signal));
 
     responseData = result.responseData;
     recordTextTokenStats(config, result.usage);
@@ -1699,12 +1704,17 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
         { signal, source: `${meta.logProvider}-image-model` },
       ),
       AI_REQUEST_TIMEOUT_MS,
+      request.signal,
     ));
     trackAiRequest(app, config, { ai_request_type: 'image', usage: extractOpenAIUsage(responseData) });
     analyticsTracked = true;
 
     const item = responseData.data?.[0] || {};
-    const image = await createImageFromOpenAICompatibleItem(item);
+    const image = await runWithOperationTimeout(
+      (signal) => createImageFromOpenAICompatibleItem(item, { signal }),
+      AI_REQUEST_TIMEOUT_MS,
+      request.signal,
+    );
 
     if (!image) {
       throw createAiResponseDataError(getOpenAICompatibleImageFailureMessage(responseData, `${meta.label}生图未返回图片数据`), responseData);
@@ -1778,6 +1788,7 @@ async function generateGoogleImage(app, config, request) {
         { signal },
       ),
       AI_REQUEST_TIMEOUT_MS,
+      request.signal,
     ));
     trackAiRequest(app, config, { ai_request_type: 'image', usage: extractGoogleUsage(responseData) });
     analyticsTracked = true;
@@ -1935,7 +1946,7 @@ function createAiService({ app, configStore }) {
     return String(request?.queueScopeId || request?.queue_scope_id || '').trim();
   }
 
-  function withQueueScope(request, queueScopeId) {
+  function withQueueScope(request, queueScopeId, signal) {
     const normalizedScopeId = String(queueScopeId || '').trim();
     if (!normalizedScopeId || !request || typeof request !== 'object') {
       return request;
@@ -1944,6 +1955,7 @@ function createAiService({ app, configStore }) {
     return {
       ...request,
       queueScopeId: getQueueScopeId(request) || normalizedScopeId,
+      ...(signal && !request.signal ? { signal } : {}),
     };
   }
 
@@ -1956,7 +1968,7 @@ function createAiService({ app, configStore }) {
   }
 
   function enqueueImageRequest(request, runner) {
-    return imageRequestQueue.enqueue(runner, { scopeId: getQueueScopeId(request) });
+    return imageRequestQueue.enqueue(runner, { scopeId: getQueueScopeId(request), signal: request?.signal });
   }
 
   const service = {
@@ -1968,7 +1980,7 @@ function createAiService({ app, configStore }) {
       return enqueueTextRequest(request, () => {
         const config = configStore.load();
         return chatWithConfig(app, config, request);
-      });
+      }, { signal: request?.signal });
     },
 
     async runAgentChatCompletion(request) {
@@ -1986,21 +1998,21 @@ function createAiService({ app, configStore }) {
       return enqueueTextRequest(request, () => {
         const config = configStore.load();
         return collectJsonResponseWithConfig(app, config, request);
-      });
+      }, { signal: request?.signal });
     },
 
     async collectJsonResponse(request) {
       return enqueueTextRequest(request, () => {
         const config = configStore.load();
         return collectJsonResponseWithConfig(app, config, request);
-      });
+      }, { signal: request?.signal });
     },
 
     async parseJsonResponseContent(request, content) {
       return enqueueTextRequest(request, () => {
         const config = configStore.load();
         return parseOrRepairJsonResponseWithConfig(app, config, request, content);
-      });
+      }, { signal: request?.signal });
     },
 
     pauseQueueScope(scopeId) {
@@ -2032,26 +2044,26 @@ function createAiService({ app, configStore }) {
       return onTextTokenStatsChanged(listener);
     },
 
-    withQueueScope(scopeId) {
+    withQueueScope(scopeId, signal) {
       return {
         ...service,
         chat(request) {
-          return service.chat(withQueueScope(request, scopeId));
+          return service.chat(withQueueScope(request, scopeId, signal));
         },
         requestJson(request) {
-          return service.requestJson(withQueueScope(request, scopeId));
+          return service.requestJson(withQueueScope(request, scopeId, signal));
         },
         collectJsonResponse(request) {
-          return service.collectJsonResponse(withQueueScope(request, scopeId));
+          return service.collectJsonResponse(withQueueScope(request, scopeId, signal));
         },
         parseJsonResponseContent(request, content) {
-          return service.parseJsonResponseContent(withQueueScope(request, scopeId), content);
+          return service.parseJsonResponseContent(withQueueScope(request, scopeId, signal), content);
         },
         runAgentChatCompletion(request) {
-          return service.runAgentChatCompletion(withQueueScope(request, scopeId));
+          return service.runAgentChatCompletion(withQueueScope(request, scopeId, signal));
         },
         generateImage(request) {
-          return service.generateImage(withQueueScope(request, scopeId));
+          return service.generateImage(withQueueScope(request, scopeId, signal));
         },
       };
     },

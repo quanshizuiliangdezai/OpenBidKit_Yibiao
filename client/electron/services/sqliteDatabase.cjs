@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 20;
+const schemaVersion = 21;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -47,7 +47,6 @@ function createInitialSchema(db) {
       outline_project_overview TEXT,
       content_generation_options_json TEXT,
       content_generation_runtime_json TEXT,
-      content_illustration_plan_json TEXT,
       selected_section_id TEXT,
       selected_section_title TEXT,
       selected_section_head_line TEXT,
@@ -60,7 +59,6 @@ function createInitialSchema(db) {
       task_id TEXT NOT NULL,
       status TEXT NOT NULL,
       progress INTEGER NOT NULL DEFAULT 0,
-      logs_json TEXT,
       stats_json TEXT,
       error TEXT,
       pause_requested INTEGER NOT NULL DEFAULT 0,
@@ -243,7 +241,6 @@ function addTechnicalPlanTenderFiles(db) {
 }
 
 function addTechnicalPlanIllustrationPlan(db) {
-  addColumnIfMissing(db, 'technical_plan_meta', 'content_illustration_plan_json', 'TEXT');
   removeLegacyTechnicalPlanIllustrationType(db);
 }
 
@@ -257,6 +254,97 @@ function addTechnicalPlanOutlineWordControl(db) {
 function addTechnicalPlanOutlineContentMode(db) {
   addColumnIfMissing(db, 'technical_plan_outline_nodes', 'content_mode', 'TEXT');
   addColumnIfMissing(db, 'technical_plan_outline_nodes', 'content_mode_note', 'TEXT');
+}
+
+function createTaskLogsAndIllustrationItemsSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_domain TEXT NOT NULL,
+      task_type TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_task_logs_task
+    ON task_logs(task_domain, task_type, task_id, id DESC);
+
+    CREATE TRIGGER IF NOT EXISTS trg_technical_plan_task_logs_delete
+    AFTER DELETE ON technical_plan_tasks
+    BEGIN
+      DELETE FROM task_logs
+      WHERE task_domain = 'technical-plan' AND task_type = OLD.type AND task_id = OLD.task_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_rejection_check_task_logs_delete
+    AFTER DELETE ON rejection_check_tasks
+    BEGIN
+      DELETE FROM task_logs
+      WHERE task_domain = 'rejection-check' AND task_type = OLD.type AND task_id = OLD.task_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_duplicate_check_task_logs_delete
+    AFTER DELETE ON duplicate_check_tasks
+    BEGIN
+      DELETE FROM task_logs
+      WHERE task_domain = 'duplicate-check' AND task_type = OLD.type AND task_id = OLD.task_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_technical_plan_task_logs_replace
+    AFTER UPDATE OF task_id ON technical_plan_tasks
+    WHEN OLD.task_id <> NEW.task_id
+    BEGIN
+      DELETE FROM task_logs
+      WHERE task_domain = 'technical-plan' AND task_type = OLD.type AND task_id = OLD.task_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_rejection_check_task_logs_replace
+    AFTER UPDATE OF task_id ON rejection_check_tasks
+    WHEN OLD.task_id <> NEW.task_id
+    BEGIN
+      DELETE FROM task_logs
+      WHERE task_domain = 'rejection-check' AND task_type = OLD.type AND task_id = OLD.task_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_duplicate_check_task_logs_replace
+    AFTER UPDATE OF task_id ON duplicate_check_tasks
+    WHEN OLD.task_id <> NEW.task_id
+    BEGIN
+      DELETE FROM task_logs
+      WHERE task_domain = 'duplicate-check' AND task_type = OLD.type AND task_id = OLD.task_id;
+    END;
+
+    CREATE TABLE IF NOT EXISTS technical_plan_illustration_plans (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      plan_version INTEGER NOT NULL,
+      revision TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS technical_plan_illustration_items (
+      item_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      image_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      section_ids_json TEXT NOT NULL,
+      placement TEXT NOT NULL,
+      priority INTEGER NOT NULL DEFAULT 0,
+      generation_status TEXT,
+      generation_mode TEXT,
+      generation_code TEXT,
+      generation_source_path TEXT,
+      generation_asset_url TEXT,
+      generation_attempts INTEGER,
+      generation_error TEXT,
+      generation_updated_at TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_technical_plan_illustration_items_order
+    ON technical_plan_illustration_items(sort_order);
+  `);
 }
 
 function removeLegacyTechnicalPlanIllustrationType(db) {
@@ -282,11 +370,6 @@ function addKnowledgeDocumentSortOrder(db) {
     CREATE INDEX IF NOT EXISTS idx_knowledge_documents_folder_order
     ON knowledge_documents(folder_id, sort_order, created_at DESC);
   `);
-}
-
-function addKnowledgeDocumentSoftDeleteColumns(db) {
-  addColumnIfMissing(db, 'knowledge_documents', 'is_deleted', 'INTEGER NOT NULL DEFAULT 0');
-  addColumnIfMissing(db, 'knowledge_documents', 'deleted_at', 'TEXT');
 }
 
 function createDuplicateCheckSchema(db) {
@@ -322,7 +405,6 @@ function createDuplicateCheckSchema(db) {
       task_id TEXT NOT NULL,
       status TEXT NOT NULL,
       progress INTEGER NOT NULL DEFAULT 0,
-      logs_json TEXT,
       stats_json TEXT,
       error TEXT,
       payload_signature TEXT,
@@ -533,7 +615,6 @@ function createRejectionCheckSchema(db) {
       task_id TEXT NOT NULL,
       status TEXT NOT NULL,
       progress INTEGER NOT NULL DEFAULT 0,
-      logs_json TEXT,
       stats_json TEXT,
       error TEXT,
       started_at TEXT NOT NULL,
@@ -695,18 +776,6 @@ function createWorkspaceV2Schema(db) {
 
 function createKnowledgeBaseSchema(db) {
   db.exec(`
-    CREATE TABLE IF NOT EXISTS knowledge_migration_meta (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      legacy_index_hash TEXT,
-      status TEXT NOT NULL DEFAULT 'idle',
-      migrated_folder_count INTEGER NOT NULL DEFAULT 0,
-      migrated_document_count INTEGER NOT NULL DEFAULT 0,
-      started_at TEXT,
-      completed_at TEXT,
-      cleanup_completed_at TEXT,
-      error TEXT
-    );
-
     CREATE TABLE IF NOT EXISTS knowledge_folders (
       folder_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -743,8 +812,6 @@ function createKnowledgeBaseSchema(db) {
       sort_order INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      is_deleted INTEGER NOT NULL DEFAULT 0,
-      deleted_at TEXT,
       FOREIGN KEY (folder_id) REFERENCES knowledge_folders(folder_id) ON DELETE CASCADE
     );
 
@@ -911,36 +978,6 @@ function createExportTemplatesSchema(db) {
   `);
 }
 
-// 记录本地知识库与团队库的同步位点（上次成功 push/pull 的时间），用于增量同步。
-function createKnowledgeSyncMetaSchema(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS knowledge_sync_meta (
-      key TEXT PRIMARY KEY,
-      value TEXT
-    );
-  `);
-}
-
-// 知识库问答（RAG）向量分块索引：缓存 团队库/个人库 文档切块后的 embedding。
-// source: 'team' | 'personal'；document_id 为服务器侧文档 id；content_hash 用于增量重建。
-function createKbQaChunkIndexSchema(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS kb_qa_chunk_index (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      source TEXT NOT NULL,
-      document_id TEXT NOT NULL,
-      title TEXT,
-      chunk_index INTEGER NOT NULL DEFAULT 0,
-      content TEXT NOT NULL,
-      content_hash TEXT NOT NULL,
-      embedding_json TEXT,
-      embedding_model TEXT,
-      updated_at TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_kb_qa_chunk_source_doc ON kb_qa_chunk_index (source, document_id);
-  `);
-}
-
 const schemaHealthTableGroups = [
   {
     version: 1,
@@ -992,7 +1029,6 @@ const schemaHealthTableGroups = [
   {
     version: 3,
     tables: [
-      'knowledge_migration_meta',
       'knowledge_folders',
       'knowledge_documents',
       'knowledge_blocks',
@@ -1007,11 +1043,6 @@ const schemaHealthTableGroups = [
     repair: createKnowledgeBaseSchema,
   },
   {
-    version: 18,
-    tables: ['knowledge_sync_meta'],
-    repair: createKnowledgeSyncMetaSchema,
-  },
-  {
     version: 4,
     tables: ['technical_plan_global_fact_groups'],
     repair: createTechnicalPlanGlobalFactsSchema,
@@ -1022,11 +1053,15 @@ const schemaHealthTableGroups = [
     repair: createExportTemplatesSchema,
   },
   {
-    version: 19,
-    tables: ['kb_qa_chunk_index'],
-    repair: createKbQaChunkIndexSchema,
+    version: 20,
+    tables: ['task_logs', 'technical_plan_illustration_plans', 'technical_plan_illustration_items'],
+    repair: createTaskLogsAndIllustrationItemsSchema,
   },
 ];
+
+function removeKnowledgeMigrationMeta(db) {
+  db.exec('DROP TABLE IF EXISTS knowledge_migration_meta;');
+}
 
 const schemaHealthColumnGroups = [
   {
@@ -1159,21 +1194,6 @@ const schemaHealthColumnGroups = [
     table: 'technical_plan_meta',
     columns: {
       tender_files_json: 'TEXT',
-    },
-  },
-  {
-    version: 17,
-    table: 'technical_plan_meta',
-    columns: {
-      content_illustration_plan_json: 'TEXT',
-    },
-  },
-  {
-    version: 18,
-    table: 'knowledge_documents',
-    columns: {
-      is_deleted: 'INTEGER NOT NULL DEFAULT 0',
-      deleted_at: 'TEXT',
     },
   },
   {
@@ -1337,9 +1357,9 @@ const migrations = [
     up: addTechnicalPlanTenderFiles,
   },
   {
-    version: 18,
-    description: '知识库文档新增软删除同步字段',
-    up: addKnowledgeDocumentSoftDeleteColumns,
+    version: 17,
+    description: '技术方案新增全文图片编排结果',
+    up: addTechnicalPlanIllustrationPlan,
   },
   {
     version: 18,
@@ -1348,13 +1368,18 @@ const migrations = [
   },
   {
     version: 19,
-    description: '新增知识库问答向量分块索引表',
-    up: createKbQaChunkIndexSchema,
+    description: '技术方案目录叶子新增内容处理模式',
+    up: addTechnicalPlanOutlineContentMode,
   },
   {
     version: 20,
-    description: '技术方案目录叶子新增内容处理模式',
-    up: addTechnicalPlanOutlineContentMode,
+    description: '任务日志按行存储并拆分全文图片计划项目',
+    up: createTaskLogsAndIllustrationItemsSchema,
+  },
+  {
+    version: 21,
+    description: '移除废弃的知识库旧数据迁移状态',
+    up: removeKnowledgeMigrationMeta,
   },
 ];
 
@@ -1386,6 +1411,9 @@ function backupDatabaseFiles(db, databasePath, onStatus) {
 
 function applyMigrations(db, databasePath, onStatus) {
   const currentVersion = Number(db.pragma('user_version', { simple: true }) || 0);
+  if (currentVersion > schemaVersion) {
+    throw new Error(`本地数据库版本 ${currentVersion} 高于当前客户端支持版本 ${schemaVersion}，请升级客户端后再使用技术方案功能。`);
+  }
   if (currentVersion === schemaVersion) {
     ensureWorkspaceSchemaHealth(db, schemaVersion, onStatus);
     return;

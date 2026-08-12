@@ -33,6 +33,7 @@ const { createSqliteDatabase } = require('../services/sqliteDatabase.cjs');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 const { createSystemFontService } = require('../services/systemFontService.cjs');
 const { createTaskService } = require('../services/taskService.cjs');
+const { createTaskLogStore } = require('../services/taskLogStore.cjs');
 const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
 const { createTemplateStore } = require('../services/templateStore.cjs');
 const { createKbAuthService } = require('../services/kbAuthService.cjs');
@@ -105,8 +106,6 @@ const workspaceDatabaseChannels = [
   'rejection-check:save-ui-state',
   'rejection-check:update-state',
   'rejection-check:clear',
-  'knowledge-base:get-migration-status',
-  'knowledge-base:migrate-legacy',
   'knowledge-base:list',
   'knowledge-base:create-folder',
   'knowledge-base:rename-folder',
@@ -198,11 +197,12 @@ function registerWorkspaceDatabaseStatusIpc({ mainWindow }) {
 
 function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, kbAuthService, kbTeamService, kbPersonalService, updateStatus, mainWindow }) {
   const sqliteDatabase = createSqliteDatabase(app, { onStatus: updateStatus });
+  const taskLogStore = createTaskLogStore({ db: sqliteDatabase.db });
   const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore, kbTeamService, kbPersonalService });
-  const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService, agentService });
-  const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db });
-  const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore });
+  const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService, agentService, taskLogStore });
+  const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db, taskLogStore });
+  const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore, taskLogStore });
   const templateStore = createTemplateStore({ db: sqliteDatabase.db });
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
   const taskService = createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });

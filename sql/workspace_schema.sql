@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 18;
+PRAGMA user_version = 21;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -74,8 +74,6 @@ CREATE TABLE IF NOT EXISTS technical_plan_meta (
   outline_project_overview TEXT,
   content_generation_options_json TEXT,
   content_generation_runtime_json TEXT,
-  -- v17 Agent 全文图片编排的最终结果 JSON。
-  content_illustration_plan_json TEXT,
   -- v6 兼容字段（旧版客户端遗留，新代码不再使用但保留以兼容）
   current_bid_section_id TEXT,
   bid_sections_extracted INTEGER,
@@ -93,13 +91,56 @@ CREATE TABLE IF NOT EXISTS technical_plan_tasks (
   task_id TEXT NOT NULL,
   status TEXT NOT NULL,
   progress INTEGER NOT NULL DEFAULT 0,
-  logs_json TEXT,
   stats_json TEXT,
   error TEXT,
   pause_requested INTEGER NOT NULL DEFAULT 0,
   started_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- 当前任务的有限日志明细，三个任务域共用；不保存历史任务。
+CREATE TABLE IF NOT EXISTS task_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_domain TEXT NOT NULL,
+  task_type TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  message TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_logs_task
+ON task_logs(task_domain, task_type, task_id, id DESC);
+
+-- 全文图片计划头与图片项目按行存储，单张图片状态变化只更新对应项目。
+CREATE TABLE IF NOT EXISTS technical_plan_illustration_plans (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  plan_version INTEGER NOT NULL,
+  revision TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS technical_plan_illustration_items (
+  item_id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  image_type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  section_ids_json TEXT NOT NULL,
+  placement TEXT NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 0,
+  generation_status TEXT,
+  generation_mode TEXT,
+  generation_code TEXT,
+  generation_source_path TEXT,
+  generation_asset_url TEXT,
+  generation_attempts INTEGER,
+  generation_error TEXT,
+  generation_updated_at TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_technical_plan_illustration_items_order
+ON technical_plan_illustration_items(sort_order);
 
 -- 技术方案招标文件解析项。
 CREATE TABLE IF NOT EXISTS technical_plan_bid_items (
@@ -152,6 +193,7 @@ ON technical_plan_outline_nodes(level);
 
 -- 技术方案正文生成小节状态。
 -- 不重复保存正文内容，正文内容在 technical_plan_outline_nodes.content。
+-- status: idle / running / success / error / ignored。
 CREATE TABLE IF NOT EXISTS technical_plan_content_sections (
   node_id TEXT PRIMARY KEY,
   status TEXT NOT NULL DEFAULT 'idle',
@@ -224,7 +266,6 @@ CREATE TABLE IF NOT EXISTS duplicate_check_tasks (
   task_id TEXT NOT NULL,
   status TEXT NOT NULL,
   progress INTEGER NOT NULL DEFAULT 0,
-  logs_json TEXT,
   stats_json TEXT,
   error TEXT,
   payload_signature TEXT,
@@ -453,12 +494,57 @@ CREATE TABLE IF NOT EXISTS rejection_check_tasks (
   task_id TEXT NOT NULL,
   status TEXT NOT NULL,
   progress INTEGER NOT NULL DEFAULT 0,
-  logs_json TEXT,
   stats_json TEXT,
   error TEXT,
   started_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- 任务删除或同类型任务换代时，数据库同步删除已失效日志。
+CREATE TRIGGER IF NOT EXISTS trg_technical_plan_task_logs_delete
+AFTER DELETE ON technical_plan_tasks
+BEGIN
+  DELETE FROM task_logs
+  WHERE task_domain = 'technical-plan' AND task_type = OLD.type AND task_id = OLD.task_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_rejection_check_task_logs_delete
+AFTER DELETE ON rejection_check_tasks
+BEGIN
+  DELETE FROM task_logs
+  WHERE task_domain = 'rejection-check' AND task_type = OLD.type AND task_id = OLD.task_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_duplicate_check_task_logs_delete
+AFTER DELETE ON duplicate_check_tasks
+BEGIN
+  DELETE FROM task_logs
+  WHERE task_domain = 'duplicate-check' AND task_type = OLD.type AND task_id = OLD.task_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_technical_plan_task_logs_replace
+AFTER UPDATE OF task_id ON technical_plan_tasks
+WHEN OLD.task_id <> NEW.task_id
+BEGIN
+  DELETE FROM task_logs
+  WHERE task_domain = 'technical-plan' AND task_type = OLD.type AND task_id = OLD.task_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_rejection_check_task_logs_replace
+AFTER UPDATE OF task_id ON rejection_check_tasks
+WHEN OLD.task_id <> NEW.task_id
+BEGIN
+  DELETE FROM task_logs
+  WHERE task_domain = 'rejection-check' AND task_type = OLD.type AND task_id = OLD.task_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_duplicate_check_task_logs_replace
+AFTER UPDATE OF task_id ON duplicate_check_tasks
+WHEN OLD.task_id <> NEW.task_id
+BEGIN
+  DELETE FROM task_logs
+  WHERE task_domain = 'duplicate-check' AND task_type = OLD.type AND task_id = OLD.task_id;
+END;
 
 -- 无效投标与废标项解析结果。
 CREATE TABLE IF NOT EXISTS rejection_check_extraction (
@@ -543,21 +629,6 @@ ON rejection_check_logic_findings(sort_order);
 -- ============================================================================
 -- 知识库 knowledge_*（v3 目标设计）
 -- ============================================================================
-
--- 旧知识库数据迁移状态。
--- 旧数据来源是 userData/workspace/knowledge-base/index.json 和每文档结果 JSON。
--- 用户进入知识库页面后确认迁移；迁移成功并校验后删除旧 index.json 和每文档结果 JSON。
-CREATE TABLE IF NOT EXISTS knowledge_migration_meta (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  legacy_index_hash TEXT,
-  status TEXT NOT NULL DEFAULT 'idle',
-  migrated_folder_count INTEGER NOT NULL DEFAULT 0,
-  migrated_document_count INTEGER NOT NULL DEFAULT 0,
-  started_at TEXT,
-  completed_at TEXT,
-  cleanup_completed_at TEXT,
-  error TEXT
-);
 
 -- 知识库文件夹。
 CREATE TABLE IF NOT EXISTS knowledge_folders (

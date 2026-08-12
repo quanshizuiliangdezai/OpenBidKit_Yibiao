@@ -14,6 +14,7 @@ import type {
   RejectionCheckResultState,
   RejectionCheckResultTab,
   RejectionCheckRunStatus,
+  RejectionCheckWorkspacePatch,
   RejectionCheckWorkspaceState,
   RejectionDocumentContent,
   RejectionDocumentRole,
@@ -569,6 +570,8 @@ function RejectionCheckPage() {
   const [extractionTask, setExtractionTask] = useState<RejectionBackgroundTaskState | undefined>();
   const [checkTask, setCheckTask] = useState<RejectionBackgroundTaskState | undefined>();
   const [customCheckItems, setCustomCheckItems] = useState('');
+  const [customCheckItemsDraft, setCustomCheckItemsDraft] = useState('');
+  const [customCheckItemsSaving, setCustomCheckItemsSaving] = useState(false);
   const [checkOptions, setCheckOptions] = useState<RejectionCheckOptions>(defaultCheckOptions);
   const [draftCheckOptions, setDraftCheckOptions] = useState<RejectionCheckOptions>(defaultCheckOptions);
   const [checkConfigDialogOpen, setCheckConfigDialogOpen] = useState(false);
@@ -577,6 +580,9 @@ function RejectionCheckPage() {
   const hydratedRef = useRef(false);
   const autoStartedSignatureRef = useRef('');
   const activeTaskTypesRef = useRef<Set<string> | null>(null);
+  const customCheckItemsRef = useRef('');
+  const customCheckItemsDraftRef = useRef('');
+  const customCheckItemsSaveVersionRef = useRef(0);
   const { showToast } = useToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
 
@@ -599,7 +605,7 @@ function RejectionCheckPage() {
     || logicCheckResult.findings.length
     || extractionTask
     || checkTask
-    || customCheckItems.trim()
+    || customCheckItemsDraft.trim()
     || checkOptionsChanged,
   );
   const canGoNext = Boolean(tenderDocument && bidDocuments.length);
@@ -646,7 +652,8 @@ function RejectionCheckPage() {
   const logicCheckRunning = logicCheckResult.status === 'running';
   const backgroundCheckRunning = checkTask?.status === 'running';
   const checkRunning = rejectionCheckRunning || typoCheckRunning || logicCheckRunning || backgroundCheckRunning;
-  const customCheckItemsDisabled = extractionRunning || checkRunning;
+  const customCheckItemsDirty = customCheckItemsDraft !== customCheckItems;
+  const customCheckItemsDisabled = extractionRunning || checkRunning || customCheckItemsSaving;
   const hasStaleRejectionCheckResult = Boolean(
     currentRejectionCheckInputSignature
     && rejectionCheckResult.inputSignature
@@ -677,6 +684,22 @@ function RejectionCheckPage() {
     trackPageView(page);
   }, [activeCheckResultTab, activeDocumentTab, activeResultTab, activeTenderSourceDocument, analyticsReady, step]);
 
+  function syncCustomCheckItemsFromWorkspace(value: unknown) {
+    const nextValue = typeof value === 'string' ? value : '';
+    const shouldSyncDraft = customCheckItemsDraftRef.current === customCheckItemsRef.current;
+    customCheckItemsRef.current = nextValue;
+    setCustomCheckItems(nextValue);
+    if (shouldSyncDraft) {
+      customCheckItemsDraftRef.current = nextValue;
+      setCustomCheckItemsDraft(nextValue);
+    }
+  }
+
+  function updateCustomCheckItemsDraft(value: string) {
+    customCheckItemsDraftRef.current = value;
+    setCustomCheckItemsDraft(value);
+  }
+
   function applyWorkspaceState(state: RejectionCheckWorkspaceState, options: { syncViewState?: boolean } = {}) {
     const syncViewState = options.syncViewState !== false;
     setTenderDocument(state.tenderDocument || null);
@@ -704,13 +727,49 @@ function RejectionCheckPage() {
     setLogicCheckResult(normalizeLogicCheckResultState(state.logicCheckResult));
     setExtractionTask(normalizeBackgroundTaskState(state.extractionTask));
     setCheckTask(normalizeBackgroundTaskState(state.checkTask));
-    setCustomCheckItems(typeof state.customCheckItems === 'string' ? state.customCheckItems : '');
+    syncCustomCheckItemsFromWorkspace(state.customCheckItems);
     const nextOptions = normalizeCheckOptions(state.checkOptions);
     setCheckOptions(nextOptions);
     setDraftCheckOptions(nextOptions);
   }
 
-  function persistRejectionState(partial: Partial<RejectionCheckWorkspaceState>, fallbackMessage: string) {
+  function applyWorkspacePatch(patch: RejectionCheckWorkspacePatch) {
+    const has = (field: keyof RejectionCheckWorkspaceState) => Object.prototype.hasOwnProperty.call(patch, field);
+    if (has('tenderDocument')) setTenderDocument(patch.tenderDocument || null);
+    if (has('tenderDocuments')) setTenderDocuments(Array.isArray(patch.tenderDocuments) ? patch.tenderDocuments : []);
+    if (has('bidDocuments')) setBidDocuments(Array.isArray(patch.bidDocuments) ? patch.bidDocuments : []);
+    if (has('invalidBidAndRejectionItems')) {
+      setInvalidBidAndRejectionItems(normalizeExtractionState({
+        ...(patch.invalidBidAndRejectionItems || {}),
+        content: stripTripleQuoteWrapper(patch.invalidBidAndRejectionItems?.content || ''),
+      }));
+    }
+    if (has('rejectionCheckResult')) {
+      setRejectionCheckResult((prev) => patch.rejectionCheckResult === undefined
+        ? createEmptyRejectionCheckResultState()
+        : normalizeRejectionCheckResultState({ ...prev, ...patch.rejectionCheckResult }));
+    }
+    if (has('typoCheckResult')) {
+      setTypoCheckResult((prev) => patch.typoCheckResult === undefined
+        ? createEmptyTypoCheckResultState()
+        : normalizeTypoCheckResultState({ ...prev, ...patch.typoCheckResult }));
+    }
+    if (has('logicCheckResult')) {
+      setLogicCheckResult((prev) => patch.logicCheckResult === undefined
+        ? createEmptyLogicCheckResultState()
+        : normalizeLogicCheckResultState({ ...prev, ...patch.logicCheckResult }));
+    }
+    if (has('extractionTask')) setExtractionTask(normalizeBackgroundTaskState(patch.extractionTask));
+    if (has('checkTask')) setCheckTask(normalizeBackgroundTaskState(patch.checkTask));
+    if (has('customCheckItems')) syncCustomCheckItemsFromWorkspace(patch.customCheckItems);
+    if (has('checkOptions')) {
+      const nextOptions = normalizeCheckOptions(patch.checkOptions);
+      setCheckOptions(nextOptions);
+      setDraftCheckOptions(nextOptions);
+    }
+  }
+
+  function persistRejectionState(partial: RejectionCheckWorkspacePatch, fallbackMessage: string) {
     void window.yibiao?.rejectionCheck.updateState(partial)
       .catch((error) => {
         showToast(error instanceof Error ? error.message : fallbackMessage, 'error');
@@ -751,13 +810,12 @@ function RejectionCheckPage() {
       step,
       activeResultTab,
       activeCheckResultTab,
-      customCheckItems,
       checkOptions,
     })
       .catch((error) => {
         showToast(error instanceof Error ? error.message : '保存废标项检查页面状态失败', 'error');
       });
-  }, [activeCheckResultTab, activeDocumentTab, activeResultTab, checkOptions, customCheckItems, showToast, step]);
+  }, [activeCheckResultTab, activeDocumentTab, activeResultTab, checkOptions, showToast, step]);
 
   useEffect(() => {
     if (!window.yibiao?.tasks) {
@@ -767,6 +825,9 @@ function RejectionCheckPage() {
     const unsubscribe = window.yibiao.tasks.onTaskEvent<unknown, RejectionCheckWorkspaceState>((event) => {
       if (event.rejectionCheck) {
         applyWorkspaceState(event.rejectionCheck, { syncViewState: false });
+      }
+      if (event.rejectionCheckPatch) {
+        applyWorkspacePatch(event.rejectionCheckPatch);
       }
     });
 
@@ -828,7 +889,7 @@ function RejectionCheckPage() {
         return;
       }
 
-      applyWorkspaceState(result.state);
+      applyWorkspaceState(await window.yibiao.rejectionCheck.loadState());
       showToast(result.message || `${documentLabel}已解析`, 'success');
     } catch (error) {
       const message = error instanceof Error ? error.message : `${documentLabel}解析失败`;
@@ -856,7 +917,7 @@ function RejectionCheckPage() {
         return;
       }
 
-      applyWorkspaceState(result.state);
+      applyWorkspaceState(await window.yibiao.rejectionCheck.loadState());
       showToast(result.message || '已从技术方案读取招标文件', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '读取技术方案招标文件失败', 'error');
@@ -867,6 +928,7 @@ function RejectionCheckPage() {
 
   function removeDocument(role: RejectionDocumentRole, documentId?: string) {
     void window.yibiao?.rejectionCheck.removeDocument(role, documentId)
+      .then(() => window.yibiao.rejectionCheck.loadState())
       .then((state) => {
         applyWorkspaceState({ ...state, step: role === 'tender' && step === 'items' ? 'documents' : state.step });
       })
@@ -951,6 +1013,7 @@ function RejectionCheckPage() {
 
   function resetWorkspace() {
     autoStartedSignatureRef.current = '';
+    customCheckItemsSaveVersionRef.current += 1;
     setStep('documents');
     setTenderDocument(null);
     setTenderDocuments([]);
@@ -965,13 +1028,16 @@ function RejectionCheckPage() {
     setLogicCheckResult(createEmptyLogicCheckResultState());
     setExtractionTask(undefined);
     setCheckTask(undefined);
+    customCheckItemsRef.current = '';
+    customCheckItemsDraftRef.current = '';
     setCustomCheckItems('');
+    setCustomCheckItemsDraft('');
+    setCustomCheckItemsSaving(false);
     setCheckOptions(defaultCheckOptions);
     setDraftCheckOptions(defaultCheckOptions);
     setCheckConfigDialogOpen(false);
     void window.yibiao?.rejectionCheck.clear()
-      .then((result) => {
-        if (result?.state) applyWorkspaceState(result.state);
+      .then(() => {
         showToast('已重置废标项检查文件', 'success');
       })
       .catch((error) => {
@@ -998,8 +1064,57 @@ function RejectionCheckPage() {
     showToast('检查配置已保存', 'success');
   }
 
+  async function saveCustomCheckItems() {
+    if (!customCheckItemsDirty || customCheckItemsDisabled) {
+      return;
+    }
+
+    const saveUiState = window.yibiao?.rejectionCheck.saveUiState;
+    if (typeof saveUiState !== 'function') {
+      showToast('废标项检查缓存接口尚未加载，请重启应用后重试', 'error');
+      return;
+    }
+
+    const nextCustomCheckItems = customCheckItemsDraftRef.current;
+    const saveVersion = ++customCheckItemsSaveVersionRef.current;
+    try {
+      setCustomCheckItemsSaving(true);
+      await saveUiState({ customCheckItems: nextCustomCheckItems });
+      if (saveVersion !== customCheckItemsSaveVersionRef.current) {
+        return;
+      }
+      customCheckItemsRef.current = nextCustomCheckItems;
+      setCustomCheckItems(nextCustomCheckItems);
+      showToast('自定义检查项已保存', 'success');
+    } catch (error) {
+      if (saveVersion !== customCheckItemsSaveVersionRef.current) {
+        return;
+      }
+      showToast(error instanceof Error ? error.message : '保存自定义检查项失败', 'error');
+    } finally {
+      if (saveVersion === customCheckItemsSaveVersionRef.current) {
+        setCustomCheckItemsSaving(false);
+      }
+    }
+  }
+
+  function ensureCustomCheckItemsSaved() {
+    if (!customCheckItemsDirty) {
+      return true;
+    }
+
+    setStep('items');
+    setActiveResultTab('custom');
+    showToast('自定义检查项有未保存修改，请先保存', 'info');
+    return false;
+  }
+
   async function startChecks(options: RejectionCheckOptions = checkOptions, runOptions: RejectionCheckOptions = options) {
     if (checkRunning) {
+      return;
+    }
+
+    if (!ensureCustomCheckItemsSaved()) {
       return;
     }
 
@@ -1087,7 +1202,6 @@ function RejectionCheckPage() {
 
       await window.yibiao?.rejectionCheck.saveUiState({
         activeCheckResultTab: nextActiveCheckResultTab,
-        customCheckItems,
         checkOptions: options,
       });
 
@@ -1141,7 +1255,9 @@ function RejectionCheckPage() {
       updatedAt: new Date().toISOString(),
     };
     setRejectionCheckResult(next);
-    persistRejectionState({ rejectionCheckResult: next }, '保存废标项结果状态失败');
+    persistRejectionState({
+      rejectionCheckResult: { activeFindingId: next.activeFindingId, updatedAt: next.updatedAt },
+    }, '保存废标项结果状态失败');
   }
 
   function deleteFinding(findingId: string) {
@@ -1154,7 +1270,14 @@ function RejectionCheckPage() {
       updatedAt: new Date().toISOString(),
     };
     setRejectionCheckResult(next);
-    persistRejectionState({ rejectionCheckResult: next }, '保存废标项结果状态失败');
+    persistRejectionState({
+      rejectionCheckResult: {
+        findings,
+        activeFindingId: next.activeFindingId,
+        progressMessage: next.progressMessage,
+        updatedAt: next.updatedAt,
+      },
+    }, '保存废标项结果状态失败');
   }
 
   function toggleTypoFinding(findingId: string) {
@@ -1164,7 +1287,9 @@ function RejectionCheckPage() {
       updatedAt: new Date().toISOString(),
     };
     setTypoCheckResult(next);
-    persistRejectionState({ typoCheckResult: next }, '保存错别字结果状态失败');
+    persistRejectionState({
+      typoCheckResult: { activeFindingId: next.activeFindingId, updatedAt: next.updatedAt },
+    }, '保存错别字结果状态失败');
   }
 
   function deleteTypoFinding(findingId: string) {
@@ -1177,7 +1302,14 @@ function RejectionCheckPage() {
       updatedAt: new Date().toISOString(),
     };
     setTypoCheckResult(next);
-    persistRejectionState({ typoCheckResult: next }, '保存错别字结果状态失败');
+    persistRejectionState({
+      typoCheckResult: {
+        findings,
+        activeFindingId: next.activeFindingId,
+        progressMessage: next.progressMessage,
+        updatedAt: next.updatedAt,
+      },
+    }, '保存错别字结果状态失败');
   }
 
   async function copyTypoOriginal(finding: TypoCheckFinding) {
@@ -1205,7 +1337,9 @@ function RejectionCheckPage() {
       updatedAt: new Date().toISOString(),
     };
     setLogicCheckResult(next);
-    persistRejectionState({ logicCheckResult: next }, '保存逻辑谬误结果状态失败');
+    persistRejectionState({
+      logicCheckResult: { activeFindingId: next.activeFindingId, updatedAt: next.updatedAt },
+    }, '保存逻辑谬误结果状态失败');
   }
 
   function deleteLogicFinding(findingId: string) {
@@ -1218,7 +1352,14 @@ function RejectionCheckPage() {
       updatedAt: new Date().toISOString(),
     };
     setLogicCheckResult(next);
-    persistRejectionState({ logicCheckResult: next }, '保存逻辑谬误结果状态失败');
+    persistRejectionState({
+      logicCheckResult: {
+        findings,
+        activeFindingId: next.activeFindingId,
+        progressMessage: next.progressMessage,
+        updatedAt: next.updatedAt,
+      },
+    }, '保存逻辑谬误结果状态失败');
   }
 
   function markStaleTasksWithoutActive(activeTypes: Set<string>) {
@@ -1278,6 +1419,9 @@ function RejectionCheckPage() {
   }
 
   function switchStep(nextStep: RejectionCheckStep) {
+    if (nextStep !== step && !ensureCustomCheckItemsSaved()) {
+      return;
+    }
     if (nextStep === 'items' && !canGoNext) {
       showToast('请先准备招标文件和投标文件', 'info');
       return;
@@ -1786,8 +1930,33 @@ function RejectionCheckPage() {
             aria-labelledby={`rejection-result-tab-${activeResultTab}`}
           >
             <div className="analysis-result-head rejection-reader-head">
-              <strong>{activeResultTab === 'analysis' ? '解析结果' : '自定义检查项'}</strong>
-              <span>{activeResultTab === 'analysis' ? `${extractionStatusLabels[visibleExtractionStatus]} · ${resultSourceLabel}` : customCheckItemsDisabled ? '任务运行中暂不能修改自定义检查项，当前检查会使用启动任务时的内容' : '可填写补充检查口径、人工关注项或项目经验'}</span>
+              <div className="rejection-reader-heading">
+                <strong>{activeResultTab === 'analysis' ? '解析结果' : '自定义检查项'}</strong>
+                <span>{activeResultTab === 'analysis'
+                  ? `${extractionStatusLabels[visibleExtractionStatus]} · ${resultSourceLabel}`
+                  : customCheckItemsSaving
+                    ? '正在保存自定义检查项'
+                    : extractionRunning || checkRunning
+                      ? '任务运行中暂不能修改自定义检查项，当前检查会使用启动任务时的内容'
+                      : customCheckItemsDirty
+                        ? '内容尚未保存，保存后才用于废标项检查'
+                        : '可填写补充检查口径、人工关注项或项目经验'}</span>
+              </div>
+              {activeResultTab === 'custom' && (
+                <div className="rejection-custom-save-actions">
+                  <span className={`rejection-custom-save-state${customCheckItemsDirty ? ' is-dirty' : ''}`}>
+                    {customCheckItemsDirty ? '有未保存修改' : '已保存'}
+                  </span>
+                  <button
+                    type="button"
+                    className="primary-action"
+                    onClick={() => void saveCustomCheckItems()}
+                    disabled={!customCheckItemsDirty || customCheckItemsDisabled}
+                  >
+                    {customCheckItemsSaving ? '保存中...' : '保存'}
+                  </button>
+                </div>
+              )}
             </div>
 
             {activeResultTab === 'analysis' ? (
@@ -1806,8 +1975,8 @@ function RejectionCheckPage() {
             ) : (
               <MarkdownEditor
                 className="rejection-custom-editor"
-                value={customCheckItems}
-                onChange={setCustomCheckItems}
+                value={customCheckItemsDraft}
+                onChange={updateCustomCheckItemsDraft}
                 disabled={customCheckItemsDisabled}
                 placeholder="输入自定义检查项，例如：\n- 关注报价文件是否存在多处不一致\n- 关注资格证明材料有效期是否覆盖投标截止时间\n- 关注技术偏离表是否遗漏关键参数响应"
               />
