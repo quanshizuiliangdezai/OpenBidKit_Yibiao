@@ -30,6 +30,7 @@ const { createKnowledgeBaseStore } = require('../services/knowledgeBaseStore.cjs
 const { createLicenseService } = require('../services/licenseService.cjs');
 const { createRejectionCheckStore } = require('../services/rejectionCheckStore.cjs');
 const { createSqliteDatabase } = require('../services/sqliteDatabase.cjs');
+const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 const { createSystemFontService } = require('../services/systemFontService.cjs');
 const { createTaskService } = require('../services/taskService.cjs');
 const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
@@ -386,17 +387,48 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const startWorkspaceDatabase = () => {
     if (workspaceDatabaseStarted) return;
     workspaceDatabaseStarted = true;
-    databaseStatus.updateStatus({ phase: 'checking', ready: false, message: '正在检查本地数据库' });
+
+    let dbPath = '(见下方日志)';
+    try {
+      dbPath = getWorkspaceDatabasePath(app);
+    } catch (_) { /* 路径解析失败不影响后续初始化 */ }
+    console.log(`[workspace-database] 正在初始化本地数据库，路径：${dbPath}`);
+
+    let settled = false;
+    const watchdog = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      databaseStatus.updateStatus({
+        phase: 'error',
+        ready: false,
+        message:
+          '本地数据库初始化超时（超过 30 秒仍未完成，可能数据库文件被其它进程占用、磁盘异常或文件损坏）。' +
+          '请先关闭其它“易标投标工具箱”实例后重试；若仍失败，可备份并删除本地数据库文件让其自动重建。' +
+          `数据库文件路径：${dbPath}（删除该 .db 及其同名 -wal/-shm 文件即可重建，本地标书数据会丢失，请先备份）`,
+      });
+      registerUnavailableWorkspaceDatabaseIpc(new Error('本地数据库初始化超时'));
+    }, 30000);
+
     setTimeout(() => {
       try {
-        registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, kbAuthService, kbTeamService, kbPersonalService, updateStatus: databaseStatus.updateStatus, mainWindow });
-      } catch (error) {
-        databaseStatus.updateStatus({
-          phase: 'error',
-          ready: false,
-          message: `本地数据库初始化失败：${error?.message || String(error)}`,
+        registerWorkspaceDatabaseServices({
+          app, configStore, aiService, agentService, autoConfirmationService,
+          fileService, kbAuthService, kbTeamService, kbPersonalService,
+          updateStatus: databaseStatus.updateStatus, mainWindow,
         });
-        registerUnavailableWorkspaceDatabaseIpc(error);
+        settled = true;
+        clearTimeout(watchdog);
+      } catch (error) {
+        if (!settled) {
+          settled = true;
+          clearTimeout(watchdog);
+          databaseStatus.updateStatus({
+            phase: 'error',
+            ready: false,
+            message: `本地数据库初始化失败：${error?.message || String(error)}（数据库路径：${dbPath}）`,
+          });
+          registerUnavailableWorkspaceDatabaseIpc(error);
+        }
       }
     }, 120);
   };
