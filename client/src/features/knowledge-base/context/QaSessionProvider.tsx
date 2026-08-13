@@ -10,9 +10,9 @@ import {
 } from 'react';
 import { useToast } from '../../../shared/ui';
 import { useAuth } from '../../../shared/auth/AuthContext';
+import { runQaAgent } from '../agent/qaAgent';
 import { aiClient } from '../../../shared/ai/aiClient';
 import type {
-  KbQaDocument,
   KbQaMessageSource,
   KbQaSession,
   KbQaStoredMessage,
@@ -32,41 +32,10 @@ import type {
  */
 
 export type QaSource = 'team' | 'personal' | 'both';
-export type QaStage = 'retrieving' | 'generating';
-
-const QA_SYSTEM_PROMPT = `你是标讯知识库问答助手。请严格根据下方提供的参考资料回答问题。
-如果资料中没有相关信息，请明确说明“根据现有资料无法回答”。
-回答要求：
-1. 条理清晰，优先使用要点列表；
-2. 对关键数据、条款、要求要准确引用；
-3. 如果资料有冲突，请指出并给出判断依据；
-4. 不要编造参考资料中不存在的内容。`;
-
-/** 每篇参考资料最多保留多少字符；总长度也有上限，避免把海量无关正文塞进 LLM 导致响应极慢。 */
-const MAX_CHARS_PER_DOC = 2500;
-const MAX_TOTAL_PROMPT_CHARS = 8000;
+export type QaStage = 'thinking' | 'retrieving' | 'generating';
 
 export const QA_WELCOME_TEXT =
   '你好！我可以基于团队知识库或个人知识库的内容帮你解答问题。请在下方输入问题，并选择知识库来源。';
-
-function buildPrompt(question: string, docs: KbQaDocument[]) {
-  let totalChars = 0;
-  const refs: string[] = [];
-  for (let i = 0; i < docs.length; i += 1) {
-    const d = docs[i];
-    const text = (d.content_text || '').slice(0, MAX_CHARS_PER_DOC);
-    totalChars += text.length + d.title.length + 20;
-    if (totalChars > MAX_TOTAL_PROMPT_CHARS) {
-      break;
-    }
-    refs.push(`[${i + 1}] ${d.title}\n${text || '(无正文)'}`);
-  }
-  return `${QA_SYSTEM_PROMPT}\n\n参考资料：\n\n${refs.join('\n\n---\n\n')}\n\n用户问题：${question}`;
-}
-
-function toSources(docs: KbQaDocument[]): KbQaMessageSource[] {
-  return docs.map((d) => ({ id: d.id, title: d.title, qa_source: d.qa_source }));
-}
 
 interface QaSessionContextValue {
   sessions: KbQaSession[];
@@ -446,71 +415,27 @@ export function QaSessionProvider({ children }: { children: ReactNode }) {
       };
 
       try {
-        // 3) RAG 语义检索优先
-        const sourceList: Array<'team' | 'personal'> =
-          source === 'both' ? ['team', 'personal'] : [source];
-        let docs: KbQaDocument[] = [];
-        let ragWarning: string | undefined;
+        setRunningStages((prev) => ({ ...prev, [sessionId]: 'thinking' }));
 
-        try {
-          const ragRes = await window.yibiao?.kbQa.retrieveContext(question, {
-            sources: sourceList,
-            topK: 6,
-            maxDocs: 4,
-          });
-          if (ragRes && ragRes.success && Array.isArray(ragRes.data) && ragRes.data.length > 0) {
-            docs = ragRes.data;
-            ragWarning =
-              Array.isArray(ragRes.warnings) && ragRes.warnings.length ? ragRes.warnings[0] : undefined;
-          }
-        } catch {
-          // 语义检索失败（如未配置 embedding 模型），下方回退关键词检索
-        }
+        // 改用 Agentic RAG：多步推理循环（见 agent/qaAgent.ts）
+        const result = await runQaAgent({
+          question,
+          source,
+          onStage: (s) => setRunningStages((prev) => ({ ...prev, [sessionId]: s })),
+        });
 
-        // 4) 回退：关键词检索
-        let keywordError: string | undefined;
-        if (docs.length === 0) {
-          const limit = 10;
-          const [teamRes, personalRes] = await Promise.all([
-            source === 'team' || source === 'both'
-              ? window.yibiao?.kbTeam.qaRetrieve(question, limit)
-              : Promise.resolve({ success: true, data: [] }),
-            source === 'personal' || source === 'both'
-              ? window.yibiao?.kbPersonal.qaRetrieve(question, limit)
-              : Promise.resolve({ success: true, data: [] }),
-          ]);
-
-          const teamErr = (teamRes as { success: boolean; error?: string } | undefined)?.error;
-          const personalErr = (personalRes as { success: boolean; error?: string } | undefined)?.error;
-          if (teamRes && !teamRes.success && teamErr) {
-            keywordError = `团队库检索失败：${teamErr}`;
-          }
-          if (personalRes && !personalRes.success && personalErr) {
-            keywordError = keywordError
-              ? `${keywordError}；个人库检索失败：${personalErr}`
-              : `个人库检索失败：${personalErr}`;
-          }
-
-          const teamDocs: KbQaDocument[] = Array.isArray(teamRes?.data) ? teamRes.data : [];
-          const personalDocs: KbQaDocument[] = Array.isArray(personalRes?.data) ? personalRes.data : [];
-
-          // 去重：相同 file_name 且 content_text 前 200 字符相同视为同一文档
-          const seen = new Set<string>();
-          for (const d of [...teamDocs, ...personalDocs]) {
-            const key = `${d.file_name || d.title}|${(d.content_text || '').slice(0, 200)}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            docs.push(d);
-          }
-        }
-
-        // 5) 知识库无命中 → 回退通用聊天
-        if (docs.length === 0) {
+        // 完全无文档命中 → 回退通用聊天（保留原行为）
+        if (result.empty) {
           const sourceLabel =
             source === 'team' ? '团队库' : source === 'personal' ? '个人库' : '团队库和个人库';
-          const errHint = keywordError ? `（${keywordError}）` : '';
-          const emptyHint = `未在${sourceLabel}中检索到与「${question}」相关的内容。${errHint}\n\n可能原因：\n1. 知识库中暂无匹配文档；\n2. 文档尚未分析完成；\n3. 关键词与文档标题/正文差异较大。\n\n你可以尝试更换关键词、切换到「全部」来源，或直接提问，我会基于通用知识作答。`;
+          const emptyHint = `未在${sourceLabel}中检索到与「${question}」相关的内容。
 
+可能原因：
+1. 知识库中暂无匹配文档；
+2. 文档尚未分析完成；
+3. 关键词与文档标题/正文差异较大。
+
+你可以尝试更换关键词、切换到「全部」来源，或直接提问，我会基于通用知识作答。`;
           setRunningStages((prev) => ({ ...prev, [sessionId]: 'generating' }));
           const answer = await aiClient.chat({
             messages: [
@@ -534,20 +459,18 @@ export function QaSessionProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        // 6) 生成回答
-        if (ragWarning && pageVisibleRef.current) {
-          showToast(ragWarning, 'info');
+        // 需要向用户追问澄清
+        if (result.needClarify) {
+          finish(
+            `需要你补充信息：\n\n${result.needClarify}\n\n（补充后我会继续为你检索并回答）`,
+            'done',
+            [],
+          );
+          return;
         }
-        setRunningStages((prev) => ({ ...prev, [sessionId]: 'generating' }));
 
-        const answer = await aiClient.chat({
-          messages: [{ role: 'user', content: buildPrompt(question, docs) }],
-          timeout_ms: 120000,
-          timeout_message: '生成回答超时，请稍后重试',
-          logTitle: '知识库问答',
-        });
-
-        finish(answer || '模型未返回内容', 'done', toSources(docs));
+        // 正常综合回答
+        finish(result.answer || '模型未返回内容', 'done', result.sources);
       } catch (error) {
         const msg = error instanceof Error ? error.message : '问答失败';
         if (pageVisibleRef.current) showToast(msg, 'error');
