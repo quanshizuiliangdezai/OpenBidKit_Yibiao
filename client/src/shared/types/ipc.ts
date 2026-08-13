@@ -922,6 +922,7 @@ export interface YibiaoBridge {
   kbQa: {
     retrieveContext: (question: string, options?: KbQaRetrieveOptions) => Promise<{ success: boolean; data?: KbQaDocument[]; warnings?: string[]; error?: string }>;
     clearIndex: (source?: 'team' | 'personal') => Promise<{ success: boolean; error?: string }>;
+    expandRelated: (seedDocs: KbQaDocument[], source: 'team' | 'personal', limit?: number) => Promise<{ success: boolean; data?: KbQaDocument[]; error?: string }>;
   };
   kbQaSession: {
     list: (limit?: number) => Promise<KbQaSessionResult<KbQaSession[]>>;

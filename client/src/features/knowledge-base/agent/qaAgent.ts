@@ -165,6 +165,28 @@ async function searchTool(
     }
   }
 
+  // 3) P2 关联扩展：文件夹同级 + bigram 共现（增强召回）
+  if (docs.length > 0) {
+    const scopes: Array<'team' | 'personal'> =
+      scope === 'both' ? ['team', 'personal'] : [scope];
+    const seen2 = new Set(docs.map((d) => String(d.id)));
+    for (const sc of scopes) {
+      try {
+        const extra = await window.yibiao?.kbQa.expandRelated(docs, sc, 6);
+        if (extra && extra.success && Array.isArray(extra.data)) {
+          for (const d of extra.data) {
+            if (!seen2.has(String(d.id))) {
+              docs.push(d);
+              seen2.add(String(d.id));
+            }
+          }
+        }
+      } catch {
+        /* 关联扩展失败不影响主检索结果 */
+      }
+    }
+  }
+
   return docs;
 }
 

@@ -25,6 +25,15 @@ function registerKbQaIpc({ kbQaRetrievalService, kbQaSessionService }) {
     }
   });
 
+  ipcMain.handle('kb-qa:expand-related', async (_event, seedDocs, source, limit) => {
+    try {
+      const result = await kbQaRetrievalService.expandRelated(seedDocs || [], source, limit || 8);
+      return { success: true, data: result.docs };
+    } catch (error) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  });
+
   if (!kbQaSessionService) return;
 
   // 统一包装：任何异常都转成 { success:false, error }，渲染层不必 try/catch

@@ -307,6 +307,7 @@ const bridge = {
   kbQa: {
     retrieveContext: (question, options) => ipcRenderer.invoke('kb-qa:retrieve-context', question, options),
     clearIndex: (source) => ipcRenderer.invoke('kb-qa:clear-index', source),
+    expandRelated: (seedDocs, source, limit) => ipcRenderer.invoke('kb-qa:expand-related', seedDocs, source, limit),
   },
   kbQaSession: {
     list: (limit) => ipcRenderer.invoke('kb-qa-session:list', limit),

@@ -236,6 +236,55 @@ function createKbQaRetrievalService({ db, aiService, kbAuthService }) {
     return { docs, warnings: corpusErrors };
   }
 
+  // ---- P2 轻量关联检索：文件夹同级 + bigram 共现扩展 ----
+  function bigrams(text) {
+    const t = String(text || '').replace(/\s+/g, '');
+    const set = new Set();
+    for (let i = 0; i < t.length - 1; i += 1) set.add(t.slice(i, i + 2));
+    return set;
+  }
+
+  async function expandRelated(seedDocs, source, limit = 8) {
+    if (!Array.isArray(seedDocs) || !seedDocs.length) return { docs: [] };
+    const src = source === 'personal' ? 'personal' : 'team';
+    let corpus;
+    try {
+      corpus = await fetchCorpus(src);
+    } catch {
+      return { docs: [] };
+    }
+    const seedIds = new Set(seedDocs.map((d) => String(d.id)));
+    const seedFolders = new Set(
+      seedDocs.map((d) => d.folder_id).filter((f) => f !== null && f !== undefined).map(String),
+    );
+    const seedBigrams = new Set();
+    for (const d of seedDocs) {
+      for (const g of bigrams(`${d.title} ${(d.content_text || '').slice(0, 2000)}`)) {
+        seedBigrams.add(g);
+      }
+    }
+    const scored = [];
+    for (const doc of corpus) {
+      if (seedIds.has(String(doc.id))) continue;
+      let score = 0;
+      if (doc.folder_id && seedFolders.has(String(doc.folder_id))) score += 3;
+      const docBigrams = bigrams(`${doc.title} ${(doc.content_text || '').slice(0, 2000)}`);
+      let overlap = 0;
+      for (const g of docBigrams) if (seedBigrams.has(g)) overlap += 1;
+      if (docBigrams.size) score += overlap / docBigrams.size;
+      if (score > 0) scored.push({ doc, score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    const docs = scored.slice(0, limit).map(({ doc }) => ({
+      id: doc.id,
+      title: doc.title,
+      file_name: doc.file_name || doc.title,
+      content_text: doc.content_text,
+      qa_source: src,
+    }));
+    return { docs };
+  }
+
   /** 清空指定来源（或全部）的向量索引缓存。 */
   function clearIndex(source) {
     if (source === 'team' || source === 'personal') {
@@ -249,6 +298,7 @@ function createKbQaRetrievalService({ db, aiService, kbAuthService }) {
   return {
     retrieveContext,
     clearIndex,
+    expandRelated,
   };
 }
 
