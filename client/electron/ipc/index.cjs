@@ -32,6 +32,7 @@ const { createRejectionCheckStore } = require('../services/rejectionCheckStore.c
 const { createSqliteDatabase } = require('../services/sqliteDatabase.cjs');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 const { createSystemFontService } = require('../services/systemFontService.cjs');
+const { clearOrphanedGeneratedImages, clearStalePiTaskArchives, runHistoricalStorageCleanup } = require('../services/storageCleanupService.cjs');
 const { createTaskService } = require('../services/taskService.cjs');
 const { createTaskLogStore } = require('../services/taskLogStore.cjs');
 const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
@@ -197,6 +198,9 @@ function registerWorkspaceDatabaseStatusIpc({ mainWindow }) {
 
 function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, kbAuthService, kbTeamService, kbPersonalService, updateStatus, mainWindow }) {
   const sqliteDatabase = createSqliteDatabase(app, { onStatus: updateStatus });
+  runHistoricalStorageCleanup({ app, db: sqliteDatabase.db, configStore, onStatus: updateStatus });
+  clearStalePiTaskArchives(app);
+  clearOrphanedGeneratedImages(app, sqliteDatabase.db);
   const taskLogStore = createTaskLogStore({ db: sqliteDatabase.db });
   const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore, kbTeamService, kbPersonalService });
@@ -373,12 +377,6 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerPendingWorkspaceDatabaseIpc(databaseStatus.getStatus);
 
   setTimeout(() => {
-    void agentService.warmup?.().catch((error) => {
-      console.warn('[agent] warmup failed', error?.message || String(error));
-    });
-  }, 500);
-
-  setTimeout(() => {
     void licenseService.refreshOnStartup?.().catch((error) => {
       console.warn('[license] startup refresh failed', error?.message || String(error));
     });
@@ -416,6 +414,11 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
           fileService, kbAuthService, kbTeamService, kbPersonalService,
           updateStatus: databaseStatus.updateStatus, mainWindow,
         });
+        setTimeout(() => {
+          void agentService.warmup?.().catch((error) => {
+            console.warn('[agent] warmup failed', error?.message || String(error));
+          });
+        }, 500);
         settled = true;
         clearTimeout(watchdog);
       } catch (error) {

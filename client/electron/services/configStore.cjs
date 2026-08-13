@@ -284,6 +284,8 @@ const defaultConfig = {
   agent_auto_answer_enabled: DEFAULT_AGENT_AUTO_ANSWER_ENABLED,
   developer_mode: false,
   developer_token_stats_auto_open: false,
+  developer_agent_monitor_auto_open: false,
+  storage_cleanup_version: 0,
   analytics_client_id: '',
   analytics_created_at: '',
   account: null,
@@ -767,6 +769,10 @@ function normalizeConfig(config) {
       : Boolean(source.agent_auto_answer_enabled),
     developer_mode: source.developer_mode === undefined ? defaultConfig.developer_mode : Boolean(source.developer_mode),
     developer_token_stats_auto_open: source.developer_token_stats_auto_open === undefined ? defaultConfig.developer_token_stats_auto_open : Boolean(source.developer_token_stats_auto_open),
+    developer_agent_monitor_auto_open: source.developer_agent_monitor_auto_open === undefined ? defaultConfig.developer_agent_monitor_auto_open : Boolean(source.developer_agent_monitor_auto_open),
+    storage_cleanup_version: Number.isFinite(Number(source.storage_cleanup_version))
+      ? Math.max(0, Math.floor(Number(source.storage_cleanup_version)))
+      : defaultConfig.storage_cleanup_version,
     analytics_client_id: source.analytics_client_id || defaultConfig.analytics_client_id,
     analytics_created_at: source.analytics_created_at || defaultConfig.analytics_created_at,
     account: normalizeAccount(source.account),

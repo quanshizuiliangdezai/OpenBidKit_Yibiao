@@ -142,7 +142,7 @@ export interface GpuHardwareAccelerationStatus {
   forcedDisabled: boolean;
 }
 
-export type WorkspaceDatabasePhase = 'checking' | 'repairing' | 'backing-up' | 'upgrading' | 'ready' | 'error';
+export type WorkspaceDatabasePhase = 'checking' | 'repairing' | 'backing-up' | 'upgrading' | 'cleaning' | 'ready' | 'error';
 
 export interface WorkspaceDatabaseStatus {
   phase: WorkspaceDatabasePhase;
