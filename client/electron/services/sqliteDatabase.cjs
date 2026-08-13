@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 21;
+const schemaVersion = 22;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -1275,6 +1275,45 @@ function ensureWorkspaceSchemaHealth(db, targetVersion = schemaVersion, onStatus
   }
 }
 
+function createKnowledgeGraphSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS kb_graph_entity (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source TEXT NOT NULL,
+      name TEXT NOT NULL,
+      type TEXT,
+      aliases_json TEXT NOT NULL DEFAULT '[]',
+      doc_count INTEGER NOT NULL DEFAULT 0,
+      mention_count INTEGER NOT NULL DEFAULT 0,
+      doc_ids_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(source, name)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_kb_graph_entity_source_name ON kb_graph_entity(source, name);
+    CREATE INDEX IF NOT EXISTS idx_kb_graph_entity_name ON kb_graph_entity(name);
+
+    CREATE TABLE IF NOT EXISTS kb_graph_relation (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      predicate TEXT NOT NULL,
+      object TEXT NOT NULL,
+      evidence TEXT,
+      doc_ids_json TEXT NOT NULL DEFAULT '[]',
+      doc_count INTEGER NOT NULL DEFAULT 0,
+      weight REAL NOT NULL DEFAULT 1.0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(source, subject, predicate, object)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_kb_graph_relation_source_subject ON kb_graph_relation(source, subject);
+    CREATE INDEX IF NOT EXISTS idx_kb_graph_relation_source_object ON kb_graph_relation(source, object);
+  `);
+}
+
 const migrations = [
   {
     version: 1,
@@ -1380,6 +1419,11 @@ const migrations = [
     version: 21,
     description: '移除废弃的知识库旧数据迁移状态',
     up: removeKnowledgeMigrationMeta,
+  },
+  {
+    version: 22,
+    description: '新增知识库问答知识图谱表（实体/关系，P3）',
+    up: createKnowledgeGraphSchema,
   },
 ];
 

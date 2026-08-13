@@ -2091,6 +2091,65 @@
   cursor: not-allowed;
 }
 
+.kb-qa-graph {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border);
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--yb-text);
+}
+
+.kb-qa-graph-stat {
+  font-variant-numeric: tabular-nums;
+}
+
+.kb-qa-graph-build {
+  padding: 5px 14px;
+  font-size: 13px;
+  color: #fff;
+  background: var(--yb-primary);
+  border: 1px solid var(--yb-primary);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.kb-qa-graph-build:hover {
+  opacity: 0.88;
+}
+
+.kb-qa-graph-build:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.kb-qa-graph-progress {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--yb-text-secondary);
+}
+
+.kb-qa-graph-bar {
+  height: 6px;
+  width: 100%;
+  background: var(--yb-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.kb-qa-graph-bar-fill {
+  height: 100%;
+  background: var(--yb-primary);
+  transition: width 0.3s ease;
+}
+
 .kb-qa-messages {
   display: flex;
   flex-direction: column;

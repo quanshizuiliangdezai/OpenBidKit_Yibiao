@@ -18,6 +18,7 @@ export type QaAgentAction =
   | 'search_team'
   | 'search_personal'
   | 'search_both'
+  | 'graph_lookup'
   | 'clarify'
   | 'answer';
 
@@ -65,14 +66,15 @@ const SYSTEM_PROMPT = `你是易标投标工具箱的「知识库问答 Agent」
 - search_team：在团队知识库检索相关文档（必须给 query）
 - search_personal：在个人知识库检索（必须给 query）
 - search_both：同时在两个库检索（必须给 query）
+- graph_lookup：在知识图谱中检索与问题相关的实体及其关系网络，返回关联文档与关系路径（必须给 query）。适合跨文档关联、实体关系类问题（如「A 和 B 是什么关系」「哪些文档提到了 X」）。若图谱为空则返回空，可回退 search_*。
 - clarify：当用户问题含糊、缺少关键信息时，向用户提一个澄清问题（必须给 question）
 - answer：已掌握足够信息，输出最终综合回答（必须给 answer，条理清晰，用 [n] 标注引用的文档序号）
 
 每轮你**必须只输出一个 JSON 对象**，字段如下（action 不同时填对应必填项）：
 {
   "thought": "这一步的推理（简短）",
-  "action": "search_team|search_personal|search_both|clarify|answer",
-  "query": "检索关键词（search_* 时必填）",
+  "action": "search_team|search_personal|search_both|graph_lookup|clarify|answer",
+  "query": "检索关键词（search_* / graph_lookup 时必填）",
   "scope": "team|personal|both（可选，缺省按当前范围）",
   "question": "澄清问题（clarify 时必填）",
   "answer": "最终回答（answer 时必填）",
@@ -84,6 +86,7 @@ const VALID_ACTIONS: QaAgentAction[] = [
   'search_team',
   'search_personal',
   'search_both',
+  'graph_lookup',
   'clarify',
   'answer',
 ];
@@ -188,6 +191,46 @@ async function searchTool(
   }
 
   return docs;
+}
+
+/**
+ * P3 知识图谱检索工具：调用主进程 kbQa.graphFind 做子图遍历。
+ * 返回关联文档（含片段）与关系路径；图谱为空或失败均返回空，由上层回退 search_*。
+ */
+async function graphLookupTool(
+  query: string,
+  source: 'team' | 'personal' | 'both',
+): Promise<{
+  docs: KbQaDocument[];
+  graph: { entities: Array<{ name: string; type?: string }>; relations: Array<{ subject: string; predicate: string; object: string; evidence?: string }> };
+}> {
+  try {
+    const res = await window.yibiao?.kbQa.graphFind(query, source, 8);
+    if (res && res.success) {
+      return {
+        docs: Array.isArray(res.docs) ? res.docs : [],
+        graph: res.graph || { entities: [], relations: [] },
+      };
+    }
+  } catch {
+    /* 图谱检索失败不影响其它检索工具 */
+  }
+  return { docs: [], graph: { entities: [], relations: [] } };
+}
+
+function formatGraph(graph: {
+  entities: Array<{ name: string; type?: string }>;
+  relations: Array<{ subject: string; predicate: string; object: string; evidence?: string }>;
+}): string {
+  if (!graph.relations.length) {
+    return graph.entities.length ? `命中实体：${graph.entities.map((e) => e.name).join('、')}` : '（无）';
+  }
+  return graph.relations
+    .map(
+      (r) =>
+        `- ${r.subject} ——${r.predicate}——> ${r.object}${r.evidence ? `（${r.evidence}）` : ''}`,
+    )
+    .join('\n');
 }
 
 function formatDocs(docs: KbQaDocument[], offset: number): string {
@@ -310,6 +353,30 @@ export async function runQaAgent(opts: RunQaAgentOptions): Promise<QaAgentResult
       const answer = decision.answer || (await synthesizeAnswer(docs, question));
       const sources = docs.map((d) => ({ id: d.id, title: d.title, qa_source: d.qa_source }));
       return { answer, sources, steps };
+    }
+
+    // graph_lookup：知识图谱子图检索
+    if (decision.action === 'graph_lookup') {
+      const gq = decision.query || question;
+      onStage?.('retrieving');
+      const { docs: gDocs, graph } = await graphLookupTool(gq, source);
+      const offset = collected.size;
+      gDocs.forEach((d) => {
+        const k = `${d.id}`;
+        if (!collected.has(k)) collected.set(k, d);
+      });
+      current.retrieved = gDocs.length;
+      const graphSummary = formatGraph(graph);
+      messages.push({ role: 'assistant', content: JSON.stringify(decision) });
+      messages.push({
+        role: 'user',
+        content:
+          `知识图谱检索到 ${gDocs.length} 篇关联文档、${graph.entities.length} 个实体、${graph.relations.length} 条关系：\n`
+          + `${graphSummary}\n`
+          + (gDocs.length ? `关联文档：\n${formatDocs(gDocs, offset)}\n` : '（未命中具体文档）\n')
+          + `\n请基于以上资料继续决策：可换关键词再检索、补充检索，或已足够则输出 answer。若资料仍不足，可 clarify 向用户追问。`,
+      });
+      continue;
     }
 
     // search_*：执行检索并回灌
