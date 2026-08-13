@@ -217,6 +217,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
 
   clearWorkspaceDatabaseIpc();
   registerKnowledgeBaseIpc({ knowledgeBaseService });
+  registerKbVaultIpc({ app, knowledgeBaseStore });
   registerTechnicalPlanIpc({ technicalPlanStore, taskService });
   registerDuplicateCheckIpc({ duplicateCheckStore });
   registerRejectionCheckIpc({ rejectionCheckStore });
@@ -367,7 +368,6 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   // 在主流程里尚未创建，因此不在此传入。kbTeamIpc/kbPersonalIpc 内部用 optional chaining 兼容。
   registerKbTeamIpc({ kbTeamService, kbAuthService });
   registerKbPersonalIpc({ kbAuthService, app, personalService: kbPersonalService });
-  registerKbVaultIpc({ app, knowledgeBaseStore });
   registerPluginIpc(ipcMain, app, {
     taskService: null,
     technicalPlanStore: null,
