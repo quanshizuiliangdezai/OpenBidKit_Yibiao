@@ -307,6 +307,16 @@ const bridge = {
   kbQa: {
     retrieveContext: (question, options) => ipcRenderer.invoke('kb-qa:retrieve-context', question, options),
     clearIndex: (source) => ipcRenderer.invoke('kb-qa:clear-index', source),
+    expandRelated: (seedDocs, source, limit) => ipcRenderer.invoke('kb-qa:expand-related', seedDocs, source, limit),
+    buildGraph: (source) => ipcRenderer.invoke('kb-qa:build-graph', source),
+    graphFind: (question, source, limit) => ipcRenderer.invoke('kb-qa:graph-find', question, source, limit),
+    graphStatus: (source) => ipcRenderer.invoke('kb-qa:graph-status', source),
+    clearGraph: (source) => ipcRenderer.invoke('kb-qa:graph-clear', source),
+    onBuildGraphProgress: (listener) => {
+      const wrapped = (_event, payload) => listener(payload);
+      ipcRenderer.on('kb-qa:build-graph-progress', wrapped);
+      return () => ipcRenderer.removeListener('kb-qa:build-graph-progress', wrapped);
+    },
   },
   kbQaSession: {
     list: (limit) => ipcRenderer.invoke('kb-qa-session:list', limit),

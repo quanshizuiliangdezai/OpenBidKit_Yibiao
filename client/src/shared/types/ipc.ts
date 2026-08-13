@@ -922,6 +922,12 @@ export interface YibiaoBridge {
   kbQa: {
     retrieveContext: (question: string, options?: KbQaRetrieveOptions) => Promise<{ success: boolean; data?: KbQaDocument[]; warnings?: string[]; error?: string }>;
     clearIndex: (source?: 'team' | 'personal') => Promise<{ success: boolean; error?: string }>;
+    expandRelated: (seedDocs: KbQaDocument[], source: 'team' | 'personal', limit?: number) => Promise<{ success: boolean; data?: KbQaDocument[]; error?: string }>;
+    buildGraph: (source: 'team' | 'personal' | 'both') => Promise<{ success: boolean; entityCount?: number; relationCount?: number; error?: string }>;
+    graphFind: (question: string, source: 'team' | 'personal' | 'both', limit?: number) => Promise<{ success: boolean; docs?: KbQaDocument[]; graph?: { entities: Array<{ name: string; type?: string }>; relations: Array<{ subject: string; predicate: string; object: string; evidence?: string }> }; empty?: boolean; error?: string }>;
+    graphStatus: (source: 'team' | 'personal' | 'both') => Promise<{ success: boolean; entityCount?: number; relationCount?: number; error?: string }>;
+    clearGraph: (source: 'team' | 'personal') => Promise<{ success: boolean; error?: string }>;
+    onBuildGraphProgress: (listener: (payload: { phase: string; message: string; done: number; total: number }) => void) => () => void;
   };
   kbQaSession: {
     list: (limit?: number) => Promise<KbQaSessionResult<KbQaSession[]>>;

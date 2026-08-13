@@ -25,6 +25,58 @@ function registerKbQaIpc({ kbQaRetrievalService, kbQaSessionService }) {
     }
   });
 
+  ipcMain.handle('kb-qa:expand-related', async (_event, seedDocs, source, limit) => {
+    try {
+      const result = await kbQaRetrievalService.expandRelated(seedDocs || [], source, limit || 8);
+      return { success: true, data: result.docs };
+    } catch (error) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  });
+
+  // P3 知识图谱：构建（流式进度）/ 子图检索 / 状态 / 清空
+  ipcMain.handle('kb-qa:build-graph', async (event, source) => {
+    try {
+      const result = await kbQaRetrievalService.buildGraph(source, {
+        onProgress: (p) => {
+          try {
+            event.sender.send('kb-qa:build-graph-progress', p);
+          } catch {
+            /* ignore */
+          }
+        },
+      });
+      return { success: true, ...result };
+    } catch (error) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  });
+
+  ipcMain.handle('kb-qa:graph-find', async (_event, question, source, limit) => {
+    try {
+      const result = await kbQaRetrievalService.graphFind(question, source, limit || 8);
+      return { success: true, ...result };
+    } catch (error) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  });
+
+  ipcMain.handle('kb-qa:graph-status', async (_event, source) => {
+    try {
+      return { success: true, ...kbQaRetrievalService.graphStatus(source) };
+    } catch (error) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  });
+
+  ipcMain.handle('kb-qa:graph-clear', async (_event, source) => {
+    try {
+      return { success: true, ...kbQaRetrievalService.clearGraph(source) };
+    } catch (error) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  });
+
   if (!kbQaSessionService) return;
 
   // 统一包装：任何异常都转成 { success:false, error }，渲染层不必 try/catch

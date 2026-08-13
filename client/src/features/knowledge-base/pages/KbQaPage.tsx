@@ -95,6 +95,64 @@ function KbQaPage() {
   const [input, setInput] = useState('');
   const messagesRef = useRef<HTMLDivElement | null>(null);
 
+  // 知识图谱状态与构建进度（P3）
+  const [graphStat, setGraphStat] = useState<{ entityCount: number; relationCount: number }>({
+    entityCount: 0,
+    relationCount: 0,
+  });
+  const [graphBuilding, setGraphBuilding] = useState(false);
+  const [graphProgress, setGraphProgress] = useState<{ message: string; done: number; total: number } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.yibiao?.kbQa
+      .graphStatus(source)
+      .then((r) => {
+        if (!cancelled && r?.success) {
+          setGraphStat({ entityCount: r.entityCount || 0, relationCount: r.relationCount || 0 });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [source]);
+
+  const handleBuildGraph = async () => {
+    if (graphBuilding || busy) return;
+    setGraphBuilding(true);
+    setGraphProgress({ message: '准备中…', done: 0, total: 0 });
+    const unsub = window.yibiao?.kbQa.onBuildGraphProgress?.((p) => {
+      setGraphProgress({ message: p.message, done: p.done, total: p.total });
+    });
+    try {
+      const targets: Array<'team' | 'personal'> = source === 'both' ? ['team', 'personal'] : [source];
+      for (const t of targets) {
+        const res = await window.yibiao?.kbQa.buildGraph(t);
+        if (!res?.success) {
+          setGraphProgress({ message: `构建失败（${t}）：${res?.error || '未知错误'}`, done: 0, total: 0 });
+          if (unsub) unsub();
+          setGraphBuilding(false);
+          return;
+        }
+      }
+      const st = await window.yibiao?.kbQa.graphStatus(source);
+      if (st?.success) {
+        setGraphStat({ entityCount: st.entityCount || 0, relationCount: st.relationCount || 0 });
+        setGraphProgress({
+          message: `完成：共 ${st.entityCount || 0} 实体 / ${st.relationCount || 0} 关系`,
+          done: 1,
+          total: 1,
+        });
+      }
+    } catch (e) {
+      setGraphProgress({ message: `构建出错：${e instanceof Error ? e.message : String(e)}`, done: 0, total: 0 });
+    } finally {
+      if (unsub) unsub();
+      setTimeout(() => setGraphBuilding(false), 1200);
+    }
+  };
+
   // 告诉 Provider 当前页面是否可见：不可见时后台生成完成会弹 toast 提醒
   useEffect(() => {
     setPageVisible(true);
@@ -307,6 +365,33 @@ function KbQaPage() {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="kb-qa-graph">
+            <span className="kb-qa-graph-stat">
+              知识图谱：{graphStat.entityCount} 实体 / {graphStat.relationCount} 关系
+            </span>
+            <button
+              type="button"
+              className="kb-qa-graph-build"
+              onClick={() => void handleBuildGraph()}
+              disabled={graphBuilding || busy}
+            >
+              {graphBuilding ? '构建中…' : '构建图谱'}
+            </button>
+            {graphBuilding && graphProgress ? (
+              <div className="kb-qa-graph-progress">
+                <span>{graphProgress.message}</span>
+                {graphProgress.total > 0 ? (
+                  <div className="kb-qa-graph-bar">
+                    <div
+                      className="kb-qa-graph-bar-fill"
+                      style={{ width: `${Math.round((graphProgress.done / graphProgress.total) * 100)}%` }}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="kb-qa-messages" ref={messagesRef}>
