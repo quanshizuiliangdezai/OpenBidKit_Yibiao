@@ -2203,6 +2203,74 @@
   font-style: italic;
 }
 
+/* Agent 多步推理轨迹：折叠面板，复用既有 surface/border 变量，贴合现有版式 */
+.kb-qa-trace {
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--yb-text-soft);
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border);
+  border-radius: 12px;
+}
+
+.kb-qa-trace > summary {
+  cursor: pointer;
+  user-select: none;
+  font-weight: 600;
+  color: var(--yb-text);
+}
+
+.kb-qa-trace-list {
+  margin: 8px 0 2px;
+  padding-left: 18px;
+}
+
+.kb-qa-trace-list li {
+  margin-bottom: 8px;
+}
+
+.kb-qa-trace-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--yb-primary, #2174fd);
+  border-radius: 999px;
+}
+
+.kb-qa-trace-action {
+  font-weight: 600;
+  color: var(--yb-text);
+}
+
+.kb-qa-trace-query {
+  margin-left: 6px;
+  color: var(--yb-primary, #2174fd);
+}
+
+.kb-qa-trace-retrieved {
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: var(--yb-text-soft);
+  background: rgba(33, 116, 253, 0.1);
+  border-radius: 999px;
+}
+
+.kb-qa-trace-thought {
+  margin-top: 3px;
+  color: var(--yb-text-soft);
+  font-style: italic;
+  line-height: 1.5;
+}
+
 .kb-qa-sources {
   padding: 12px 14px;
   font-size: 13px;

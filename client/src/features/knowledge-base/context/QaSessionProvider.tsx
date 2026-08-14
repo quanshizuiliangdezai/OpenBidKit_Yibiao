@@ -10,7 +10,7 @@ import {
 } from 'react';
 import { useToast } from '../../../shared/ui';
 import { useAuth } from '../../../shared/auth/AuthContext';
-import { runQaAgent } from '../agent/qaAgent';
+import { runQaAgent, type QaAgentStep } from '../agent/qaAgent';
 import { aiClient } from '../../../shared/ai/aiClient';
 import type {
   KbQaMessageSource,
@@ -60,6 +60,8 @@ interface QaSessionContextValue {
   refreshSessions: () => Promise<void>;
   /** 问答页挂载/卸载时上报，用于决定后台完成后是否弹提醒 */
   setPageVisible: (visible: boolean) => void;
+  /** messageId -> Agent 多步推理轨迹（UI 展示用） */
+  qaSteps: Record<number, QaAgentStep[]>;
 }
 
 const QaSessionContext = createContext<QaSessionContextValue | null>(null);
@@ -77,6 +79,8 @@ export function QaSessionProvider({ children }: { children: ReactNode }) {
   const [source, setSource] = useState<QaSource>('both');
   /** sessionId -> 当前阶段。用 Map 是因为理论上可以并行问多个会话 */
   const [runningStages, setRunningStages] = useState<Record<number, QaStage>>({});
+  /** messageId -> Agent 多步推理轨迹（仅客户端运行时，便于在 UI 展示「Agent 在一步步查」） */
+  const [qaSteps, setQaSteps] = useState<Record<number, QaAgentStep[]>>({});
 
   const pageVisibleRef = useRef(false);
   const activeSessionIdRef = useRef<number | null>(null);
@@ -418,10 +422,16 @@ export function QaSessionProvider({ children }: { children: ReactNode }) {
         setRunningStages((prev) => ({ ...prev, [sessionId]: 'thinking' }));
 
         // 改用 Agentic RAG：多步推理循环（见 agent/qaAgent.ts）
+        setQaSteps((prev) => ({ ...prev, [placeholder.id]: [] }));
         const result = await runQaAgent({
           question,
           source,
           onStage: (s) => setRunningStages((prev) => ({ ...prev, [sessionId]: s })),
+          onStep: (s) =>
+            setQaSteps((prev) => ({
+              ...prev,
+              [placeholder.id]: [...(prev[placeholder.id] || []), s],
+            })),
         });
 
         // 完全无文档命中 → 回退通用聊天（保留原行为）
@@ -504,6 +514,7 @@ export function QaSessionProvider({ children }: { children: ReactNode }) {
       deleteSession,
       refreshSessions,
       setPageVisible,
+      qaSteps,
     }),
     [
       sessions,

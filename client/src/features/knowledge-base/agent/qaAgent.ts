@@ -58,9 +58,57 @@ export interface QaAgentResult {
 }
 
 const MAX_STEPS = 6;
-const MAX_CHARS_PER_DOC = 2500;
+// 单文档喂给模型的正文长度上限。2500 → 8000：减少截断漏信息（全文优先，超大文档仍软截断避免撑爆上下文）。
+const MAX_CHARS_PER_DOC = 8000;
+
+// 无 embedding 时，关键词召回的短板靠「同义词扩展」弥补。覆盖投标/标书常用近义词。
+const SYNONYM_MAP: Record<string, string[]> = {
+  合同: ['协议', '契约'],
+  协议: ['合同', '契约'],
+  报价: ['投标报价', '价格', '投标价格'],
+  投标报价: ['报价', '价格'],
+  价格: ['报价', '金额'],
+  资质: ['资格', '资格条件'],
+  资格: ['资质', '资格条件'],
+  招标: ['采购', '招标采购'],
+  采购: ['招标', '采购招标'],
+  投标: ['竞标', '应标'],
+  应标: ['投标', '竞标'],
+  标书: ['投标文件', '投标书'],
+  工期: ['施工期', '交付周期'],
+  保证金: ['投标保证金', '保函'],
+  中标: ['成交', '入围'],
+  废标: ['流标', '无效标'],
+  评分: ['打分', '评审'],
+  技术: ['技术方案', '技术参数'],
+  业绩: ['类似项目', '过往案例'],
+  法人: ['法定代表人', '负责人'],
+};
+
+/**
+ * 把一句话拆成多个检索变体：原句 + 分词 + 同义词 + 相邻双词组合。
+ * 无 embedding 情况下，多关键词变体并行检索是弥补「同义词查不到」的核心手段。
+ */
+function expandQuery(query: string): string[] {
+  const variants = new Set<string>([query]);
+  const tokens = query.split(/[^一-龥a-zA-Z0-9]+/).filter((t) => t.length >= 2);
+  for (const tok of tokens) {
+    variants.add(tok);
+    const syns = SYNONYM_MAP[tok];
+    if (syns) for (const s of syns) variants.add(s);
+  }
+  for (let i = 0; i + 1 < tokens.length; i += 1) {
+    variants.add(tokens[i] + tokens[i + 1]);
+  }
+  return [...variants].slice(0, 8); // 最多 8 个变体，控制 IPC 调用量
+}
 
 const SYSTEM_PROMPT = `你是易标投标工具箱的「知识库问答 Agent」。任务：基于团队/个人知识库内容，通过多步推理回答用户问题。
+
+重要原则：
+- 优先通过多次检索（换关键词、同义词）把资料找全，再作答；宁可多查，不要臆测。
+- 当用户问题含糊、缺少关键实体（如具体项目名/文档名/年份/范围）或检索连续为空时，**必须优先用 clarify 向用户追问**，绝不要凭空编造答案。
+- 你的检索是基于关键词的（未配置语义向量），因此要学会用同义词、缩写、不同表述多次检索（例如「合同」也要试「协议」「契约」）。
 
 你可以循环执行以下动作，直到能完整回答：
 - search_team：在团队知识库检索相关文档（必须给 query）
@@ -145,26 +193,35 @@ async function searchTool(
     /* 语义检索失败（如未配置 embedding），下方回退关键词检索 */
   }
 
-  // 2) 回退：关键词检索
+  // 2) 回退：关键词检索（无 embedding 时为主路径）。对多个同义词/分词变体并行检索并合并。
   if (docs.length === 0) {
-    const [teamRes, personalRes] = await Promise.all([
-      scope === 'team' || scope === 'both'
-        ? window.yibiao?.kbTeam.qaRetrieve(query, 10)
-        : Promise.resolve({ success: true, data: [] as KbQaDocument[] }),
-      scope === 'personal' || scope === 'both'
-        ? window.yibiao?.kbPersonal.qaRetrieve(query, 10)
-        : Promise.resolve({ success: true, data: [] as KbQaDocument[] }),
-    ]);
-    const teamDocs: KbQaDocument[] = Array.isArray(teamRes?.data) ? teamRes.data : [];
-    const personalDocs: KbQaDocument[] = Array.isArray(personalRes?.data)
-      ? personalRes.data
-      : [];
+    const variants = expandQuery(query);
+    const scopes: Array<'team' | 'personal'> =
+      scope === 'both' ? ['team', 'personal'] : [scope];
     const seen = new Set<string>();
-    for (const d of [...teamDocs, ...personalDocs]) {
-      const key = `${d.file_name || d.title}|${(d.content_text || '').slice(0, 200)}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      docs.push(d);
+    const mergeInto = (list: KbQaDocument[] | undefined) => {
+      for (const d of list || []) {
+        const key = `${d.file_name || d.title}|${(d.content_text || '').slice(0, 200)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        docs.push(d);
+      }
+    };
+    // 每个变体 × 每个范围，并行检索（本地 IPC，开销可接受）
+    const calls: Array<Promise<unknown>> = [];
+    for (const v of variants) {
+      for (const sc of scopes) {
+        calls.push(
+          sc === 'team'
+            ? window.yibiao?.kbTeam.qaRetrieve(v, 10)
+            : window.yibiao?.kbPersonal.qaRetrieve(v, 10),
+        );
+      }
+    }
+    const results = await Promise.all(calls);
+    for (const r of results) {
+      const res = r as { success: boolean; data?: KbQaDocument[] } | undefined;
+      mergeInto(Array.isArray(res?.data) ? res.data : []);
     }
   }
 
@@ -401,7 +458,10 @@ export async function runQaAgent(opts: RunQaAgentOptions): Promise<QaAgentResult
     messages.push({ role: 'assistant', content: JSON.stringify(decision) });
     messages.push({
       role: 'user',
-      content: `检索到 ${docs.length} 篇文档：\n${formatDocs(docs, offset)}\n\n请基于以上资料继续决策：可换关键词再检索、补充检索，或已足够则输出 answer。若资料仍不足，可 clarify 向用户追问。`,
+      content:
+        docs.length === 0
+          ? `本次检索「${query}」未命中任何文档。常见原因：关键词与文档表述不一致（如「合同」应同时试「协议」「契约」），或问题缺少关键实体/范围。请尝试换同义词、更通用的关键词再检索；若问题本身含糊或无法确定范围，请直接用 clarify 向用户追问，不要臆测作答。`
+          : `检索到 ${docs.length} 篇文档：\n${formatDocs(docs, offset)}\n\n请基于以上资料继续决策：可换关键词再检索、补充检索，或已足够则输出 answer。若资料仍不足，可 clarify 向用户追问。`,
     });
   }
 

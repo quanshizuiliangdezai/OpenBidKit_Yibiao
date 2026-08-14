@@ -7,6 +7,7 @@ import {
   useQaSession,
   type QaSource,
 } from '../context/QaSessionProvider';
+import type { QaAgentStep } from '../agent/qaAgent';
 import type { KbQaMessageSource, KbQaStoredMessage } from '../../../shared/types';
 
 /**
@@ -71,6 +72,40 @@ function SourceList({ sources }: { sources: KbQaMessageSource[] }) {
   );
 }
 
+const STEP_LABEL: Record<string, string> = {
+  search_team: '检索·团队库',
+  search_personal: '检索·个人库',
+  search_both: '检索·全部',
+  graph_lookup: '图谱关联',
+  clarify: '追问澄清',
+  answer: '综合作答',
+};
+
+/** Agent 多步推理轨迹：让用户确认「它在一步步查」，而非一次黑箱生成 */
+function ReasoningTrace({ steps, defaultOpen = true }: { steps: QaAgentStep[]; defaultOpen?: boolean }) {
+  if (!steps || steps.length === 0) return null;
+  return (
+    <details className="kb-qa-trace" open={defaultOpen}>
+      <summary>
+        🧠 Agent 推理轨迹（{steps.length} 步）
+      </summary>
+      <ol className="kb-qa-trace-list">
+        {steps.map((s) => (
+          <li key={s.step}>
+            <span className="kb-qa-trace-step">{s.step + 1}</span>
+            <span className="kb-qa-trace-action">{STEP_LABEL[s.action] || s.action}</span>
+            {s.query ? <span className="kb-qa-trace-query">「{s.query}」</span> : null}
+            {typeof s.retrieved === 'number' ? (
+              <span className="kb-qa-trace-retrieved">命中 {s.retrieved} 篇</span>
+            ) : null}
+            {s.thought ? <div className="kb-qa-trace-thought">{s.thought}</div> : null}
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
 function KbQaPage() {
   const {
     sessions,
@@ -89,6 +124,7 @@ function KbQaPage() {
     renameSession,
     deleteSession,
     setPageVisible,
+    qaSteps,
   } = useQaSession();
   const { confirm, prompt } = useConfirmDialog();
 
@@ -215,6 +251,7 @@ function KbQaPage() {
     // 消息还是 pending 但本地并没有在跑（典型场景：生成途中关掉了应用），
     // 这种记录永远不会自己变成 done，得如实告诉用户，不能一直转圈。
     const interrupted = pending && !busy;
+    const trace = m.role === 'assistant' ? qaSteps[m.id] : undefined;
     return (
       <div key={m.id} className={`kb-qa-message ${m.role}`}>
         <div className="kb-qa-message-role">{m.role === 'user' ? '你' : 'AI 助手'}</div>
@@ -225,16 +262,20 @@ function KbQaPage() {
             interrupted ? (
               <span className="kb-qa-thinking">本次回答未完成（应用曾被关闭），请重新提问。</span>
             ) : (
-              <span className="kb-qa-thinking">
-                {stage === 'generating'
-                  ? '已找到参考资料，正在生成回答…'
-                  : stage === 'retrieving'
-                    ? '正在检索参考资料…'
-                    : '正在生成回答，可以先去忙别的，完成后会提醒你…'}
-              </span>
+              <>
+                <ReasoningTrace steps={trace || []} defaultOpen />
+                <span className="kb-qa-thinking">
+                  {stage === 'generating'
+                    ? '已找到参考资料，正在生成回答…'
+                    : stage === 'retrieving'
+                      ? '正在检索参考资料…'
+                      : '正在生成回答，可以先去忙别的，完成后会提醒你…'}
+                </span>
+              </>
             )
           ) : (
             <>
+              <ReasoningTrace steps={trace || []} defaultOpen={false} />
               <MarkdownRenderer>{m.content}</MarkdownRenderer>
               {m.status === 'error' ? <div className="kb-qa-message-error">生成失败</div> : null}
             </>
