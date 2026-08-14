@@ -1475,11 +1475,12 @@ function clearDatabaseBackupFiles(databasePath) {
 
 function applyMigrations(db, databasePath, onStatus) {
   const currentVersion = Number(db.pragma('user_version', { simple: true }) || 0);
-  if (currentVersion > schemaVersion) {
-    throw new Error(`本地数据库版本 ${currentVersion} 高于当前客户端支持版本 ${schemaVersion}，请升级客户端后再使用技术方案功能。`);
-  }
-  if (currentVersion === schemaVersion) {
-    ensureWorkspaceSchemaHealth(db, schemaVersion, onStatus);
+  // 不再因「本地库版本高于客户端声明版本」而硬性阻塞启动。
+  // 上游曾把迁移写入数组却未同步 schemaVersion 常量，导致打包客户端的
+  // schemaVersion 落后于本地库 user_version，误报「请升级客户端」并卡死启动。
+  // 此处改为：版本不低于声明值时，仅做表结构健康补齐后正常返回。
+  if (currentVersion >= schemaVersion) {
+    ensureWorkspaceSchemaHealth(db, Math.max(currentVersion, schemaVersion), onStatus);
     return;
   }
 
