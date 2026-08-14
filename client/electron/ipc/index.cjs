@@ -34,6 +34,7 @@ const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 const { createSystemFontService } = require('../services/systemFontService.cjs');
 const { clearOrphanedGeneratedImages, clearStalePiTaskArchives, runHistoricalStorageCleanup } = require('../services/storageCleanupService.cjs');
 const { createTaskService } = require('../services/taskService.cjs');
+const { createAgentWorkspaceService } = require('../services/agentWorkspaceService.cjs');
 const { createTaskLogStore } = require('../services/taskLogStore.cjs');
 const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
 const { createTemplateStore } = require('../services/templateStore.cjs');
@@ -214,6 +215,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const kbQaRetrievalService = createKbQaRetrievalService({ db: sqliteDatabase.db, aiService, kbAuthService });
   // 问答会话持久化（服务器存储，按账号隔离）：让聊天记录在页面切换、甚至换电脑后依然可见
   const kbQaSessionService = createKbQaSessionService({ kbAuthService });
+  const agentWorkspaceService = createAgentWorkspaceService({ agentService, taskService, technicalPlanStore });
 
   clearWorkspaceDatabaseIpc();
   registerKnowledgeBaseIpc({ knowledgeBaseService });
@@ -229,7 +231,9 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   
   // 更新 pluginService 的服务引用
   pluginService.updateServices({
+    agentService,
     taskService,
+    agentWorkspaceService,
     technicalPlanStore,
     duplicateCheckStore,
     rejectionCheckStore,
@@ -369,6 +373,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerKbTeamIpc({ kbTeamService, kbAuthService });
   registerKbPersonalIpc({ kbAuthService, app, personalService: kbPersonalService });
   registerPluginIpc(ipcMain, app, {
+    agentService,
     taskService: null,
     technicalPlanStore: null,
     duplicateCheckStore: null,
@@ -521,8 +526,22 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     return quitAndInstall({ app });
   });
 
+  /** 与主程序更新检查并行检查插件，并使用独立事件通知 Renderer。 */
+  const checkPluginUpdates = (webContents) => {
+    void pluginService.checkAvailableUpdates()
+      .then((updates) => {
+        if (updates.length > 0) {
+          sendToWebContents(webContents, 'plugins:updates-available', updates);
+        }
+      })
+      .catch((error) => {
+        console.warn('[plugin-service] 自动检查插件更新失败:', error?.message || String(error));
+      });
+  };
+
   ipcMain.handle('app:check-update', (event) => {
     const webContents = event.sender;
+    checkPluginUpdates(webContents);
     return checkAndDownloadUpdate({
       app,
       mainWindow,
@@ -541,6 +560,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
 
   ipcMain.handle('app:start-update', (event) => {
     const webContents = event.sender;
+    checkPluginUpdates(webContents);
     return triggerUpdateDownload({
       app,
       mainWindow,

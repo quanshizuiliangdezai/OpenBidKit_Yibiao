@@ -1,10 +1,10 @@
 ﻿import { useEffect, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { useAuth } from '../../../shared/auth/AuthContext';
-import { DetailHelpLink, FloatingToolbar, InputWithAction, useAutoAnswer, useToast } from '../../../shared/ui';
+import { DetailHelpLink, FloatingToolbar, InputWithAction, OfflineLicenseActivationDialog, useAutoAnswer, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { AgentModeScenariosConfig, AgentRuntimeDescriptor, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
+import type { AgentModeScenariosConfig, AgentRuntimeDescriptor, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'components' | 'agent' | 'about';
@@ -40,6 +40,7 @@ const agentDiagnosticStatusMeta: Record<AgentSelfCheckStepStatus, { label: strin
 const updateChannelOptions: Array<{ value: UpdateChannel; label: string; description: string }> = [
   { value: 'github', label: 'GitHub', description: '使用 GitHub Release 检查和下载更新' },
   { value: 'cloudflare', label: 'Cloudflare', description: '使用 Cloudflare R2 镜像检查和下载更新' },
+  { value: 'atomgit', label: 'AtomGit', description: '使用 AtomGit Release 检查和下载更新' },
 ];
 
 const defaultAgentModeScenarios: AgentModeScenariosConfig = {
@@ -47,7 +48,10 @@ const defaultAgentModeScenarios: AgentModeScenariosConfig = {
 };
 
 function normalizeUpdateChannel(value?: string): UpdateChannel {
-  return value === 'cloudflare' ? 'cloudflare' : 'github';
+  if (value === 'cloudflare' || value === 'atomgit') {
+    return value;
+  }
+  return 'atomgit';
 }
 
 function normalizeAgentModeScenarios(value?: Partial<AgentModeScenariosConfig>): AgentModeScenariosConfig {
@@ -62,6 +66,11 @@ function normalizeAgentModeScenarios(value?: Partial<AgentModeScenariosConfig>):
 // 避免老用户升级后设置页运行时下拉框因找不到匹配项而显示空白。
 function normalizeAgentRuntimeId(value?: string): string {
   return value && value !== 'opencode' ? value : 'pi';
+}
+
+function getLicenseSourceLabel(status: LicenseRuntimeStatus | null): string {
+  if (!status) return '读取中';
+  return status.sourceTrusted ? '官方发行版' : '不可信的客户端来源';
 }
 
 const textModelProviders: Array<{ value: TextModelProvider; label: string }> = [
@@ -551,7 +560,8 @@ const initialState: SettingsPageState = {
   general: {
     developer_mode: false,
     developer_token_stats_auto_open: false,
-    update_channel: 'github',
+    developer_agent_monitor_auto_open: false,
+    update_channel: 'atomgit',
     gpu_hardware_acceleration_enabled: true,
     gpu_hardware_acceleration_configured: true,
   },
@@ -592,6 +602,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     setEnabled: setAgentAutoAnswerEnabled,
   } = useAutoAnswer();
   const { isAdmin } = useAuth();
+  const [licenseStatus, setLicenseStatus] = useState<LicenseRuntimeStatus | null>(null);
+  const [offlineLicenseDialogOpen, setOfflineLicenseDialogOpen] = useState(false);
 
   // 全局模型配置（服务器侧）已迁移至侧边栏独立模块「模型配置」，此处不再保留。
 
@@ -601,6 +613,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       .then((runtimes) => setAgentRuntimes(runtimes || []))
       .catch(() => setAgentRuntimes([]));
     void window.yibiao?.getVersion().then(setAppVersion);
+    void window.yibiao?.license?.getStatus().then(setLicenseStatus).catch(() => setLicenseStatus(null));
 
     const unsubs: Array<() => void> = [];
     unsubs.push(
@@ -656,6 +669,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         general: {
           developer_mode: Boolean(config.developer_mode),
           developer_token_stats_auto_open: Boolean(config.developer_token_stats_auto_open),
+          developer_agent_monitor_auto_open: Boolean(config.developer_agent_monitor_auto_open),
           update_channel: normalizeUpdateChannel(config.update_channel),
           gpu_hardware_acceleration_enabled: Boolean(config.gpu_hardware_acceleration_enabled),
           gpu_hardware_acceleration_configured: Boolean(config.gpu_hardware_acceleration_configured),
@@ -722,6 +736,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       gpu_hardware_acceleration_configured: state.general.gpu_hardware_acceleration_configured,
       developer_mode: state.general.developer_mode,
       developer_token_stats_auto_open: state.general.developer_token_stats_auto_open,
+      developer_agent_monitor_auto_open: state.general.developer_agent_monitor_auto_open,
     };
   };
 
@@ -870,6 +885,13 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     setState((prev) => ({
       ...prev,
       general: { ...prev.general, developer_token_stats_auto_open: autoOpen },
+    }));
+  };
+
+  const updateDeveloperAgentMonitorAutoOpen = (autoOpen: boolean) => {
+    setState((prev) => ({
+      ...prev,
+      general: { ...prev.general, developer_agent_monitor_auto_open: autoOpen },
     }));
   };
 
@@ -1693,6 +1715,22 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                     </span>
                   </span>
                 </label>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>默认打开 Pi Agent 执行监视器</strong>
+                    <span>开启后，应用下次启动时自动打开 Pi Agent 执行监视器</span>
+                  </div>
+                  <span className="yb-switch-control">
+                    <input
+                      type="checkbox"
+                      checked={state.general.developer_agent_monitor_auto_open}
+                      onChange={(event) => updateDeveloperAgentMonitorAutoOpen(event.target.checked)}
+                    />
+                    <span className="yb-switch-track" aria-hidden="true">
+                      <span className="yb-switch-thumb" />
+                    </span>
+                  </span>
+                </label>
                 <div className="settings-row">
                   <div className="settings-row-copy">
                     <strong>Token 统计小窗</strong>
@@ -2420,6 +2458,42 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 {updateStatus === 'downloaded' ? '安装并重启' : updateBusy ? '检查中...' : '检查更新'}
               </button>
             </article>
+            <article className="about-info-card about-links-card">
+              <span>信息与授权</span>
+              <ul className="about-links-list">
+                <li className="about-links-item">
+                  <span className="about-links-label">GitHub 仓库</span>
+                  <a
+                    className="about-links-value is-link"
+                    href="https://github.com/quanshizuiliangdezai/OpenBidKit_Yibiao"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    quanshizuiliangdezai/OpenBidKit_Yibiao
+                  </a>
+                </li>
+                <li className="about-links-item">
+                  <span className="about-links-label">使用文档</span>
+                  <a
+                    className="about-links-value is-link"
+                    href="https://wiki.agnet.top/"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    wiki.agnet.top
+                  </a>
+                </li>
+                <li className="about-links-item">
+                  <span className="about-links-label">客户端授权状态</span>
+                  <span className={`about-links-value ${licenseStatus?.sourceTrusted ? 'is-trusted' : 'is-untrusted'}`}>
+                    {getLicenseSourceLabel(licenseStatus)}
+                  </span>
+                </li>
+              </ul>
+              <button type="button" className="about-links-activate" onClick={() => setOfflineLicenseDialogOpen(true)}>
+                离线激活授权
+              </button>
+            </article>
           </div>
           <div className="privacy-statement">
             <div className="privacy-statement-head">
@@ -2447,6 +2521,11 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
           </div>
         </section>
       )}
+      <OfflineLicenseActivationDialog
+        open={offlineLicenseDialogOpen}
+        onOpenChange={setOfflineLicenseDialogOpen}
+        onActivated={setLicenseStatus}
+      />
       </div>
       <FloatingToolbar groups={settingsToolbarGroups} label="设置保存工具条" />
     </div>
