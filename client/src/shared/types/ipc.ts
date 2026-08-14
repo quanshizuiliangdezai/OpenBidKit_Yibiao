@@ -776,7 +776,9 @@ export interface YibiaoBridge {
     run: (payload: DeveloperExpansionReplaceTestPayload) => Promise<DeveloperExpansionReplaceTestResult>;
   };
   file: {
-    selectDuplicateCheckFiles: (options?: { multiple?: boolean }) => Promise<FileSelectionResult>;
+    selectDuplicateCheckFiles: (options?: { multiple?: boolean; filePaths?: string[] }) => Promise<FileSelectionResult>;
+    /** 把拖拽进来的 File 对象换成本地绝对路径，供各上传区拖拽导入使用 */
+    getPathForFile: (file: File) => string;
   };
   knowledgeBase: {
     list: () => Promise<KnowledgeBaseIndex>;
@@ -813,14 +815,19 @@ export interface YibiaoBridge {
   };
   technicalPlan: {
     loadState: () => Promise<TechnicalPlanState>;
-    importTenderDocument: () => Promise<{
+    importTenderDocument: (filePaths?: string[]) => Promise<{
       success: boolean;
       message?: string;
       markdown?: string;
       fileName?: string;
       parserLabel?: string | null;
     }>;
-    importOriginalPlanDocument: () => Promise<{
+    removeTenderDocument: (sourceId: string) => Promise<{
+      success: boolean;
+      message?: string;
+      markdown?: string;
+    }>;
+    importOriginalPlanDocument: (filePaths?: string[]) => Promise<{
       success: boolean;
       message?: string;
       markdown?: string;
@@ -851,7 +858,7 @@ export interface YibiaoBridge {
   };
   rejectionCheck: {
     loadState: () => Promise<RejectionCheckWorkspaceState>;
-    importDocument: (role: RejectionDocumentRole) => Promise<{ success: boolean; message?: string }>;
+    importDocument: (role: RejectionDocumentRole, filePaths?: string[]) => Promise<{ success: boolean; message?: string }>;
     importTenderFromTechnicalPlan: () => Promise<{ success: boolean; message?: string }>;
     removeDocument: (role: RejectionDocumentRole, documentId?: string) => Promise<void>;
     saveUiState: (payload: Partial<Pick<RejectionCheckWorkspaceState, 'step' | 'activeDocumentTab' | 'activeResultTab' | 'activeCheckResultTab' | 'customCheckItems' | 'checkOptions'>>) => Promise<void>;
