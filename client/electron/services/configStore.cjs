@@ -276,7 +276,7 @@ const defaultConfig = {
     mermaid_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
     html_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
   },
-  update_channel: 'atomgit',
+  update_channel: 'github',
   gpu_hardware_acceleration_enabled: true,
   gpu_hardware_acceleration_configured: true,
   export_format: defaultExportFormat,
