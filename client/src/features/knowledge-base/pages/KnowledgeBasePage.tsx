@@ -12,7 +12,6 @@ import {
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseIndex, KnowledgeDocument, KnowledgeDocumentStatus, KnowledgeFolder, KnowledgeItem } from '../types';
 import type { KbAuthStatus, KbTeamDocument, KbTeamFolder, KbTrashFolder, KbTrashDocument } from '../../../shared/types/ipc';
 import { useAuth } from '../../../shared/auth/AuthContext';
-import ObsidianVaultPanel from './ObsidianVaultPanel';
 
 declare global {
   interface Window {
@@ -2290,7 +2289,6 @@ function KnowledgeBasePage() {
 
   return (
     <>
-      <ObsidianVaultPanel />
       <div className="page-stack knowledge-page">
         <section className="knowledge-workspace-bar">
         <div className="knowledge-breadcrumb">
