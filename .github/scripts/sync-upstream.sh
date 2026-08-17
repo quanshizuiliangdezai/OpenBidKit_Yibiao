@@ -59,6 +59,35 @@ if [ "$BEHIND" = "0" ]; then
   exit 0
 fi
 
+# ========== 3b. 破坏性上游检测（保护 fork 核心功能） ==========
+# 若上游领先提交删除了 fork 关键文件（知识库QA/同步/ConfirmDialog/CI脚本/部署代码等），
+# 说明上游在做破坏性重构，直接跳过同步，避免把 fork 功能清零。
+FORK_CRITICAL=(
+  "client/electron/services/syncService.cjs"
+  "client/src/shared/ui/ConfirmDialogProvider.tsx"
+  "client/electron/services/kbQaSessionService.cjs"
+  "client/src/features/knowledge-base/pages/KbQaPage.tsx"
+  ".github/scripts/sync-upstream.sh"
+  ".github/workflows/auto-build.yml"
+  "server/yibiao-kb-worker/worker.cjs"
+  "kb-server/kb_db.py"
+  "sync-server/server.py"
+)
+DELETED_CRITICAL=$(git diff --name-only HEAD..upstream/main --diff-filter=D 2>/dev/null || true)
+DESTRUCTIVE=0
+for crit in "${FORK_CRITICAL[@]}"; do
+  if echo "$DELETED_CRITICAL" | grep -qx "$crit"; then
+    warn "检测到上游删除了 fork 关键文件: $crit —— 跳过本次同步以保护 fork 功能。"
+    DESTRUCTIVE=1
+  fi
+done
+if [ "$DESTRUCTIVE" -eq 1 ]; then
+  err "上游为破坏性重构，已跳过自动同步。请人工评估后再决定是否合并。"
+  echo "## Upstream Sync - Skipped (destructive upstream change detected)" >> "$GITHUB_STEP_SUMMARY"
+  echo "上游删除了 fork 关键文件，自动同步已跳过以避免破坏 fork 功能。请人工处理。" >> "$GITHUB_STEP_SUMMARY"
+  exit 0
+fi
+
 # ========== 4. Merge ==========
 # 注意：脚本顶部 set -e 下，若 merge 冲突（退出码非0），命令替换会直接终止脚本。
 # 这里用 set +e 包裹，既避免异常退出，又能拿到真实退出码；否则 || true 会吞掉退出码，
