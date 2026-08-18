@@ -45,6 +45,10 @@ function firstPermittedSection(
   return 'bid-generation';
 }
 
+function isTechnicalPlanSection(section: SectionId) {
+  return section === 'technical-plan' || section === 'existing-plan-expansion';
+}
+
 function App() {
   const auth = useAuth();
   const [activeSection, setActiveSection] = useState<SectionId>('bid-generation');
@@ -64,6 +68,8 @@ function App() {
 
   useEffect(() => {
     trackPageView(activeSection);
+    if (isTechnicalPlanSection(activeSection)) return;
+    void window.yibiao?.ui?.setCurrentView({ section: activeSection });
   }, [activeSection]);
 
   // 登录态就绪后，若当前/默认功能无权限，跳到第一个有权限的功能

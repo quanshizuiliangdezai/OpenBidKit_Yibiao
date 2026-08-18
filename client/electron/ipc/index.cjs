@@ -53,6 +53,45 @@ const { createKbQaSessionService } = require('../services/kbQaSessionService.cjs
 const { checkRequiredOnlineServices, getRequiredOnlineServiceStatus } = require('../services/requiredOnlineServices.cjs');
 const { initLocalImageRenderService } = require('../services/localImageRenderService.cjs');
 
+let pendingUiCurrentView = null;
+let agentWorkspaceServiceRef = null;
+let currentViewWebContentsId = null;
+const currentViewLifetimeBound = new WeakSet();
+
+function clearUiCurrentView() {
+  pendingUiCurrentView = null;
+  currentViewWebContentsId = null;
+  if (agentWorkspaceServiceRef?.setCurrentView) {
+    agentWorkspaceServiceRef.setCurrentView({});
+  }
+}
+
+function bindCurrentViewLifetime(webContents) {
+  if (!webContents || currentViewLifetimeBound.has(webContents)) return;
+  currentViewLifetimeBound.add(webContents);
+  const webContentsId = webContents.id;
+  const clearIfCurrent = () => {
+    if (currentViewWebContentsId === webContentsId) {
+      clearUiCurrentView();
+    }
+  };
+  webContents.once('destroyed', clearIfCurrent);
+  webContents.on('render-process-gone', clearIfCurrent);
+}
+
+function applyUiCurrentView(view, senderWebContents) {
+  if (senderWebContents?.isDestroyed?.()) {
+    clearUiCurrentView();
+    return;
+  }
+  pendingUiCurrentView = view && typeof view === 'object' ? view : {};
+  currentViewWebContentsId = senderWebContents?.id ?? null;
+  bindCurrentViewLifetime(senderWebContents);
+  if (agentWorkspaceServiceRef?.setCurrentView) {
+    agentWorkspaceServiceRef.setCurrentView(pendingUiCurrentView);
+  }
+}
+
 function normalizeExternalUrl(value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -93,6 +132,7 @@ const workspaceDatabaseChannels = [
   'technical-plan:set-workflow-kind',
   'technical-plan:save-outline-config',
   'technical-plan:save-outline',
+  'technical-plan:save-global-facts-config',
   'technical-plan:save-global-facts',
   'technical-plan:save-content-generation-options',
   'technical-plan:save-chapter-content',
@@ -217,6 +257,11 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   // 问答会话持久化（服务器存储，按账号隔离）：让聊天记录在页面切换、甚至换电脑后依然可见
   const kbQaSessionService = createKbQaSessionService({ kbAuthService });
   const agentWorkspaceService = createAgentWorkspaceService({ agentService, taskService, technicalPlanStore });
+  agentWorkspaceServiceRef = agentWorkspaceService;
+  technicalPlanStore.setAgentWorkspaceChangeListener(() => agentWorkspaceService.emitWorkspacesChanged());
+  if (pendingUiCurrentView) {
+    agentWorkspaceService.setCurrentView(pendingUiCurrentView);
+  }
 
   clearWorkspaceDatabaseIpc();
   registerKnowledgeBaseIpc({ knowledgeBaseService });
@@ -379,6 +424,10 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     technicalPlanStore: null,
     duplicateCheckStore: null,
     rejectionCheckStore: null,
+  });
+  ipcMain.handle('ui:set-current-view', (event, view) => {
+    applyUiCurrentView(view, event.sender);
+    return { success: true };
   });
   registerPendingWorkspaceDatabaseIpc(databaseStatus.getStatus);
 

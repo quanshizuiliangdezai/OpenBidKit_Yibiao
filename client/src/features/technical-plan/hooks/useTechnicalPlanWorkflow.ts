@@ -27,7 +27,10 @@ const initialState: TechnicalPlanState = {
   bidSectionExtractionTask: undefined,
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
+  outlineAdjustmentTask: undefined,
+  globalFactsMode: 'fabricate',
   globalFactsTask: undefined,
+  globalFactsAdjustmentTask: undefined,
   globalFacts: [],
   contentGenerationTask: undefined,
   contentGenerationSections: {},
@@ -55,6 +58,7 @@ export function useTechnicalPlanWorkflow(initialWorkflowKind: TechnicalPlanState
             ...cachedState,
             workflowKind: initialWorkflowKind,
             outlineExpansionMode: cachedState.outlineExpansionMode || 'ai-complement',
+            globalFactsMode: cachedState.globalFactsMode || 'fabricate',
           });
         }
       } catch (error) {
