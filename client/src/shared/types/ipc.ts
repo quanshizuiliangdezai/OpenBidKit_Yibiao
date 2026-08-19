@@ -8,8 +8,21 @@ import type { FeasibilityProjectInfo, FeasibilityReportState, FeasibilityReportS
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
 import type { OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from './outline';
 
+export interface TaskEventTask {
+  task_id: string;
+  type: string;
+  status: string;
+  progress: number;
+  progress_detail?: ContentGenerationProgressDetail;
+  logs: string[];
+  started_at: string;
+  updated_at: string;
+  error?: string;
+  stats?: unknown;
+}
+
 export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown, TDuplicateCheckState = unknown> {
-  task: unknown;
+  task: TaskEventTask;
   technicalPlan?: TState;
   technicalPlanPatch?: Partial<TechnicalPlanState>;
   bidItem?: BidAnalysisTaskState;
