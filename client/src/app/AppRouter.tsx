@@ -21,6 +21,7 @@ import AccountListPage from '../features/settings/pages/AccountListPage';
 import PermissionListPage from '../features/settings/pages/PermissionListPage';
 import AuditLogPage from '../features/settings/pages/AuditLogPage';
 import TechnicalPlanHome from '../features/technical-plan/pages/TechnicalPlanHome';
+import FeasibilityReportHome from '../features/feasibility-report/pages/FeasibilityReportHome';
 import SecondaryMenuPage from '../shared/ui/SecondaryMenuPage';
 
 interface AppRouterProps {
@@ -54,6 +55,8 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <TechnicalPlanHome workflowKind="technical-plan" registerLeaveGuard={registerLeaveGuard} onSectionChange={onSectionChange} />;
     case 'existing-plan-expansion':
       return <TechnicalPlanHome workflowKind="existing-plan-expansion" registerLeaveGuard={registerLeaveGuard} onSectionChange={onSectionChange} />;
+    case 'feasibility-report':
+      return <FeasibilityReportHome registerLeaveGuard={registerLeaveGuard} onSectionChange={onSectionChange} />;
     case 'business-bid':
       return <BusinessBidPage />;
     case 'document-knowledge-base':

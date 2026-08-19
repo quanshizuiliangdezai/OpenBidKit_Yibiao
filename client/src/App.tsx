@@ -49,6 +49,10 @@ function isTechnicalPlanSection(section: SectionId) {
   return section === 'technical-plan' || section === 'existing-plan-expansion';
 }
 
+function isManagedWorkbenchSection(section: SectionId) {
+  return section === 'technical-plan' || section === 'existing-plan-expansion' || section === 'feasibility-report';
+}
+
 function App() {
   const auth = useAuth();
   const [activeSection, setActiveSection] = useState<SectionId>('bid-generation');
@@ -68,7 +72,7 @@ function App() {
 
   useEffect(() => {
     trackPageView(activeSection);
-    if (isTechnicalPlanSection(activeSection)) return;
+    if (isManagedWorkbenchSection(activeSection)) return;
     void window.yibiao?.ui?.setCurrentView({ section: activeSection });
   }, [activeSection]);
 
