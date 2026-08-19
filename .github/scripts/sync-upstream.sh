@@ -62,6 +62,12 @@ fi
 # ========== 3b. 破坏性上游检测（保护 fork 核心功能） ==========
 # 若上游领先提交删除了 fork 关键文件（知识库QA/同步/ConfirmDialog/CI脚本/部署代码等），
 # 说明上游在做破坏性重构，直接跳过同步，避免把 fork 功能清零。
+# 注意：比较基准必须是「fork 与上游的共同祖先」，不能用 HEAD。
+#   原因：fork 有大量上游从未有过的独有文件（yibiao-kb-worker/kb-server/sync-server/
+#   CI脚本/kbQaSession/ConfirmDialog 等）。若用 HEAD..upstream/main，这些 fork 独有文件
+#   会被 diff --diff-filter=D 误判为「上游删除」→ 必然命中 FORK_CRITICAL → 误杀正常同步。
+#   用 `git merge-base HEAD upstream/main` 取共同祖先后，只有上游【相对基线真实删除】的
+#   文件才会被检出，才能正确区分「破坏性重构」与「正常增量（含 fork 独有文件）」。
 FORK_CRITICAL=(
   "client/electron/services/syncService.cjs"
   "client/src/shared/ui/ConfirmDialogProvider.tsx"
@@ -73,7 +79,8 @@ FORK_CRITICAL=(
   "kb-server/kb_db.py"
   "sync-server/server.py"
 )
-DELETED_CRITICAL=$(git diff --name-only HEAD..upstream/main --diff-filter=D 2>/dev/null || true)
+MERGE_BASE=$(git merge-base HEAD upstream/main 2>/dev/null || echo "HEAD")
+DELETED_CRITICAL=$(git diff --name-only "$MERGE_BASE"..upstream/main --diff-filter=D 2>/dev/null || true)
 DESTRUCTIVE=0
 for crit in "${FORK_CRITICAL[@]}"; do
   if echo "$DELETED_CRITICAL" | grep -qx "$crit"; then
