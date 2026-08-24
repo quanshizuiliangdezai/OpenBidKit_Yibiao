@@ -48,7 +48,9 @@ function getMappedWorkspaceId(view) {
  */
 function createAgentWorkspaceService({ agentService, taskService, technicalPlanStore, feasibilityReportStore }) {
   const chatSubscribers = new Set();
+  const primaryChatSubscribers = new Set();
   const workspaceChangeSubscribers = new Set();
+  const primaryWorkspaceChangeSubscribers = new Set();
   // 当前可见页；未上报前无生效工作空间。不写库。
   let currentView = { section: '', step: '' };
   // workspaceId -> { messages, pending, pending_task_id }
@@ -73,6 +75,15 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
         callback(event);
       } catch (error) {
         console.error('[agent-workspace] chat 事件回调失败:', error);
+      }
+    }
+    if (agentService.isPrimarySession({ task_key: workspaceId })) {
+      for (const callback of primaryChatSubscribers) {
+        try {
+          callback(event);
+        } catch (error) {
+          console.error('[agent-workspace] 主 Session chat 事件回调失败:', error);
+        }
       }
     }
   }
@@ -283,6 +294,26 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
       .filter(Boolean);
   }
 
+  function getPrimaryWorkspaceId() {
+    const taskKey = String(agentService.getPrimarySession()?.task_key || '');
+    return providers.some((provider) => provider.id === taskKey) ? taskKey : null;
+  }
+
+  function listPrimaryAgentWorkspaces() {
+    const workspaceId = getPrimaryWorkspaceId();
+    if (!workspaceId) return [];
+    const provider = providers.find((item) => item.id === workspaceId);
+    const descriptor = provider?.buildDescriptor();
+    if (!descriptor) return [];
+    const state = getChatState(workspaceId);
+    return [{
+      ...descriptor,
+      active: true,
+      pending: state.pending,
+      messages: state.messages.map((message) => ({ ...message })),
+    }];
+  }
+
   function getActiveWorkspaceId() {
     return listAgentWorkspaces().find((item) => item.active)?.id || null;
   }
@@ -300,9 +331,25 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
         console.error('[agent-workspace] 工作空间变更回调失败:', error);
       }
     }
+    emitPrimaryWorkspacesChanged();
   }
 
-  function sendAgentWorkspaceMessage(payload = {}) {
+  function emitPrimaryWorkspacesChanged() {
+    const workspaces = listPrimaryAgentWorkspaces();
+    const event = {
+      active_workspace_id: workspaces[0]?.id || null,
+      workspaces,
+    };
+    for (const callback of primaryWorkspaceChangeSubscribers) {
+      try {
+        callback(event);
+      } catch (error) {
+        console.error('[agent-workspace] 主 Session 工作空间变更回调失败:', error);
+      }
+    }
+  }
+
+  function sendAgentWorkspaceMessage(payload = {}, options = {}) {
     const workspaceId = String(payload.workspaceId || payload.workspace_id || '');
     const message = String(payload.message || '').trim();
     const provider = providers.find((item) => item.id === workspaceId);
@@ -312,9 +359,9 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     if (!message) {
       throw new Error('请输入调整要求');
     }
-    const activeWorkspaceId = getActiveWorkspaceId();
+    const activeWorkspaceId = options.primaryOnly ? getPrimaryWorkspaceId() : getActiveWorkspaceId();
     if (!activeWorkspaceId || workspaceId !== activeWorkspaceId) {
-      throw new Error('当前步骤没有可对话的工作空间');
+      throw new Error(options.primaryOnly ? '当前没有可对话的主 Session' : '当前步骤没有可对话的工作空间');
     }
     const descriptor = provider.buildDescriptor();
     if (!descriptor) {
@@ -344,15 +391,31 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     return { success: true };
   }
 
+  function sendPrimaryAgentWorkspaceMessage(payload = {}) {
+    return sendAgentWorkspaceMessage(payload, { primaryOnly: true });
+  }
+
   function onAgentWorkspaceChatEvent(callback) {
     chatSubscribers.add(callback);
     return () => chatSubscribers.delete(callback);
+  }
+
+  function onPrimaryAgentWorkspaceChatEvent(callback) {
+    primaryChatSubscribers.add(callback);
+    return () => primaryChatSubscribers.delete(callback);
   }
 
   function onAgentWorkspacesChanged(callback) {
     workspaceChangeSubscribers.add(callback);
     return () => workspaceChangeSubscribers.delete(callback);
   }
+
+  function onPrimaryAgentWorkspacesChanged(callback) {
+    primaryWorkspaceChangeSubscribers.add(callback);
+    return () => primaryWorkspaceChangeSubscribers.delete(callback);
+  }
+
+  agentService.onPrimarySessionChanged(() => emitPrimaryWorkspacesChanged());
 
   // 重新生成目录或全局事实会重建对应 Agent 工作空间，聊天记录跟随工作空间同步重置。
   let lastOutlineGenerationTaskId = null;
@@ -432,10 +495,15 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
 
   return {
     listAgentWorkspaces,
+    listPrimaryAgentWorkspaces,
     sendAgentWorkspaceMessage,
+    sendPrimaryAgentWorkspaceMessage,
     onAgentWorkspaceChatEvent,
+    onPrimaryAgentWorkspaceChatEvent,
     onAgentWorkspacesChanged,
+    onPrimaryAgentWorkspacesChanged,
     emitWorkspacesChanged,
+    emitPrimaryWorkspacesChanged,
     setCurrentView,
   };
 }

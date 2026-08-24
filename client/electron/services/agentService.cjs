@@ -8,11 +8,18 @@ const { createAgentErrorReporter } = require('./agent/agentErrorReporter.cjs');
 const { resolveAgentAbortReason } = require('./agent/agentInterruption.cjs');
 const { listAgentRuntimeDescriptors } = require('./agent/agentRuntimeRegistry.cjs');
 const {
+  createPersistentAgentTask,
   deletePersistentAgentTask,
   getPersistentAgentSessionPath,
   loadPersistentAgentTask,
   updatePersistentAgentTask,
 } = require('./pi/piPersistentTaskStore.cjs');
+const { loadPiModules } = require('./pi/piSessionFactory.cjs');
+const {
+  clearPrimaryAgentSession,
+  loadPrimaryAgentSession,
+  savePrimaryAgentSession,
+} = require('./pi/piPrimarySessionStore.cjs');
 
 const PI_RUNTIME_ID = 'pi';
 const PI_RUNTIME_NAME = 'Pi Agent';
@@ -49,7 +56,8 @@ function createStoppedStatus() {
     healthy: false,
     message: `${PI_RUNTIME_NAME} 未启动`,
     updated_at: nowIso(),
-    active_task: null,
+    active_tasks: [],
+    primary_session_id: '',
     queued_count: 0,
     queued_tasks: [],
     proxy: { active: 0, queued: 0, limit: 0 },
@@ -139,21 +147,38 @@ function normalizeSelfCheckResult(rawResult = {}) {
   };
 }
 
-// 协调唯一 Pi Agent 实例，并保持所有智能体任务共用同一条 FIFO 队列。
+// 协调共享 Pi 运行基础设施，并为每个 Agent 任务创建独立 Runtime/Session。
 function createAgentService({ app, configStore, aiService, licenseService, autoConfirmationService }) {
   const agentErrorReporter = createAgentErrorReporter({ app, configStore, licenseService });
   const listeners = new Set();
   const monitorListeners = new Set();
   const questionListeners = new Set();
-  const queue = [];
-  let runtime = null;
-  let runtimeUnsubscribe = null;
-  let activeEntry = null;
-  let queueDraining = false;
+  const primarySessionListeners = new Set();
+  const activeEntries = new Map();
+  let serviceRuntime = null;
+  let serviceRuntimeUnsubscribe = null;
   let closing = false;
   let monitorSequence = 0;
   let monitorFlushTimer = null;
-  let pendingQuestion = null;
+  const pendingQuestions = new Map();
+  let visibleQuestionId = '';
+  let latestPrimaryRequestSequence = 0;
+  let primarySession = loadPrimaryAgentSession(app);
+  if (primarySession) {
+    try {
+      const persistentTask = primarySession.task_key
+        ? loadPersistentAgentTask(app, primarySession.task_key)
+        : null;
+      const sessionFile = persistentTask?.state?.session_file;
+      if (!sessionFile || !fs.existsSync(getPersistentAgentSessionPath(app, primarySession.task_key, sessionFile))) {
+        primarySession = null;
+        clearPrimaryAgentSession(app);
+      }
+    } catch {
+      primarySession = null;
+      clearPrimaryAgentSession(app);
+    }
+  }
   const pendingAssistantDeltas = new Map();
   const pendingToolUpdates = new Map();
 
@@ -198,8 +223,13 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
   // 监视器未打开时不序列化、不缓存，只保留一次空监听判断。
   function emitMonitorEvent(event = {}) {
     if (!monitorListeners.size) return;
+    const normalizedEvent = {
+      ...event,
+      is_primary: isPrimarySession(event),
+    };
+    event = normalizedEvent;
     if (event.type === 'assistant_delta') {
-      const key = String(event.task_id || 'active');
+      const key = `${event.task_id || 'active'}:${event.session_id || 'session'}`;
       const previous = pendingAssistantDeltas.get(key);
       pendingAssistantDeltas.set(key, {
         ...event,
@@ -209,7 +239,7 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
       return;
     }
     if (event.type === 'tool_update') {
-      const key = `${event.task_id || 'active'}:${event.tool_call_id || event.tool_name || 'tool'}`;
+      const key = `${event.task_id || 'active'}:${event.session_id || 'session'}:${event.tool_call_id || event.tool_name || 'tool'}`;
       pendingToolUpdates.set(key, event);
       scheduleMonitorFlush();
       return;
@@ -225,8 +255,24 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     });
   }
 
+  function getVisibleQuestionEntry() {
+    if (visibleQuestionId && pendingQuestions.has(visibleQuestionId)) {
+      return pendingQuestions.get(visibleQuestionId);
+    }
+    const next = [...pendingQuestions.values()]
+      .sort((left, right) => String(left.question.asked_at).localeCompare(String(right.question.asked_at)))[0] || null;
+    visibleQuestionId = next?.question.question_id || '';
+    return next;
+  }
+
   function getPendingQuestion() {
-    return pendingQuestion?.question || null;
+    return getVisibleQuestionEntry()?.question || null;
+  }
+
+  function getPendingQuestions() {
+    return [...pendingQuestions.values()]
+      .map((entry) => entry.question)
+      .sort((left, right) => String(left.asked_at).localeCompare(String(right.asked_at)));
   }
 
   function emitQuestionState() {
@@ -237,25 +283,27 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
   }
 
   function clearPendingQuestion(entry) {
-    if (!entry || pendingQuestion !== entry) return;
+    if (!entry || !pendingQuestions.has(entry.question.question_id)) return;
     autoConfirmationService.unregister(entry.autoConfirmationId);
     entry.signal?.removeEventListener?.('abort', entry.onAbort);
-    pendingQuestion = null;
+    pendingQuestions.delete(entry.question.question_id);
+    if (visibleQuestionId === entry.question.question_id) visibleQuestionId = '';
     emitQuestionState();
+    emitStatus();
   }
 
-  function rejectPendingQuestion(error) {
-    const entry = pendingQuestion;
-    if (!entry) return;
-    clearPendingQuestion(entry);
-    entry.reject(error);
+  function rejectPendingQuestions(error) {
+    const entries = [...pendingQuestions.values()];
+    for (const entry of entries) {
+      clearPendingQuestion(entry);
+      entry.reject(error);
+    }
   }
 
   // 建立一次 Agent 到用户的提问，并在收到答案前保持工具调用等待。
   function requestUserQuestion(request = {}, signal) {
     if (closing) return Promise.reject(new Error('Agent 服务正在关闭'));
     if (signal?.aborted) return Promise.reject(createAbortError(signal));
-    if (pendingQuestion) return Promise.reject(new Error('已有 Agent 问题正在等待用户回答'));
 
     const questionId = crypto.randomUUID();
     const sourceOptions = Array.isArray(request.options) ? request.options : [];
@@ -269,10 +317,12 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     const question = {
       question_id: questionId,
       task_id: safeText(request.task_id),
+      session_id: safeText(request.session_id),
       task_title: safeText(request.task_title) || '易标智能体任务',
       question: safeText(request.question),
       options,
       asked_at: nowIso(),
+      is_primary: isPrimarySession(request),
     };
 
     return new Promise((resolve, reject) => {
@@ -285,41 +335,45 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
         autoConfirmationId: `agent-question:${questionId}`,
       };
       entry.onAbort = () => {
-        if (pendingQuestion !== entry) return;
+        if (!pendingQuestions.has(questionId)) return;
         clearPendingQuestion(entry);
         reject(createAbortError(signal));
       };
-      pendingQuestion = entry;
+      pendingQuestions.set(questionId, entry);
       signal?.addEventListener?.('abort', entry.onAbort, { once: true });
       const recommendedOption = question.options.find((option) => option.recommended && !option.custom);
-      autoConfirmationService.register({
-        id: entry.autoConfirmationId,
-        submit: () => answerQuestion({
-          question_id: question.question_id,
-          option_id: recommendedOption.id,
-        }),
-        onStateChange: ({ auto_answer_at: autoAnswerAt }) => {
-          if (pendingQuestion !== entry) return;
-          if (autoAnswerAt) entry.question.auto_answer_at = autoAnswerAt;
-          else delete entry.question.auto_answer_at;
-          emitQuestionState();
-        },
-      });
+      if (recommendedOption) {
+        autoConfirmationService.register({
+          id: entry.autoConfirmationId,
+          submit: () => answerQuestion({
+            question_id: question.question_id,
+            option_id: recommendedOption.id,
+          }),
+          onStateChange: ({ auto_answer_at: autoAnswerAt }) => {
+            if (!pendingQuestions.has(questionId)) return;
+            if (autoAnswerAt) entry.question.auto_answer_at = autoAnswerAt;
+            else delete entry.question.auto_answer_at;
+            emitQuestionState();
+          },
+        });
+      }
+      emitQuestionState();
+      emitStatus();
     });
   }
 
   // 用户切换选项后停止当前 Agent 问题的自动回答计时。
   function suppressQuestionAutoAnswer(payload = {}) {
-    const entry = pendingQuestion;
-    if (!entry || payload.question_id !== entry.question.question_id) return { success: true };
+    const entry = pendingQuestions.get(payload.question_id);
+    if (!entry) return { success: true };
     autoConfirmationService.suppress(entry.autoConfirmationId);
     return { success: true };
   }
 
   // 提交用户选择并恢复正在等待的 Agent 工具调用。
   function answerQuestion(payload = {}) {
-    const entry = pendingQuestion;
-    if (!entry || payload.question_id !== entry.question.question_id) {
+    const entry = pendingQuestions.get(payload.question_id);
+    if (!entry) {
       throw new Error('当前 Agent 问题已失效');
     }
     const option = entry.question.options.find((item) => item.id === payload.option_id);
@@ -336,9 +390,9 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     return { success: true };
   }
 
-  function ensureRuntime() {
-    if (runtime) return runtime;
-    runtime = createPiRuntimeService({
+  function ensureServiceRuntime() {
+    if (serviceRuntime) return serviceRuntime;
+    serviceRuntime = createPiRuntimeService({
       app,
       configStore,
       aiService,
@@ -346,39 +400,122 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
       onMonitorEvent: emitMonitorEvent,
       requestUserQuestion,
     });
-    runtimeUnsubscribe = runtime.onStatus?.(() => emitStatus()) || null;
-    return runtime;
+    serviceRuntimeUnsubscribe = serviceRuntime.onStatus?.(() => emitStatus()) || null;
+    return serviceRuntime;
   }
 
-  function getRuntimeStatus() {
-    return runtime ? normalizeRuntimeStatus(runtime.getStatus()) : createStoppedStatus();
+  function createTaskRuntime(entry) {
+    const taskRuntime = createPiRuntimeService({
+      app,
+      configStore,
+      aiService,
+      isMonitorActive: () => monitorListeners.size > 0,
+      onMonitorEvent: emitMonitorEvent,
+      requestUserQuestion,
+    });
+    entry.runtimeUnsubscribe = taskRuntime.onStatus?.(() => emitStatus()) || null;
+    return taskRuntime;
   }
 
-  function getQueuedTasks() {
-    return queue.map((entry, index) => ({
+  function getServiceRuntimeStatus() {
+    return serviceRuntime ? normalizeRuntimeStatus(serviceRuntime.getStatus()) : createStoppedStatus();
+  }
+
+  function getPrimarySession() {
+    return primarySession ? { ...primarySession } : null;
+  }
+
+  function isPrimarySession(value = {}) {
+    if (!primarySession) return false;
+    const taskId = safeText(value.task_id || value.taskId);
+    const sessionId = safeText(value.session_id || value.sessionId);
+    const taskKey = safeText(value.task_key || value.taskKey || value.persistent_task?.task_key);
+    if (sessionId && primarySession.session_id) return sessionId === primarySession.session_id;
+    if (taskId && primarySession.task_id) return taskId === primarySession.task_id;
+    return Boolean(taskKey && primarySession.task_key && taskKey === primarySession.task_key);
+  }
+
+  function emitPrimarySessionChanged() {
+    const value = getPrimarySession();
+    primarySessionListeners.forEach((listener) => {
+      try { listener(value); } catch {}
+    });
+    emitMonitorEvent({
+      type: 'primary_session_changed',
+      task_id: value?.task_id || '',
+      session_id: value?.session_id || '',
+      task_key: value?.task_key || '',
+      title: '主 Session 已变更',
+    });
+    emitStatus();
+  }
+
+  function setPrimarySession(value = {}) {
+    primarySession = savePrimaryAgentSession(app, value);
+    emitPrimarySessionChanged();
+    return getPrimarySession();
+  }
+
+  function clearPrimarySessionIfMatches(value = {}) {
+    if (!isPrimarySession(value)) return false;
+    primarySession = null;
+    clearPrimaryAgentSession(app);
+    emitPrimarySessionChanged();
+    return true;
+  }
+
+  function getEntryActiveTask(entry) {
+    const runtimeStatus = entry.runtime ? normalizeRuntimeStatus(entry.runtime.getStatus()) : null;
+    const source = runtimeStatus?.active_task;
+    const startedAt = entry.startedAt || entry.createdAt;
+    const activeTask = source || {
       task_id: entry.taskId,
+      session_id: entry.sessionId || '',
       title: entry.title,
-      queued_at: entry.queuedAt,
-      position: index + 1,
-    }));
+      stage: 'starting',
+      progress_text: '正在启动智能体任务',
+      started_at: startedAt,
+      last_activity_at: startedAt,
+      last_progress_at: startedAt,
+      elapsed_seconds: 0,
+      idle_seconds: 0,
+      waiting_for_user: false,
+      workspace_dir: entry.workspaceDir || '',
+    };
+    return {
+      ...activeTask,
+      session_id: activeTask.session_id || entry.sessionId || '',
+      workspace_dir: activeTask.workspace_dir || entry.workspaceDir || runtimeStatus?.runtime_details?.workspace_dir || '',
+      is_primary: isPrimarySession({
+        task_id: entry.taskId,
+        session_id: activeTask.session_id || entry.sessionId,
+        task_key: entry.taskKey,
+      }),
+    };
   }
 
   function getStatus() {
-    const sourceStatus = getRuntimeStatus();
+    const serviceStatus = getServiceRuntimeStatus();
+    const activeTasks = [...activeEntries.values()].map(getEntryActiveTask);
+    if (serviceStatus.active_task) {
+      activeTasks.push({
+        ...serviceStatus.active_task,
+        workspace_dir: serviceStatus.active_task.workspace_dir || serviceStatus.runtime_details?.workspace_dir || '',
+        is_primary: false,
+      });
+    }
+    const running = activeTasks.length > 0;
+    const { active_task: _serviceActiveTask, ...serviceSummary } = serviceStatus;
     return {
-      ...sourceStatus,
-      queued_count: queue.length,
-      queued_tasks: getQueuedTasks(),
-      active_task: sourceStatus.active_task || (activeEntry ? {
-        task_id: activeEntry.taskId,
-        title: activeEntry.title,
-        stage: 'starting',
-        progress_text: '正在启动智能体任务',
-        started_at: activeEntry.startedAt || activeEntry.queuedAt,
-        last_activity_at: activeEntry.startedAt || activeEntry.queuedAt,
-        elapsed_seconds: 0,
-        idle_seconds: 0,
-      } : null),
+      ...serviceSummary,
+      phase: running ? 'running' : serviceStatus.phase,
+      healthy: running ? true : serviceStatus.healthy,
+      message: running ? `${activeTasks.length} 个 Agent Session 正在运行` : serviceStatus.message,
+      active_tasks: activeTasks,
+      primary_session_id: primarySession?.session_id || '',
+      queued_count: 0,
+      queued_tasks: [],
+      proxy: aiService?.getTextQueueStatus?.() || serviceStatus.proxy || { active: 0, queued: 0, limit: 0 },
     };
   }
 
@@ -386,102 +523,84 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     return resolveAgentAbortReason(signal);
   }
 
-  function removeQueuedEntry(entry, error) {
-    const index = queue.indexOf(entry);
-    if (index < 0) return;
-    queue.splice(index, 1);
-    entry.cleanup?.();
-    entry.reject(error);
-    emitStatus();
-  }
-
-  function drainQueue() {
-    if (queueDraining || activeEntry || closing) return;
-    queueDraining = true;
-    void (async () => {
-      try {
-        while (!activeEntry && queue.length && !closing) {
-          const entry = queue.shift();
-          entry.cleanup?.();
-          if (entry.payload.signal?.aborted) {
-            entry.reject(createAbortError(entry.payload.signal));
-            continue;
-          }
-          activeEntry = entry;
-          entry.startedAt = nowIso();
-          emitStatus();
-          try {
-            const rawResult = await ensureRuntime().runTask(entry.payload);
-            entry.resolve(normalizeRunResult(rawResult));
-          } catch (error) {
-            const normalizedError = normalizeRunError(error);
-            const persistentTask = Boolean(entry.payload.persistent_task?.task_key);
-            const shouldReport = !entry.payload.signal?.aborted
-              && !['AGENT_DISCONNECTED', 'TASK_CANCELLED'].includes(normalizedError?.code);
-            const taskRuntime = runtime;
-            if (shouldReport) {
-              void agentErrorReporter.reportFailure({
-                payload: entry.payload,
-                error: normalizedError,
-                userTaskContext: resolveUserTaskContext(entry.userTaskContextProvider),
-              }).finally(() => {
-                if (!persistentTask) void taskRuntime?.deleteTaskArchive?.(entry.taskId);
-              });
-            } else if (!persistentTask) {
-              void taskRuntime?.deleteTaskArchive?.(entry.taskId);
-            }
-            entry.reject(normalizedError);
-          } finally {
-            activeEntry = null;
-            emitStatus();
-          }
-        }
-      } finally {
-        queueDraining = false;
-        if (queue.length && !activeEntry && !closing) setTimeout(drainQueue, 0);
-      }
-    })();
-  }
-
-  function enqueueTask(payload = {}, userTaskContextProvider) {
+  function startTask(payload = {}, userTaskContextProvider) {
     if (closing) return Promise.reject(new Error('Agent 服务正在关闭'));
     if (payload.signal?.aborted) return Promise.reject(createAbortError(payload.signal));
-    const taskId = payload.task_id || require('node:crypto').randomUUID();
+    const taskId = payload.task_id || crypto.randomUUID();
     const title = payload.title || '易标智能体任务';
-    return new Promise((resolve, reject) => {
-      const entry = {
-        taskId,
-        title,
-        queuedAt: nowIso(),
-        payload: { ...payload, task_id: taskId },
-        userTaskContextProvider,
-        resolve,
-        reject,
-        cleanup: null,
-      };
-      if (payload.signal?.addEventListener) {
-        const onAbort = () => removeQueuedEntry(entry, createAbortError(payload.signal));
-        payload.signal.addEventListener('abort', onAbort, { once: true });
-        entry.cleanup = () => payload.signal.removeEventListener('abort', onAbort);
-      }
-      queue.push(entry);
-      try {
-        payload.onActivity?.({
-          stage: 'queued',
-          message: queue.length > 1 ? `Agent 任务排队中，前方还有 ${queue.length - 1} 个任务。` : 'Agent 任务已进入执行队列。',
-          source: 'agent-coordinator.queue',
-          visible: true,
-          activity: false,
-          meta: { runtime_id: PI_RUNTIME_ID, position: queue.length },
-        });
-      } catch {}
-      emitStatus();
-      drainQueue();
-    });
+    const taskKey = safeText(payload.persistent_task?.task_key);
+    const entry = {
+      taskId,
+      taskKey,
+      title,
+      createdAt: nowIso(),
+      startedAt: nowIso(),
+      sessionId: '',
+      workspaceDir: '',
+      primaryRequested: payload.primary_session === true,
+      primaryRequestSequence: payload.primary_session === true ? ++latestPrimaryRequestSequence : 0,
+      payload: { ...payload, task_id: taskId },
+      userTaskContextProvider,
+      runtime: null,
+      runtimeUnsubscribe: null,
+      promise: null,
+    };
+    entry.runtime = createTaskRuntime(entry);
+    activeEntries.set(taskId, entry);
+    emitStatus();
+
+    const originalOnSessionStarted = payload.onSessionStarted;
+    const runtimePayload = {
+      ...entry.payload,
+      onSessionStarted(sessionInfo = {}) {
+        entry.sessionId = safeText(sessionInfo.session_id);
+        entry.workspaceDir = safeText(sessionInfo.workspace_dir);
+        try { originalOnSessionStarted?.(sessionInfo); } catch {}
+        if (entry.primaryRequested && entry.primaryRequestSequence === latestPrimaryRequestSequence) {
+          setPrimarySession({
+            task_id: taskId,
+            task_key: taskKey,
+            session_id: entry.sessionId,
+          });
+        } else {
+          emitStatus();
+        }
+      },
+    };
+
+    entry.promise = entry.runtime.runTask(runtimePayload)
+      .then((rawResult) => normalizeRunResult(rawResult))
+      .catch((error) => {
+        const normalizedError = normalizeRunError(error);
+        const persistentTask = Boolean(taskKey);
+        const shouldReport = !runtimePayload.signal?.aborted
+          && !['AGENT_DISCONNECTED', 'TASK_CANCELLED'].includes(normalizedError?.code);
+        if (shouldReport) {
+          void agentErrorReporter.reportFailure({
+            payload: runtimePayload,
+            error: normalizedError,
+            userTaskContext: resolveUserTaskContext(userTaskContextProvider),
+          }).finally(() => {
+            if (!persistentTask) void entry.runtime?.deleteTaskArchive?.(taskId);
+          });
+        } else if (!persistentTask) {
+          void entry.runtime?.deleteTaskArchive?.(taskId);
+        }
+        throw normalizedError;
+      })
+      .finally(async () => {
+        activeEntries.delete(taskId);
+        try { entry.runtimeUnsubscribe?.(); } catch {}
+        entry.runtimeUnsubscribe = null;
+        await entry.runtime?.close?.().catch(() => undefined);
+        emitStatus();
+      });
+
+    return entry.promise;
   }
 
   function runTask(payload = {}) {
-    return enqueueTask(payload, null);
+    return startTask(payload, null);
   }
 
   function loadPersistentTask(taskKey) {
@@ -490,10 +609,51 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
 
   function deletePersistentTask(taskKey) {
     deletePersistentAgentTask(app, taskKey);
+    clearPrimarySessionIfMatches({ task_key: taskKey });
   }
 
   function updatePersistentTask(taskKey, partial) {
     return updatePersistentAgentTask(app, taskKey, partial);
+  }
+
+  // 复制源任务工作区，并通过 Pi SDK 将其 Session 历史分叉到新的持久任务。
+  async function forkPersistentTask(sourceTaskKey, targetTaskKey, state = {}) {
+    const sourceTask = loadPersistentAgentTask(app, sourceTaskKey);
+    if (!sourceTask?.state?.session_file) {
+      throw new Error('源持久 Agent Session 不存在，无法创建分叉任务');
+    }
+    const sourceSessionFile = getPersistentAgentSessionPath(app, sourceTaskKey, sourceTask.state.session_file);
+    if (!fs.existsSync(sourceSessionFile)) {
+      throw new Error('源持久 Agent Session 文件不存在，无法创建分叉任务');
+    }
+
+    const targetTask = createPersistentAgentTask(app, targetTaskKey, {
+      ...state,
+      session_file: '',
+    });
+    try {
+      for (const entry of fs.readdirSync(sourceTask.paths.workspaceDir, { withFileTypes: true })) {
+        fs.cpSync(
+          path.join(sourceTask.paths.workspaceDir, entry.name),
+          path.join(targetTask.paths.workspaceDir, entry.name),
+          { recursive: true, force: true },
+        );
+      }
+      const { codingAgent } = await loadPiModules();
+      const sessionManager = codingAgent.SessionManager.forkFrom(
+        sourceSessionFile,
+        targetTask.paths.workspaceDir,
+        targetTask.paths.sessionsDir,
+      );
+      const sessionFile = sessionManager.getSessionFile();
+      if (!sessionFile) throw new Error('Pi SDK 未生成分叉 Session 文件');
+      return updatePersistentAgentTask(app, targetTaskKey, {
+        session_file: path.basename(sessionFile),
+      });
+    } catch (error) {
+      deletePersistentAgentTask(app, targetTaskKey);
+      throw error;
+    }
   }
 
   function hasPersistentTaskSession(taskKey) {
@@ -510,14 +670,16 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
   function bindTaskContext(userTaskContextProvider, options = {}) {
     const queueScopeId = safeText(options.queueScopeId || options.queue_scope_id);
     const signal = options.signal;
+    const primarySessionRequested = options.primary_session === true;
     return {
       runTask: (payload = {}) => {
         const taskSignal = signal && payload.signal
           ? AbortSignal.any([signal, payload.signal])
           : payload.signal || signal;
-        return enqueueTask({
+        return startTask({
           ...payload,
           ...(queueScopeId && !payload.queueScopeId && !payload.queue_scope_id ? { queue_scope_id: queueScopeId } : {}),
+          ...((payload.primary_session === true || primarySessionRequested) ? { primary_session: true } : {}),
           ...(taskSignal ? { signal: taskSignal } : {}),
         }, userTaskContextProvider);
       },
@@ -526,62 +688,29 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
       loadPersistentTask,
       updatePersistentTask,
       deletePersistentTask,
+      forkPersistentTask,
+      getPrimarySession,
+      isPrimarySession,
     };
   }
 
   async function warmup() {
-    const piRuntime = ensureRuntime();
+    const piRuntime = ensureServiceRuntime();
     await piRuntime.warmup();
     return getStatus();
   }
 
   async function selfCheck() {
-    if (activeEntry || queue.length) {
-      return {
-        success: false,
-        runtime_id: PI_RUNTIME_ID,
-        runtime_name: PI_RUNTIME_NAME,
-        status: 'busy',
-        message: 'Agent 正在处理其他任务，请耐心等待',
-        checked_at: nowIso(),
-        duration_ms: 0,
-        log_dir: '',
-        log_file: '',
-        runtime_root: '',
-        workspace_dir: '',
-        output_file: '',
-        output_path: '',
-        steps: [],
-        sections: [],
-        detail_text: 'Agent 全局队列正在执行任务，本次自检已跳过。',
-        runtime_status: getStatus(),
-      };
-    }
-    const entry = {
-      taskId: `${PI_RUNTIME_ID}-self-check`,
-      title: `${PI_RUNTIME_NAME} 自检`,
-      queuedAt: nowIso(),
-      startedAt: nowIso(),
-      payload: {},
-    };
-    activeEntry = entry;
-    emitStatus();
-    try {
-      return normalizeSelfCheckResult(await ensureRuntime().runSelfCheck());
-    } finally {
-      activeEntry = null;
-      emitStatus();
-      drainQueue();
-    }
+    return normalizeSelfCheckResult(await ensureServiceRuntime().runSelfCheck());
   }
 
   async function restart(reason) {
-    await ensureRuntime().restart(reason || 'manual');
+    await ensureServiceRuntime().restart(reason || 'manual');
     return getStatus();
   }
 
   function handleConfigChanged(nextConfig = {}, previousConfig = {}) {
-    runtime?.handleConfigChanged?.(nextConfig, previousConfig);
+    serviceRuntime?.handleConfigChanged?.(nextConfig, previousConfig);
   }
 
   function onStatus(listener) {
@@ -606,12 +735,18 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     return () => questionListeners.delete(listener);
   }
 
+  function onPrimarySessionChanged(listener) {
+    if (typeof listener !== 'function') return () => {};
+    primarySessionListeners.add(listener);
+    return () => primarySessionListeners.delete(listener);
+  }
+
   function getMonitorSnapshot() {
-    const runtimeStatus = getRuntimeStatus();
+    const status = getStatus();
     return {
       attached_at: nowIso(),
-      active_task: runtimeStatus.active_task || null,
-      workspace_dir: runtimeStatus.active_task ? safeText(runtimeStatus.runtime_details?.workspace_dir) : '',
+      active_tasks: status.active_tasks || [],
+      primary_session_id: status.primary_session_id || '',
     };
   }
 
@@ -631,21 +766,22 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
 
   async function close() {
     closing = true;
-    rejectPendingQuestion(createAgentDisconnectedError());
+    rejectPendingQuestions(createAgentDisconnectedError());
     questionListeners.clear();
+    primarySessionListeners.clear();
     monitorListeners.clear();
     clearPendingMonitorEvents();
     agentErrorReporter.close();
-    const error = createAgentDisconnectedError();
-    while (queue.length) {
-      const entry = queue.shift();
-      entry.cleanup?.();
-      entry.reject(error);
-    }
-    if (runtime) await runtime.close?.().catch(() => undefined);
-    try { runtimeUnsubscribe?.(); } catch {}
-    runtimeUnsubscribe = null;
-    runtime = null;
+
+    const entries = [...activeEntries.values()];
+    await Promise.all(entries.map((entry) => entry.runtime?.close?.().catch(() => undefined)));
+    await Promise.allSettled(entries.map((entry) => entry.promise));
+    activeEntries.clear();
+
+    if (serviceRuntime) await serviceRuntime.close?.().catch(() => undefined);
+    try { serviceRuntimeUnsubscribe?.(); } catch {}
+    serviceRuntimeUnsubscribe = null;
+    serviceRuntime = null;
     emitStatus();
   }
 
@@ -656,6 +792,7 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
   return {
     bindTaskContext,
     deletePersistentTask,
+    forkPersistentTask,
     loadPersistentTask,
     updatePersistentTask,
     warmup,
@@ -669,9 +806,13 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     onMonitorEvent,
     getMonitorSnapshot,
     getPendingQuestion,
+    getPendingQuestions,
     answerQuestion,
     suppressQuestionAutoAnswer,
     onQuestion,
+    getPrimarySession,
+    isPrimarySession,
+    onPrimarySessionChanged,
     exportSelfCheckReport,
     listRuntimes,
     close,

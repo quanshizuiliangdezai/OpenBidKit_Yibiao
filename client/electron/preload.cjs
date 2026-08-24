@@ -187,6 +187,7 @@ const bridge = {
     saveContentGenerationOptions: (options) => ipcRenderer.invoke('technical-plan:save-content-generation-options', options),
     saveChapterContent: (payload) => ipcRenderer.invoke('technical-plan:save-chapter-content', payload),
     clear: () => ipcRenderer.invoke('technical-plan:clear'),
+    openBidTemplate: () => ipcRenderer.invoke('technical-plan:open-bid-template'),
   },
   feasibilityReport: {
     loadState: () => ipcRenderer.invoke('feasibility-report:load-state'),

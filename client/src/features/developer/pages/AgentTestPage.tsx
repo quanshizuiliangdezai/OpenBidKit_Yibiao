@@ -214,11 +214,11 @@ function AgentTestPage() {
               <span>等待重启：<strong>{String(Boolean(runtimeStatus?.restart_pending))}</strong></span>
             </div>
             <p style={{ margin: '10px 0 0', color: '#475569' }}>{runtimeStatus?.message || '尚未收到状态'}</p>
-            {runtimeStatus?.active_task && (
+            {runtimeStatus?.active_tasks?.length ? (
               <p style={{ margin: '8px 0 0', color: '#475569' }}>
-                当前任务：{runtimeStatus.active_task.title}，{runtimeStatus.active_task.progress_text}，已运行 {runtimeStatus.active_task.elapsed_seconds}s
+                活动 Session：{runtimeStatus.active_tasks.map((task) => `${task.title}${task.is_primary ? '（主 Session）' : ''}`).join('、')}
               </p>
-            )}
+            ) : null}
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
               <button type="button" onClick={() => { void runSelfCheck(); }} disabled={busy} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff' }}>
                 {runningAction === 'self-check' ? '自检中...' : '运行自检'}

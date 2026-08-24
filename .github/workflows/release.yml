@@ -102,8 +102,19 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
 
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
       - name: Install dependencies
         run: npm ci
+
+      - name: Verify Agent tools
+        run: node scripts/verify-agent-tools.cjs --platform win32 --arch x64
+
+      - name: Publish Open XML helper
+        run: node scripts/prepare-openxml-helper.cjs --platform win32 --arch x64
 
       - name: Install build type dependencies
         run: npm install --no-save @types/plist
@@ -195,6 +206,11 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
 
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
       - name: Verify runner architecture
         run: |
           actual_arch="$(node -p process.arch)"
@@ -215,6 +231,12 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Verify Agent tools
+        run: node scripts/verify-agent-tools.cjs --platform darwin --arch ${{ matrix.arch }}
+
+      - name: Publish Open XML helper
+        run: node scripts/prepare-openxml-helper.cjs --platform darwin --arch ${{ matrix.arch }}
 
       - name: Install build type dependencies
         run: npm install --no-save @types/plist

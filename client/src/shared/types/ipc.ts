@@ -201,6 +201,7 @@ export interface AgentRuntimeDescriptor {
 
 export interface AgentRuntimeActiveTask {
   task_id: string;
+  session_id: string;
   title: string;
   stage: string;
   progress_text: string;
@@ -210,6 +211,8 @@ export interface AgentRuntimeActiveTask {
   elapsed_seconds: number;
   idle_seconds: number;
   waiting_for_user?: boolean;
+  workspace_dir?: string;
+  is_primary?: boolean;
 }
 
 export interface AgentQuestionOption {
@@ -223,11 +226,13 @@ export interface AgentQuestionOption {
 export interface AgentQuestion {
   question_id: string;
   task_id: string;
+  session_id?: string;
   task_title: string;
   question: string;
   options: AgentQuestionOption[];
   asked_at: string;
   auto_answer_at?: string;
+  is_primary?: boolean;
 }
 
 export interface AutoConfirmationState {
@@ -291,7 +296,8 @@ export interface AgentRuntimeStatus {
   last_health_error?: string;
   restart_pending?: boolean;
   restart_pending_reason?: string;
-  active_task?: AgentRuntimeActiveTask | null;
+  active_tasks?: AgentRuntimeActiveTask[];
+  primary_session_id?: string;
   queued_count?: number;
   queued_tasks?: Array<{
     task_id: string;
@@ -351,11 +357,13 @@ export interface AgentRunResult {
   retry_count?: number;
   retry_attempts?: AgentRetryAttempt[];
   validation_result?: unknown;
-  active_task?: AgentRuntimeActiveTask | null;
+  active_tasks?: AgentRuntimeActiveTask[];
   diagnostics?: Record<string, unknown>;
 }
 
 export type AgentMonitorEventType =
+  | 'session_start'
+  | 'primary_session_changed'
   | 'task_start'
   | 'task_input'
   | 'task_output'
@@ -382,6 +390,9 @@ export interface AgentMonitorEvent {
   at: string;
   type: AgentMonitorEventType;
   task_id: string;
+  session_id?: string;
+  task_key?: string;
+  is_primary?: boolean;
   title?: string;
   workspace_dir?: string;
   stage_index?: number;
@@ -410,8 +421,8 @@ export interface AgentMonitorEvent {
 
 export interface AgentMonitorSnapshot {
   attached_at: string;
-  active_task?: AgentRuntimeActiveTask | null;
-  workspace_dir?: string;
+  active_tasks: AgentRuntimeActiveTask[];
+  primary_session_id?: string;
 }
 
 export interface AgentSelfCheckStep {
@@ -867,6 +878,7 @@ export interface YibiaoBridge {
     saveContentGenerationOptions: (options: ContentGenerationOptions) => Promise<Partial<TechnicalPlanState>>;
     saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<Partial<TechnicalPlanState>>;
     clear: () => Promise<{ success: boolean; message?: string }>;
+    openBidTemplate: () => Promise<{ success: boolean; message?: string }>;
   };
   feasibilityReport: {
     loadState: () => Promise<FeasibilityReportState>;

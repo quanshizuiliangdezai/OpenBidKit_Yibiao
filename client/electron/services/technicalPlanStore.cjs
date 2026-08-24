@@ -3,21 +3,32 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { getBidAnalysisTasks } = require('./bidAnalysisTask.cjs');
 const {
+  getTechnicalPlanBidTemplatePath,
+  getTechnicalPlanBidTemplateSourcePath,
+  getTechnicalPlanBidTemplateFieldsPath,
   getTechnicalPlanGeneratedIllustrationsDir,
   getTechnicalPlanIllustrationsDir,
   getTechnicalPlanOriginalPlanMarkdownPath,
   getTechnicalPlanTenderMarkdownPath,
+  getTechnicalPlanTenderOriginalsDir,
   getGeneratedImagesDir,
 } = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 const { clearMermaidCache } = require('../utils/mermaidCache.cjs');
 const { detectBidSections } = require('../utils/bidSectionDetector.cjs');
-const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
+const {
+  OUTLINE_AGENT_TASK_KEY,
+  TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
+} = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 
 const tenderMarkdownRelativePath = path.join('technical-plan', 'tender.md').replace(/\\/g, '/');
 const tenderOriginalMarkdownRelativePath = path.join('technical-plan', 'tender-original.md').replace(/\\/g, '/');
 const tenderSourceFilesDirRelativePath = path.join('technical-plan', 'tender-files').replace(/\\/g, '/');
+const tenderOriginalsDirRelativePath = path.join('technical-plan', 'tender-originals').replace(/\\/g, '/');
+const bidTemplateRelativePath = path.join('technical-plan', 'bid-template.docx').replace(/\\/g, '/');
+const bidTemplateSourceRelativePath = path.join('technical-plan', 'bid-template-source.docx').replace(/\\/g, '/');
+const bidTemplateFieldsRelativePath = path.join('technical-plan', 'bid-template-fields.json').replace(/\\/g, '/');
 const originalPlanMarkdownRelativePath = path.join('technical-plan', 'original-plan.md').replace(/\\/g, '/');
 const originalOutlineRuntimeFileName = 'original-outline-runtime.json';
 const defaultOutlineWordControlOptions = Object.freeze({
@@ -61,6 +72,7 @@ const initialState = {
   contentGenerationPlans: {},
   contentIllustrationPlan: undefined,
   contentGenerationRuntime: undefined,
+  bidTemplateExists: false,
   outlineData: null,
 };
 
@@ -442,6 +454,7 @@ function remapContentTaskStats(stats, idMap) {
 function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogStore }) {
   function deleteOutlineAgentTask() {
     agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY);
+    agentService.deletePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY);
   }
   function deleteGlobalFactsAgentTask() {
     agentService.deletePersistentTask(GLOBAL_FACTS_AGENT_TASK_KEY);
@@ -471,6 +484,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   const tenderMarkdownPath = getTechnicalPlanTenderMarkdownPath(app);
   const tenderOriginalMarkdownPath = path.join(path.dirname(tenderMarkdownPath), 'tender-original.md');
   const tenderSourceFilesDir = path.join(path.dirname(tenderMarkdownPath), 'tender-files');
+  const tenderOriginalsDir = getTechnicalPlanTenderOriginalsDir(app);
+  const bidTemplatePath = getTechnicalPlanBidTemplatePath(app);
+  const bidTemplateSourcePath = getTechnicalPlanBidTemplateSourcePath(app);
+  const bidTemplateFieldsPath = getTechnicalPlanBidTemplateFieldsPath(app);
   const originalPlanMarkdownPath = getTechnicalPlanOriginalPlanMarkdownPath(app);
   const originalOutlineRuntimePath = path.join(path.dirname(originalPlanMarkdownPath), originalOutlineRuntimeFileName);
   const illustrationsDir = getTechnicalPlanIllustrationsDir(app);
@@ -699,6 +716,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         markdownChars: Number(file.markdownChars || 0),
         contentHash: String(file.contentHash || ''),
         parserLabel: file.parserLabel ? String(file.parserLabel) : undefined,
+        sourceDocxPath: file.sourceDocxPath ? String(file.sourceDocxPath) : undefined,
         importedAt: file.importedAt ? String(file.importedAt) : undefined,
         updatedAt: file.updatedAt ? String(file.updatedAt) : meta.updated_at,
       })).filter((file) => file.id && file.markdownPath);
@@ -774,6 +792,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const relativePath = path.join(tenderSourceFilesDirRelativePath, `${id}-${safeFileNamePart(fileName)}.md`).replace(/\\/g, '/');
     const targetPath = resolveMarkdownPath(relativePath);
     writeMarkdownFile(targetPath, markdown, id);
+    const sourceDocxPath = persistExistingTenderOriginal(source, id);
     return {
       id,
       fileName,
@@ -781,14 +800,74 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       markdownChars: markdown.length,
       contentHash: stableHash(markdown),
       parserLabel: source?.parser_label || undefined,
+      sourceDocxPath: sourceDocxPath || undefined,
       importedAt: now(),
       updatedAt: now(),
     };
   }
 
+  /** 把已有或刚落下的招标 Word 原件归到当前源文件编号下。 */
+  function persistExistingTenderOriginal(source, id) {
+    const destRelative = path.join(tenderOriginalsDirRelativePath, `${id}.docx`).replace(/\\/g, '/');
+    const destPath = resolveMarkdownPath(destRelative);
+    const incoming = String(source?.source_docx_path || source?.sourceDocxPath || '').trim();
+    if (!incoming) return '';
+    const sourcePath = path.isAbsolute(incoming) ? incoming : resolveMarkdownPath(incoming);
+    if (!fs.existsSync(sourcePath)) return '';
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    if (path.resolve(sourcePath) !== path.resolve(destPath)) {
+      fs.copyFileSync(sourcePath, destPath);
+    }
+    return destRelative;
+  }
+
+  function pruneTenderOriginals(keptRelativePaths) {
+    const keep = new Set((Array.isArray(keptRelativePaths) ? keptRelativePaths : []).map((item) => path.resolve(resolveMarkdownPath(item))));
+    if (!fs.existsSync(tenderOriginalsDir)) return;
+    for (const name of fs.readdirSync(tenderOriginalsDir)) {
+      const filePath = path.join(tenderOriginalsDir, name);
+      if (!keep.has(path.resolve(filePath))) {
+        fs.rmSync(filePath, { force: true });
+      }
+    }
+  }
+
+  function clearBidTemplate() {
+    const templateFiles = [bidTemplatePath, bidTemplateSourcePath, bidTemplateFieldsPath];
+    const templateDir = path.dirname(bidTemplatePath);
+    if (fs.existsSync(templateDir)) {
+      const tempPrefixes = [
+        `${path.basename(bidTemplatePath)}.`,
+        `${path.basename(bidTemplateFieldsPath)}.`,
+      ];
+      for (const name of fs.readdirSync(templateDir)) {
+        if (tempPrefixes.some((prefix) => name.startsWith(prefix) && name.includes('.tmp'))) {
+          templateFiles.push(path.join(templateDir, name));
+        }
+      }
+    }
+    for (const filePath of templateFiles) {
+      if (!fs.existsSync(filePath)) continue;
+      try {
+        fs.rmSync(filePath, { force: true });
+      } catch (error) {
+        if (['EPERM', 'EBUSY', 'EACCES'].includes(error?.code)) {
+          const lockError = new Error('投标模版正在被 Word 使用，请关闭后重试');
+          lockError.code = 'BID_TEMPLATE_IN_USE';
+          throw lockError;
+        }
+        throw error;
+      }
+    }
+  }
+
   function clearTenderSourceFiles() {
+    clearBidTemplate();
     if (fs.existsSync(tenderSourceFilesDir)) {
       fs.rmSync(tenderSourceFilesDir, { recursive: true, force: true });
+    }
+    if (fs.existsSync(tenderOriginalsDir)) {
+      fs.rmSync(tenderOriginalsDir, { recursive: true, force: true });
     }
   }
 
@@ -1536,6 +1615,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   }
 
   function clearDownstreamFromBidSectionChange() {
+    clearBidTemplate();
     deleteOutlineAgentTask();
     deleteGlobalFactsAgentTask();
     db.prepare('DELETE FROM technical_plan_tasks').run();
@@ -1916,6 +1996,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       contentGenerationOptions: safeJsonParse(meta.content_generation_options_json, undefined),
       contentGenerationRuntime: safeJsonParse(meta.content_generation_runtime_json, undefined),
       contentIllustrationPlan: loadContentIllustrationPlan(),
+      bidTemplateExists: fs.existsSync(bidTemplatePath) && fs.existsSync(bidTemplateFieldsPath),
       contentGenerationSections: loadContentSections(outlineData),
       contentGenerationPlans: loadContentPlans(),
       outlineData,
@@ -2034,10 +2115,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     }
 
     const transaction = db.transaction(() => {
+      clearDownstreamFromBidSectionChange();
       if (nextSectionMode === 'single' || nextSectionMode === 'multiple') {
         resetTenderWorkingCopyToOriginal();
       }
-      clearDownstreamFromBidSectionChange();
       updateMeta({
         bid_analysis_mode: config.mode,
         bid_analysis_selected_task_ids_json: jsonOrNull(config.selectedTaskIds),
@@ -2054,8 +2135,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
   function prepareBidSectionExtraction() {
     const transaction = db.transaction(() => {
-      resetTenderWorkingCopyToOriginal();
       clearDownstreamFromBidSectionChange();
+      resetTenderWorkingCopyToOriginal();
       updateMeta({
         bid_section_mode: 'multiple',
         bid_sections_json: null,
@@ -2211,6 +2292,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         file_name: file.fileName,
         parser_label: file.parserLabel,
         content_hash: file.contentHash || stableHash(markdown),
+        source_docx_path: file.sourceDocxPath,
       } : null;
     }).filter(Boolean);
     const existingKeys = new Set(existingSourceDocuments.map((item) => `${item.file_name}\u0000${item.content_hash}`));
@@ -2240,7 +2322,24 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       };
     }
 
+    await runBeforeCommit(options.beforeCommit);
+    clearBidTemplate();
+    cleanupPendingTenderSelection();
+
     const mergedDocuments = [...existingSourceDocuments, ...addedDocuments];
+    for (let index = 0; index < mergedDocuments.length; index += 1) {
+      const item = mergedDocuments[index];
+      const sourcePath = String(item.source_path || '').trim();
+      if (!sourcePath || item.source_docx_path || !fileService?.persistTenderSourceDocx) continue;
+      const sourceId = createTenderSourceId(item.file_name || '未命名文件', String(item.file_content || '').trim(), index);
+      const relativePath = path.join(tenderOriginalsDirRelativePath, `${sourceId}.docx`).replace(/\\/g, '/');
+      try {
+        const persisted = await fileService.persistTenderSourceDocx(sourcePath, resolveMarkdownPath(relativePath));
+        if (persisted) item.source_docx_path = relativePath;
+      } catch (error) {
+        throw new Error(`${item.file_name || '招标文件'}：无法保存 Word 原件，${error.message || error}`);
+      }
+    }
     const markdown = combineTenderMarkdown(mergedDocuments.map((item) => item.file_content));
     const fileName = mergedDocuments.length > 1 ? `${mergedDocuments.length} 份招标文件` : mergedDocuments[0].file_name || '未命名文件';
     const parserLabel = mergedDocuments.length > 1 ? null : mergedDocuments[0].parser_label || null;
@@ -2251,8 +2350,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (skippedCount > 0) messageParts.push(`跳过 ${skippedCount} 份重复文件`);
     appendImportFailureParts(messageParts, result.errors);
 
-    await runBeforeCommit(options.beforeCommit);
-    cleanupPendingTenderSelection();
     return saveTenderMarkdownAndState(markdown, {
       fileName,
       parserLabel,
@@ -2272,6 +2369,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     }
 
     await runBeforeCommit(options.beforeCommit);
+    clearBidTemplate();
     if (!remainingFiles.length) {
       clearTenderSourceFiles();
       if (fs.existsSync(tenderMarkdownPath)) fs.rmSync(tenderMarkdownPath, { force: true });
@@ -2301,6 +2399,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       file_content: String(readTenderSourceMarkdown(file.id) || '').trim(),
       file_name: file.fileName,
       parser_label: file.parserLabel,
+      source_docx_path: file.sourceDocxPath,
     })).filter((item) => item.file_content);
     const markdown = combineTenderMarkdown(sourceFiles.map((item) => item.file_content));
     const fileName = sourceFiles.length > 1 ? `${sourceFiles.length} 份招标文件` : sourceFiles[0]?.file_name || '未命名文件';
@@ -2370,11 +2469,17 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   function saveTenderMarkdownAndState(markdown, { fileName, parserLabel, message, selectedSection, fallbackToLocal, resetOriginal, sourceFiles }) {
     const nextMarkdown = String(markdown || '').trim();
     if (Array.isArray(sourceFiles)) {
-      clearTenderSourceFiles();
+      clearBidTemplate();
+      if (fs.existsSync(tenderSourceFilesDir)) {
+        fs.rmSync(tenderSourceFilesDir, { recursive: true, force: true });
+      }
     }
     const tenderSourceFiles = Array.isArray(sourceFiles)
       ? sourceFiles.map(writeTenderSourceMarkdown)
       : undefined;
+    if (tenderSourceFiles) {
+      pruneTenderOriginals(tenderSourceFiles.map((file) => file.sourceDocxPath).filter(Boolean));
+    }
     writeMarkdownFile(tenderMarkdownPath, nextMarkdown, 'tender');
     if (resetOriginal) {
       writeMarkdownFile(tenderOriginalMarkdownPath, nextMarkdown, 'tender-original');
@@ -2418,6 +2523,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         throw new Error('原始招标文件内容为空，请重新上传');
       }
       const workingMarkdown = buildSelectedSectionMarkdown(originalMarkdown, aiSections, matched.id);
+      clearBidTemplate();
       writeMarkdownFile(tenderMarkdownPath, workingMarkdown, 'tender');
       const transaction = db.transaction(() => {
         clearDownstreamFromBidSectionChange();
@@ -2442,6 +2548,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   }
 
   function clearTechnicalPlan() {
+    clearBidTemplate();
     deleteOutlineAgentTask();
     deleteGlobalFactsAgentTask();
     cleanupPendingTenderSelection();
@@ -2515,6 +2622,57 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     saveIllustrationPng,
     saveContentGenerationOptions,
     saveChapterContent,
+    clearBidTemplate,
+    listTenderSourceDocxRelativePaths() {
+      return loadTenderSourceFiles()
+        .map((file) => String(file.sourceDocxPath || '').trim())
+        .filter((item) => item && fs.existsSync(resolveMarkdownPath(item)));
+    },
+    getBidTemplateRelativePath() {
+      return bidTemplateRelativePath;
+    },
+    getBidTemplateSourceRelativePath() {
+      return bidTemplateSourceRelativePath;
+    },
+    getBidTemplateFieldsRelativePath() {
+      return bidTemplateFieldsRelativePath;
+    },
+    hasBidTemplate() {
+      return fs.existsSync(bidTemplatePath) && fs.existsSync(bidTemplateFieldsPath);
+    },
+    getBidTemplatePath() {
+      return bidTemplatePath;
+    },
+    getBidTemplateSourcePath() {
+      return bidTemplateSourcePath;
+    },
+    getBidTemplateFieldsPath() {
+      return bidTemplateFieldsPath;
+    },
+    copyTenderOriginalsToDirectory(destDir) {
+      const targetDir = String(destDir || '').trim();
+      if (!targetDir) return [];
+      fs.mkdirSync(targetDir, { recursive: true });
+      return loadTenderSourceFiles()
+        .map((file) => String(file.sourceDocxPath || '').trim())
+        .filter((item) => item && fs.existsSync(resolveMarkdownPath(item)))
+        .map((relativePath) => {
+          const fileName = path.basename(relativePath);
+          fs.copyFileSync(resolveMarkdownPath(relativePath), path.join(targetDir, fileName));
+          return fileName;
+        });
+    },
+    resolveTenderSourceDocxPath(sourceHint) {
+      const hint = String(sourceHint || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+      const sources = loadTenderSourceFiles()
+        .map((file) => String(file.sourceDocxPath || '').trim())
+        .filter((item) => item && fs.existsSync(resolveMarkdownPath(item)));
+      if (!hint || hint === '招标原件') return sources;
+      const fileName = path.posix.basename(hint);
+      if (!fileName || fileName === '招标原件') return sources;
+      const matched = sources.find((item) => path.posix.basename(item) === fileName || item === hint);
+      return matched ? [matched] : [];
+    },
   };
 }
 

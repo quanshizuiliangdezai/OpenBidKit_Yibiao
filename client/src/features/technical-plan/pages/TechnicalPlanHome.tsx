@@ -112,6 +112,7 @@ const resetState = {
   contentGenerationPlans: {},
   contentIllustrationPlan: undefined,
   contentGenerationRuntime: undefined,
+  bidTemplateExists: false,
   outlineData: null,
 };
 
@@ -767,6 +768,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
             contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : (outlineDataChanged ? {} : prev.contentGenerationPlans),
             contentIllustrationPlan: hasOwnField(technicalPlan, 'contentIllustrationPlan') ? technicalPlan.contentIllustrationPlan : (outlineDataChanged ? undefined : prev.contentIllustrationPlan),
             contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : (outlineDataChanged ? undefined : prev.contentGenerationRuntime),
+            bidTemplateExists: hasOwnField(technicalPlan, 'bidTemplateExists') ? Boolean(technicalPlan.bidTemplateExists) : prev.bidTemplateExists,
           };
         }
 
@@ -1113,6 +1115,13 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     await window.yibiao?.technicalPlan.saveOutlineSelection(request);
   };
 
+  const openBidTemplate = async () => {
+    const result = await window.yibiao?.technicalPlan.openBidTemplate();
+    if (!result?.success) {
+      showToast(result?.message || '无法打开投标模版', 'error');
+    }
+  };
+
   const saveOutlineConfig = async (config: {
     referenceKnowledgeDocumentIds: string[];
     outlineMode: TechnicalPlanState['outlineMode'];
@@ -1338,6 +1347,8 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           onOutlineConfigChange={saveOutlineConfig}
           onOutlineSaved={saveOutline}
           onOutlineSelectionSaved={saveOutlineSelection}
+          bidTemplateExists={Boolean(state.bidTemplateExists)}
+          onOpenBidTemplate={openBidTemplate}
           onSortGuardChange={(guard) => {
             sortGuardRef.current = guard;
           }}

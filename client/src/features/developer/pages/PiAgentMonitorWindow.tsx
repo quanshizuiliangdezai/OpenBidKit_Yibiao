@@ -41,6 +41,8 @@ interface MonitorTaskOutput {
 
 interface MonitorTask {
   id: string;
+  sessionId: string;
+  isPrimary: boolean;
   title: string;
   status: MonitorTaskStatus;
   startedAt: string;
@@ -67,6 +69,8 @@ const lifecycleLabels: Partial<Record<AgentMonitorEvent['type'], string>> = {
 function createTask(id: string, title = 'Pi Agent 任务', startedAt = new Date().toISOString()): MonitorTask {
   return {
     id,
+    sessionId: '',
+    isPrimary: false,
     title,
     status: 'running',
     startedAt,
@@ -145,12 +149,29 @@ function describeTaskInput(input: MonitorTaskInput, round: number) {
 
 // 将 Pi 实时事件归并为适合阅读的任务时间线。
 function applyMonitorEvent(tasks: MonitorTask[], event: AgentMonitorEvent) {
+  if (event.type === 'primary_session_changed') {
+    return tasks.map((task) => ({
+      ...task,
+      isPrimary: Boolean(event.session_id && task.sessionId === event.session_id),
+    }));
+  }
   const nextTasks = [...tasks];
   const { index, existed, task } = ensureTask(nextTasks, event);
   if (event.title) task.title = event.title;
+  if (event.session_id) task.sessionId = event.session_id;
+  if (event.is_primary !== undefined) task.isPrimary = event.is_primary;
   if (event.workspace_dir) task.workspaceDir = event.workspace_dir;
 
-  if (event.type === 'task_start') {
+  if (event.type === 'session_start') {
+    task.entries.push({
+      id: `session-${event.sequence}`,
+      kind: 'system',
+      at: event.at,
+      text: `Pi Agent Session 已建立${event.session_id ? `：${event.session_id}` : ''}`,
+      tone: 'normal',
+      complete: true,
+    });
+  } else if (event.type === 'task_start') {
     if (!existed) {
       task.startedAt = event.at;
       task.entries = [];
@@ -328,12 +349,26 @@ function applyMonitorEvent(tasks: MonitorTask[], event: AgentMonitorEvent) {
 }
 
 function applySnapshot(tasks: MonitorTask[], snapshot: AgentMonitorSnapshot) {
-  const activeTask = snapshot.active_task;
-  if (!activeTask || tasks.some((task) => task.id === activeTask.task_id)) return tasks;
-  const task = createTask(activeTask.task_id, activeTask.title, activeTask.started_at || snapshot.attached_at);
-  task.workspaceDir = snapshot.workspace_dir || '';
-  task.entries.push(createMidstreamEntry(task.id, snapshot.attached_at));
-  return [...tasks, task];
+  const nextTasks = [...tasks];
+  for (const activeTask of snapshot.active_tasks || []) {
+    const index = nextTasks.findIndex((task) => task.id === activeTask.task_id);
+    if (index >= 0) {
+      nextTasks[index] = {
+        ...nextTasks[index],
+        sessionId: activeTask.session_id || nextTasks[index].sessionId,
+        isPrimary: Boolean(activeTask.is_primary),
+        workspaceDir: activeTask.workspace_dir || nextTasks[index].workspaceDir,
+      };
+      continue;
+    }
+    const task = createTask(activeTask.task_id, activeTask.title, activeTask.started_at || snapshot.attached_at);
+    task.sessionId = activeTask.session_id || '';
+    task.isPrimary = Boolean(activeTask.is_primary);
+    task.workspaceDir = activeTask.workspace_dir || '';
+    task.entries.push(createMidstreamEntry(task.id, snapshot.attached_at));
+    nextTasks.push(task);
+  }
+  return nextTasks;
 }
 
 function formatClock(value?: string) {
@@ -432,7 +467,7 @@ function PiAgentMonitorWindow() {
     const unsubscribe = bridge.onEvent((event) => {
       setTasks((previous) => applyMonitorEvent(previous, event));
       if (event.type === 'task_start') {
-        setSelectedTaskId(event.task_id);
+        setSelectedTaskId((current) => current || event.task_id);
         setActiveTab('timeline');
       } else {
         setSelectedTaskId((current) => current || event.task_id);
@@ -443,7 +478,8 @@ function PiAgentMonitorWindow() {
         if (!mounted) return;
         setAttached(true);
         setTasks((previous) => applySnapshot(previous, snapshot));
-        if (snapshot.active_task) setSelectedTaskId((current) => current || snapshot.active_task?.task_id || '');
+        const initialTask = snapshot.active_tasks.find((task) => task.is_primary) || snapshot.active_tasks[0];
+        if (initialTask) setSelectedTaskId((current) => current || initialTask.task_id);
       })
       .catch((caught) => {
         if (mounted) setError(caught instanceof Error ? caught.message : '连接 Pi Agent 监视流失败');
@@ -626,8 +662,8 @@ function PiAgentMonitorWindow() {
                 >
                   <span className={`agent-monitor-task-dot is-${task.status}`} />
                   <span className="agent-monitor-task-copy">
-                    <strong>{task.title}</strong>
-                    <small>{formatClock(task.startedAt)} · {formatElapsed(task.startedAt, task.endedAt, now)}</small>
+                    <strong>{task.title}{task.isPrimary ? <span className="agent-monitor-primary-label">主 Session</span> : null}</strong>
+                    <small>{formatClock(task.startedAt)} · {formatElapsed(task.startedAt, task.endedAt, now)}{task.sessionId ? ` · ${task.sessionId.slice(0, 8)}` : ''}</small>
                   </span>
                   <em>{statusLabel(task.status)}</em>
                 </button>
@@ -639,8 +675,8 @@ function PiAgentMonitorWindow() {
           <section className="agent-monitor-workbench">
             <header className="agent-monitor-task-header">
               <div>
-                <span>{selectedTask ? selectedTask.id : 'NO ACTIVE TASK'}</span>
-                <h1>{selectedTask?.title || '等待 Pi Agent 任务'}</h1>
+                <span>{selectedTask ? (selectedTask.sessionId || selectedTask.id) : 'NO ACTIVE SESSION'}</span>
+                <h1>{selectedTask?.title || '等待 Pi Agent Session'}{selectedTask?.isPrimary ? <small className="agent-monitor-primary-heading">主 Session</small> : null}</h1>
               </div>
               {selectedTask && (
                 <div className="agent-monitor-task-stats">

@@ -1109,6 +1109,22 @@ body.agent-monitor-root #root {
   white-space: nowrap;
 }
 
+.agent-monitor-primary-label,
+.agent-monitor-primary-heading {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 7px;
+  padding: 1px 6px;
+  color: var(--yb-primary);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1.5;
+  vertical-align: middle;
+  background: rgba(33, 116, 253, 0.09);
+  border: 1px solid rgba(33, 116, 253, 0.16);
+  border-radius: var(--yb-radius-pill);
+}
+
 .agent-monitor-task-list button em {
   color: var(--yb-text-muted);
   font-size: 10px;

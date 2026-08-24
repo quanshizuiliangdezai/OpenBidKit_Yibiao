@@ -105,15 +105,18 @@ function createPluginContext(app, pluginId, services) {
       return services.taskService.subscribeCallback(listener);
     },
     getPendingAgentQuestion() {
-      return services.agentService?.getPendingQuestion?.() || null;
+      return services.agentService?.getPendingQuestions?.()
+        .find((question) => services.agentService.isPrimarySession?.(question)) || null;
     },
     onAgentQuestion(callback) {
       if (!services.agentService?.onQuestion) {
         return () => {};
       }
 
-      const listener = (question) => {
+      const listener = () => {
         try {
+          const question = services.agentService.getPendingQuestions?.()
+            .find((item) => services.agentService.isPrimarySession?.(item)) || null;
           callback(question);
         } catch (error) {
           logger.error('Agent question callback error:', error);
@@ -135,19 +138,19 @@ function createPluginContext(app, pluginId, services) {
       return services.agentService.suppressQuestionAutoAnswer(payload);
     },
     listAgentWorkspaces() {
-      if (!services.agentWorkspaceService?.listAgentWorkspaces) {
+      if (!services.agentWorkspaceService?.listPrimaryAgentWorkspaces) {
         return [];
       }
-      return services.agentWorkspaceService.listAgentWorkspaces();
+      return services.agentWorkspaceService.listPrimaryAgentWorkspaces();
     },
     sendAgentWorkspaceMessage(payload) {
-      if (!services.agentWorkspaceService?.sendAgentWorkspaceMessage) {
+      if (!services.agentWorkspaceService?.sendPrimaryAgentWorkspaceMessage) {
         throw new Error('Agent 工作空间服务不可用');
       }
-      return services.agentWorkspaceService.sendAgentWorkspaceMessage(payload);
+      return services.agentWorkspaceService.sendPrimaryAgentWorkspaceMessage(payload);
     },
     onAgentWorkspaceChatEvent(callback) {
-      if (!services.agentWorkspaceService?.onAgentWorkspaceChatEvent) {
+      if (!services.agentWorkspaceService?.onPrimaryAgentWorkspaceChatEvent) {
         return () => {};
       }
 
@@ -159,10 +162,10 @@ function createPluginContext(app, pluginId, services) {
         }
       };
 
-      return services.agentWorkspaceService.onAgentWorkspaceChatEvent(listener);
+      return services.agentWorkspaceService.onPrimaryAgentWorkspaceChatEvent(listener);
     },
     onAgentWorkspacesChanged(callback) {
-      if (!services.agentWorkspaceService?.onAgentWorkspacesChanged) {
+      if (!services.agentWorkspaceService?.onPrimaryAgentWorkspacesChanged) {
         return () => {};
       }
 
@@ -174,7 +177,7 @@ function createPluginContext(app, pluginId, services) {
         }
       };
 
-      return services.agentWorkspaceService.onAgentWorkspacesChanged(listener);
+      return services.agentWorkspaceService.onPrimaryAgentWorkspacesChanged(listener);
     },
     confirmOutlineSelection(payload) {
       if (!services.taskService?.confirmOutlineSelection) {

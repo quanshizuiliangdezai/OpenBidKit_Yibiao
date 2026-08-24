@@ -29,6 +29,27 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** 把招标 Word 原件落到工作区；.doc/.wps 先转成 .docx。 */
+async function persistTenderSourceDocx(sourcePath, destPath) {
+  const input = String(sourcePath || '').trim();
+  const output = String(destPath || '').trim();
+  if (!input || !output) return false;
+  const ext = path.extname(input).toLowerCase();
+  await fs.mkdir(path.dirname(output), { recursive: true });
+  if (ext === '.docx') {
+    await fs.copyFile(input, output);
+    return true;
+  }
+  if (ext === '.doc' || ext === '.wps') {
+    const { withLegacyWordDocxFile } = await import('./doc2markdown/convert.mjs');
+    await withLegacyWordDocxFile(input, async (docxPath) => {
+      await fs.copyFile(docxPath, output);
+    });
+    return true;
+  }
+  return false;
+}
+
 function getSupportedExtensions(provider) {
   if (provider === 'mineru-agent-api') {
     return mineruAgentSupportedExtensions;
@@ -617,6 +638,7 @@ const config = configStore ? configStore.load() : { components: { file_parser: {
       parsedDocuments.push({
         file_content: fileContent,
         file_name: path.basename(filePath),
+        source_path: filePath,
         parser_provider: parser.provider,
         parser_label: parserLabels[parser.provider] || '本地解析',
         fallback_to_local: Boolean(parser.fallbackToLocal),
@@ -649,6 +671,8 @@ const config = configStore ? configStore.load() : { components: { file_parser: {
     async importDocument(options = {}) {
       return importTechnicalPlanDocument('招标文件', options);
     },
+
+    persistTenderSourceDocx,
 
     importTechnicalPlanDocument,
 

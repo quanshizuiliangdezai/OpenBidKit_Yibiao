@@ -54,6 +54,7 @@ const { createKbQaRetrievalService } = require('../services/kbQaRetrieval.cjs');
 const { createKbQaSessionService } = require('../services/kbQaSessionService.cjs');
 const { checkRequiredOnlineServices, getRequiredOnlineServiceStatus } = require('../services/requiredOnlineServices.cjs');
 const { initLocalImageRenderService } = require('../services/localImageRenderService.cjs');
+const { createOpenXmlHelperService } = require('../services/openXmlHelperService.cjs');
 
 let pendingUiCurrentView = null;
 let agentWorkspaceServiceRef = null;
@@ -139,6 +140,7 @@ const workspaceDatabaseChannels = [
   'technical-plan:save-content-generation-options',
   'technical-plan:save-chapter-content',
   'technical-plan:clear',
+  'technical-plan:open-bid-template',
   'feasibility-report:load-state',
   'feasibility-report:import-source-documents',
   'feasibility-report:remove-source-document',
@@ -259,7 +261,7 @@ function registerWorkspaceDatabaseStatusIpc({ mainWindow }) {
   };
 }
 
-function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, kbAuthService, kbTeamService, kbPersonalService, updateStatus, mainWindow }) {
+function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, openXmlHelperService, kbAuthService, kbTeamService, kbPersonalService, updateStatus, mainWindow }) {
   const sqliteDatabase = createSqliteDatabase(app, { onStatus: updateStatus });
   runHistoricalStorageCleanup({ app, db: sqliteDatabase.db, configStore, onStatus: updateStatus });
   clearStalePiTaskArchives(app);
@@ -273,7 +275,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore, taskLogStore });
   const templateStore = createTemplateStore({ db: sqliteDatabase.db });
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
-  const taskService = createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService });
+  const taskService = createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService });
   const syncService = createSyncService({ app, db: sqliteDatabase.db, configStore });
   const kbQaRetrievalService = createKbQaRetrievalService({ db: sqliteDatabase.db, aiService, kbAuthService });
   // 问答会话持久化（服务器存储，按账号隔离）：让聊天记录在页面切换、甚至换电脑后依然可见
@@ -341,6 +343,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const autoConfirmationService = createAutoConfirmationService({ configStore });
   const agentService = createAgentService({ app, configStore, aiService, licenseService, autoConfirmationService });
   const fileService = createFileService({ app, configStore });
+  const openXmlHelperService = createOpenXmlHelperService({ app, configStore });
   const exportService = createExportService({ configStore });
   const systemFontService = createSystemFontService();
   const databaseStatus = registerWorkspaceDatabaseStatusIpc({ mainWindow });
@@ -350,6 +353,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const closeServices = async () => {
     await agentService.close?.();
     autoConfirmationService.close?.();
+    await openXmlHelperService.close?.();
   };
 
   const closeServicesBeforeExit = async () => {
@@ -490,7 +494,8 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
       try {
         registerWorkspaceDatabaseServices({
           app, configStore, aiService, agentService, autoConfirmationService,
-          fileService, kbAuthService, kbTeamService, kbPersonalService,
+          fileService, openXmlHelperService,
+          kbAuthService, kbTeamService, kbPersonalService,
           updateStatus: databaseStatus.updateStatus, mainWindow,
         });
         setTimeout(() => {

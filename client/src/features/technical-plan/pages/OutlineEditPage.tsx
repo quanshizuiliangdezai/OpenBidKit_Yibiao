@@ -26,6 +26,8 @@ interface OutlineEditPageProps {
   onOutlineConfigChange: (config: { referenceKnowledgeDocumentIds: string[]; outlineMode: OutlineMode; outlineExpansionMode: OutlineExpansionMode; wordControlOptions: OutlineWordControlOptions }) => Promise<void>;
   onOutlineSaved: (request: SaveOutlineRequest) => Promise<void>;
   onOutlineSelectionSaved: (request: SaveOutlineSelectionRequest) => Promise<void>;
+  onOpenBidTemplate?: () => Promise<void>;
+  bidTemplateExists?: boolean;
   onSortGuardChange?: (guard: OutlineSortGuard | null) => void;
 }
 
@@ -332,6 +334,8 @@ function OutlineEditPage({
   onOutlineConfigChange,
   onOutlineSaved,
   onOutlineSelectionSaved,
+  onOpenBidTemplate,
+  bidTemplateExists = false,
   onSortGuardChange,
 }: OutlineEditPageProps) {
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
@@ -1196,6 +1200,11 @@ function OutlineEditPage({
           {awaitingOutlineSelection && (
             <button type="button" className="secondary-action" onClick={() => setSelectionDialogOpen(true)}>
               确认一级目录
+            </button>
+          )}
+          {bidTemplateExists && (
+            <button type="button" className="secondary-action" onClick={() => void onOpenBidTemplate?.()}>
+              打开投标模版
             </button>
           )}
           <button

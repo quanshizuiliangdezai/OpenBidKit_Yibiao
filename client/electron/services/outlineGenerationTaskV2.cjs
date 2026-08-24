@@ -1,4 +1,8 @@
-const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
+const {
+  OUTLINE_AGENT_TASK_KEY,
+  TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
+} = require('./outlineGenerationAgentV2Config.cjs');
+const { runTemplateExtractionTask } = require('./templateExtractionTask.cjs');
 
 const DEFAULT_ESTIMATED_SECTION_WORDS = 3000;
 const OUTLINE_OUTPUT_FILE = 'outline.json';
@@ -618,8 +622,8 @@ function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRoot
 12. 程序已为 ${OUTLINE_OUTPUT_FILE} 和 ${OUTLINE_REVIEW_FILE} 预置 Schema。分别调用 json-validation 校验，只传 file_path；校验失败后必须先修改对应文件，再重新校验。`;
 }
 
-// 运行 V2 目录业务任务；完整 Agent 执行之间通过程序确认衔接并复用同一持久 Session。
-async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowledgeBaseService, updateTask, checkpointTask, taskControl, payload }) {
+// 运行 V2 目录业务任务；开发者模式下一级目录确认后并行调度目录任务和独立模版提取任务。
+async function runOutlineGenerationTaskV2({ aiService, agentService, ordinaryAgentService, workspaceStore, knowledgeBaseService, openXmlHelperService, updateTask, checkpointTask, taskControl, payload }) {
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};
   const restoringOutlineSelection = payload?.agent_resume?.phase === 'outline-selection';
   const hasOriginalPlan = Boolean(storedPlan.originalPlanFile);
@@ -660,6 +664,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
   let currentProgress = restoringOutlineSelection ? Number(storedPlan.outlineGenerationTask?.progress || 30) : 10;
   const initialCheckpoint = checkpointTask({ status: 'running', progress: currentProgress, logs });
   let task = initialCheckpoint.task;
+  const templateTaskId = `${task.task_id}-template`;
   let lockedRoots = [];
   let technicalBranches = [];
   let scoreDirectoryPlan = null;
@@ -718,6 +723,30 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
       agent_connection: checkpoint.agent_connection,
       session_file: checkpoint.session_file,
     });
+  }
+
+  function publishTemplateAgentActivity(event = {}) {
+    const title = formatProgressTitle(event.message);
+    if (!title || event.visible === false) return;
+    publish(`投标模版：${title}`, Math.max(currentProgress, 35));
+  }
+
+  function syncTemplateAgentCheckpoint(checkpoint) {
+    const next = checkpointTask({
+      stats: {
+        ...(task.stats || {}),
+        template_agent: {
+          ...(task.stats?.template_agent || {}),
+          task_key: TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
+          run_id: templateTaskId,
+          status: checkpoint.status,
+          phase: checkpoint.phase,
+          agent_connection: checkpoint.agent_connection,
+          session_file: checkpoint.session_file,
+        },
+      },
+    });
+    task = next.task;
   }
 
   function applyConfirmedSelection(confirmed) {
@@ -827,15 +856,61 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
 
   const confirmed = await taskControl.waitForOutlineSelection();
   applyConfirmedSelection(confirmed);
-  publish('一级目录已确认，正在识别技术方案目录', 40);
+  const extractTemplate = Boolean(aiService?.isDeveloperMode?.());
+  publish(
+    extractTemplate ? '一级目录已确认，目录生成与投标模版提取并行开始' : '一级目录已确认，开始生成完整目录',
+    35,
+  );
+
+  try {
+  updateAgentState({ status: 'running', phase: 'score-planning', agent_connection: 'idle' });
   agentService.updatePersistentTask(OUTLINE_AGENT_TASK_KEY, {
     status: 'running',
     phase: 'score-planning',
     agent_connection: 'idle',
   });
-  updateAgentState({ status: 'running', phase: 'score-planning', agent_connection: 'idle' });
 
-  const agentResult = await agentService.runTask({
+  if (extractTemplate && workspaceStore.listTenderSourceDocxRelativePaths().length) {
+    await ordinaryAgentService.forkPersistentTask(
+      OUTLINE_AGENT_TASK_KEY,
+      TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
+      {
+        run_id: templateTaskId,
+        title: '投标模版提取',
+        status: 'created',
+        phase: 'template-extraction',
+        agent_connection: 'idle',
+      },
+    );
+  }
+
+  const parallelController = new AbortController();
+  const parallelSignal = AbortSignal.any([taskControl.signal, parallelController.signal]);
+  let firstParallelFailure = null;
+  const observeParallelBranch = (label, promise) => promise.catch((error) => {
+    if (!firstParallelFailure && !taskControl.signal.aborted) {
+      firstParallelFailure = { label, error };
+      const reason = new Error(`${label}失败，已取消同级任务`);
+      reason.code = 'TASK_CANCELLED';
+      parallelController.abort(reason);
+    }
+    throw error;
+  });
+
+  const templatePromise = extractTemplate
+    ? runTemplateExtractionTask({
+        agentService: ordinaryAgentService,
+        workspaceStore,
+        openXmlHelperService,
+        taskId: templateTaskId,
+        outline: lockedRoots,
+        signal: parallelSignal,
+        onActivity: publishTemplateAgentActivity,
+        onCheckpoint: syncTemplateAgentCheckpoint,
+      })
+    : null;
+
+  const directoryPromise = agentService.runTask({
     task_id: task.task_id,
     title: '技术方案目录生成 V2',
     prompt: createScorePlanningPrompt(),
@@ -845,13 +920,13 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
       { path: '技术评分信息.md', content: storedPlan.techRequirements || '' },
       ...knowledgeFiles,
     ],
-    signal: taskControl.signal,
+    signal: parallelSignal,
     persistent_task: {
       task_key: OUTLINE_AGENT_TASK_KEY,
       mode: 'resume',
     },
     initial_stage: 'score-planning',
-    initial_stage_index: 1,
+    initial_stage_index: 2,
     json_validation_schemas: jsonValidationSchemas,
     max_retries: 0,
     onActivity: publishAgentActivity,
@@ -893,7 +968,7 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
         return { complete: true };
       }
 
-      if (meta.stage === 1) {
+      if (meta.workflow_stage === 'score-planning') {
         scoreDirectoryPlan = readJson(await meta.readFile(SCORE_DIRECTORY_PLAN_FILE), SCORE_DIRECTORY_PLAN_FILE);
         lockedRoots = attachBranchIdsToRoots(lockedRoots, scoreDirectoryPlan);
         technicalBranches = scoreDirectoryPlan.branches.map((branch) => ({
@@ -971,6 +1046,57 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
     },
   });
 
+  let directoryReturned = false;
+  let templateReturned = !extractTemplate;
+  const observedDirectoryPromise = observeParallelBranch('目录生成', directoryPromise).finally(() => {
+    directoryReturned = true;
+    if (extractTemplate && !templateReturned) publish('目录生成任务已返回，正在等待投标模版提取任务', 95);
+  });
+
+  let agentResult;
+  let templateResult = null;
+  if (extractTemplate) {
+    const observedTemplatePromise = observeParallelBranch('投标模版提取', templatePromise).finally(() => {
+      templateReturned = true;
+      if (!directoryReturned) publish('投标模版提取任务已返回，正在等待目录生成任务', Math.max(currentProgress, 60));
+    });
+    const [directorySettled, templateSettled] = await Promise.allSettled([
+      observedDirectoryPromise,
+      observedTemplatePromise,
+    ]);
+    if (directorySettled.status === 'rejected' || templateSettled.status === 'rejected') {
+      try { workspaceStore.clearBidTemplate(); } catch {}
+      if (firstParallelFailure) {
+        const failure = new Error(`${firstParallelFailure.label}失败：${firstParallelFailure.error?.message || String(firstParallelFailure.error)}`);
+        if (firstParallelFailure.error?.code) failure.code = firstParallelFailure.error.code;
+        throw failure;
+      }
+      const directoryError = directorySettled.status === 'rejected' ? directorySettled.reason : null;
+      const templateError = templateSettled.status === 'rejected' ? templateSettled.reason : null;
+      const messages = [
+        directoryError ? `目录生成失败：${directoryError?.message || String(directoryError)}` : '',
+        templateError ? `投标模版提取失败：${templateError?.message || String(templateError)}` : '',
+      ].filter(Boolean);
+      throw new Error(messages.join('；') || '目录生成未完成');
+    }
+
+    agentResult = directorySettled.value;
+    templateResult = templateSettled.value;
+    if (templateResult.status !== 'skipped' && !workspaceStore.hasBidTemplate()) {
+      try { workspaceStore.clearBidTemplate(); } catch {}
+      throw new Error('投标模版提取任务已返回，但模版和字段清单不完整');
+    }
+    publish(
+      templateResult.status === 'skipped'
+        ? '目录生成完成，当前无招标 Word 原件，已跳过投标模版提取'
+        : `目录生成与投标模版提取均已完成，共标记 ${templateResult.field_count || 0} 个字段`,
+      98,
+    );
+  } else {
+    agentResult = await observedDirectoryPromise;
+    publish('目录生成完成', 98);
+  }
+
   if (!finalOutline) {
     const candidateOutline = readJson(agentResult.output_content, OUTLINE_OUTPUT_FILE);
     finalOutline = buildFinalOutline(candidateOutline);
@@ -978,7 +1104,16 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
     actualLeafCount = countAiLeaves(finalOutline.outline);
   }
   const persistedFinalOutline = stripOutlineInternalFields(finalOutline);
-  const finalLogs = [...logs, '目录生成与审核完成', ...(leafWarning ? [leafWarning] : [])];
+  const completionLog = !extractTemplate
+    ? '目录生成与审核完成'
+    : templateResult.status === 'skipped'
+      ? '目录生成与审核完成，当前无招标 Word 原件'
+      : `目录生成、审核与投标模版提取完成，共标记 ${templateResult.field_count || 0} 个字段`;
+  const finalLogs = [
+    ...logs,
+    completionLog,
+    ...(leafWarning ? [leafWarning] : []),
+  ];
   const finalTaskPatch = {
     status: 'success',
     progress: 100,
@@ -994,9 +1129,22 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
         word_adjustment_attempts: wordAdjustmentAttempts,
         ...(leafWarning ? { word_adjustment_warning: leafWarning, word_adjustment_warning_kind: 'leaf-count' } : {}),
       },
+      ...(extractTemplate ? {
+        template_agent: {
+          ...(task.stats?.template_agent || {}),
+          task_key: TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
+          run_id: templateTaskId,
+          status: templateResult.status,
+          phase: templateResult.status === 'skipped' ? 'skipped' : 'completed',
+          agent_connection: 'idle',
+          field_count: templateResult.field_count || 0,
+          ...(templateResult.session_id ? { session_id: templateResult.session_id } : {}),
+        },
+      } : { template_agent: undefined }),
     },
   };
   const finalCheckpoint = checkpointTask(finalTaskPatch, {
+    bidTemplateExists: workspaceStore.hasBidTemplate(),
     outlineData: { ...persistedFinalOutline, project_overview: storedPlan.projectOverview || '' },
     outlineWordControlSnapshot: wordControlOptions,
     contentGenerationTask: undefined,
@@ -1013,6 +1161,28 @@ async function runOutlineGenerationTaskV2({ agentService, workspaceStore, knowle
     error: null,
     completed_at: new Date().toISOString(),
   });
+  } catch (error) {
+    const message = error?.message || String(error);
+    const status = taskControl.signal.aborted || error?.code === 'AGENT_DISCONNECTED'
+      ? 'interrupted'
+      : 'error';
+    try {
+      updateAgentState({
+        status,
+        agent_connection: 'idle',
+        error: message,
+      });
+    } catch {}
+    try {
+      agentService.updatePersistentTask(OUTLINE_AGENT_TASK_KEY, {
+        status,
+        agent_connection: 'idle',
+        error: message,
+      });
+    } catch {}
+    try { workspaceStore.clearBidTemplate(); } catch {}
+    throw error;
+  }
 }
 
 module.exports = {

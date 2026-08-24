@@ -5,6 +5,10 @@ const {
   createPiUserQuestionTool,
 } = require('./piUserQuestionTool.cjs');
 const {
+  OPENXML_TOOL_NAME,
+  createPiOpenXmlTool,
+} = require('./piOpenXmlTool.cjs');
+const {
   createPiRetryErrorNormalizer,
 } = require('./piRetryErrorNormalizer.cjs');
 
@@ -33,7 +37,7 @@ function normalizeOutputLimit(contextLength) {
 }
 
 // 创建隔离的 Pi Session；持久任务可在后续完整执行中重新打开原 Session。
-async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion }) {
+async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, openXmlTool }) {
   const { codingAgent, piAi, typebox } = await loadPiModules();
   const credentials = new piAi.InMemoryCredentialStore();
   const modelsStore = new piAi.InMemoryModelsStore();
@@ -115,6 +119,13 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     Type: typebox.Type,
     requestUserQuestion,
   }));
+  const openXmlCustomTool = openXmlTool
+    ? codingAgent.defineTool(createPiOpenXmlTool({
+      workspaceDir,
+      Type: typebox.Type,
+      ...openXmlTool,
+    }))
+    : null;
   const sessionManager = sessionFile
     ? codingAgent.SessionManager.open(sessionFile, sessionsDir, workspaceDir)
     : sessionsDir
@@ -126,8 +137,8 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     model,
     modelRuntime,
     thinkingLevel: 'off',
-    tools: ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user'],
-    customTools: [bashTool, jsonValidationTool, userQuestionTool],
+    tools: ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user', ...(openXmlCustomTool ? [OPENXML_TOOL_NAME] : [])],
+    customTools: [bashTool, jsonValidationTool, userQuestionTool, ...(openXmlCustomTool ? [openXmlCustomTool] : [])],
     resourceLoader,
     settingsManager,
     sessionManager,

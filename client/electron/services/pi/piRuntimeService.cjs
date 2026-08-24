@@ -262,6 +262,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       onMonitorEvent?.({
         ...event,
         task_id: event.task_id || activeTask?.task_id || '',
+        session_id: event.session_id || activeTask?.session_id || '',
         title: event.title || activeTask?.title || '',
         at: event.at || nowIso(),
       });
@@ -274,6 +275,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     const lastActivity = new Date(activeTask.last_activity_at).getTime();
     return {
       task_id: activeTask.task_id,
+      session_id: activeTask.session_id || '',
       title: activeTask.title,
       stage: activeTask.stage,
       progress_text: activeTask.progress_text,
@@ -283,6 +285,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       elapsed_seconds: Math.max(0, Math.floor((Date.now() - started) / 1000)),
       idle_seconds: Math.max(0, Math.floor((Date.now() - lastActivity) / 1000)),
       waiting_for_user: Boolean(activeTask.waiting_for_user),
+      workspace_dir: activeTask.workspace_dir || '',
     };
   }
 
@@ -609,6 +612,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       const result = await requestUserQuestion({
         ...request,
         task_id: activeTask.task_id,
+        session_id: activeTask.session_id || '',
         task_title: activeTask.title,
       }, signal);
       if (activeTask?.task_token === taskToken) {
@@ -714,12 +718,14 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         throw new Error('持久 Agent Session 不存在，请重新执行当前业务任务');
       }
     }
-    const workspaceDir = persistentTask?.paths.workspaceDir || layout.workspaceDir;
+    const transientTaskDir = path.join(layout.tasksRoot, safeTaskSegment(taskId));
+    const workspaceDir = persistentTask?.paths.workspaceDir || path.join(transientTaskDir, 'workspace');
     const persistentSessionFile = persistentConfig?.mode === 'resume'
       ? getPersistentAgentSessionPath(app, persistentConfig.task_key, persistentTask.state.session_file)
       : '';
     activeTask = {
       task_id: taskId,
+      session_id: '',
       title,
       stage: payload.initial_stage || persistentTask?.state.phase || 'starting',
       progress_text: `正在启动 ${runtimeName}`,
@@ -757,6 +763,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     let sessionSnapshot = null;
     let unsubscribe = null;
     let archivedWorkspace = '';
+    let retainTransientWorkspace = false;
     const diffEntries = [];
     const cleanupAbort = bindAbort(payload.signal, activeController, () => session);
     const watchdog = startWatchdog(activeController, timeoutMs, taskToken);
@@ -775,9 +782,26 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         timeoutMs: DEFAULT_PI_HTTP_IDLE_TIMEOUT_MS,
         jsonValidationSchemas: payload.json_validation_schemas,
         requestUserQuestion: (request, signal) => waitForUserQuestion(request, signal, taskToken),
+        openXmlTool: payload.open_xml_tool,
       });
       session = created.session;
       sessionSnapshot = created.snapshot;
+      activeTask.session_id = session.sessionId || '';
+      try {
+        payload.onSessionStarted?.({
+          task_id: taskId,
+          task_key: persistentConfig?.task_key || '',
+          session_id: activeTask.session_id,
+          workspace_dir: workspaceDir,
+        });
+      } catch {}
+      emitMonitorEvent({
+        type: 'session_start',
+        task_id: taskId,
+        session_id: activeTask.session_id,
+        title,
+        workspace_dir: workspaceDir,
+      });
       if (persistentTask) {
         persistentTask = checkpointPersistentTask({
           status: 'running',
@@ -1053,7 +1077,8 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           session_file: session?.sessionFile ? path.basename(session.sessionFile) : current?.state?.session_file || '',
         });
       } else {
-        try { archivedWorkspace = (await archiveWorkspace(taskId)).archivedWorkspace; } catch {}
+        archivedWorkspace = workspaceDir;
+        retainTransientWorkspace = true;
       }
       if (error && typeof error === 'object') {
         error.agentRuntimeId = runtimeId;
@@ -1098,8 +1123,8 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       clearInterval(watchdog);
       activeTask = null;
       activeController = null;
-      if (!persistentTask) {
-        try { await clearDirectoryAsync(workspaceDir); } catch {}
+      if (!persistentTask && !retainTransientWorkspace) {
+        try { await deleteTaskArchive(taskId); } catch {}
       }
       if (phase !== 'closing' && phase !== 'stopped') {
         if (restartPending) {

@@ -1,4 +1,4 @@
-const { ipcMain } = require('electron');
+const { ipcMain, shell } = require('electron');
 
 function registerTechnicalPlanIpc({ technicalPlanStore, taskService }) {
   ipcMain.handle('technical-plan:load-state', () => technicalPlanStore.loadTechnicalPlan());
@@ -22,6 +22,17 @@ function registerTechnicalPlanIpc({ technicalPlanStore, taskService }) {
   ipcMain.handle('technical-plan:save-content-generation-options', (_event, options) => technicalPlanStore.saveContentGenerationOptions(options));
   ipcMain.handle('technical-plan:save-chapter-content', (_event, payload) => technicalPlanStore.saveChapterContent(payload));
   ipcMain.handle('technical-plan:clear', () => taskService.resetTechnicalPlan());
+  ipcMain.handle('technical-plan:open-bid-template', async () => {
+    const filePath = technicalPlanStore.getBidTemplatePath?.();
+    if (!filePath || !technicalPlanStore.hasBidTemplate?.()) {
+      return { success: false, message: '还没有投标模版，请先确认一级目录' };
+    }
+    const errorMessage = await shell.openPath(filePath);
+    if (errorMessage) {
+      return { success: false, message: errorMessage };
+    }
+    return { success: true };
+  });
 }
 
 module.exports = {
