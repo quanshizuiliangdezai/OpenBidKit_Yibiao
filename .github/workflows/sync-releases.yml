@@ -16,36 +16,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish-atomgit-release:
-    name: Publish AtomGit Release
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Read GitHub Release metadata
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ inputs.tag_name }}
-        run: gh release view "$TAG_NAME" --json tagName,name,body,isPrerelease,isDraft,url > atomgit-release.json
-
-      - name: Create or update AtomGit Release
-        env:
-          ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
-          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
-          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
-          TAG_NAME: ${{ inputs.tag_name }}
-          GITHUB_RELEASE_JSON: atomgit-release.json
-        run: node .github/scripts/sync-atomgit-release.mjs
-
   publish-gitee-release:
     name: Publish R2 and Gitee Release
     runs-on: ubuntu-latest
