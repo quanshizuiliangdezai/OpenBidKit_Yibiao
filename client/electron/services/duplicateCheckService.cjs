@@ -1711,14 +1711,16 @@ function splitContentBlockSentences(block) {
 
   const parts = [];
   let start = 0;
+  let currentLength = 0;
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
-    const currentLength = text.slice(start, index + 1).replace(/\s+/g, '').length;
+    if (!/\s/.test(char)) currentLength += 1;
     const strongBoundary = /[。！？!?]/.test(char);
     const clauseBoundary = /[；;]/.test(char) && currentLength >= 20;
     if (strongBoundary || clauseBoundary) {
       parts.push(text.slice(start, index + 1));
       start = index + 1;
+      currentLength = 0;
     }
   }
   if (start < text.length) parts.push(text.slice(start));
@@ -1891,8 +1893,8 @@ function isSafeTenderFieldTail(value) {
   return tail.length <= 36 && /(天津港保税区消防救援支队|消防装备管理系统项目|天津众信招标咨询有限公司)/.test(tail);
 }
 
-function charBigrams(value) {
-  const text = buildTenderLooseText(value);
+function charBigramsFromLooseText(value) {
+  const text = String(value || '');
   if (!text) return new Set();
   if (text.length === 1) return new Set([text]);
   const grams = new Set();
@@ -1904,9 +1906,8 @@ function diceSimilarityFromShared(shared, leftSize, rightSize) {
   return (2 * shared) / Math.max(leftSize + rightSize, 1);
 }
 
-function shouldApplyNearTenderMatch(value) {
-  const text = buildTenderLooseText(value);
-  if (text.length >= 12) return true;
+function shouldApplyNearTenderMatch(value, looseText) {
+  if (looseText.length >= 12) return true;
   return /(评分|评标|页码|投标日期|日期|技术要求|招标要求)/.test(normalizeTenderComparableText(value));
 }
 
@@ -1923,13 +1924,14 @@ function buildTenderSourceMatcher(tenderSentences) {
     const normalized = sentence?.normalized || normalizeContentSentence(source);
     const strictKey = buildTenderStrictKey(normalized);
     const skeletonKey = buildTenderSkeletonKey(normalized);
-    const grams = charBigrams(normalized);
+    const looseText = buildTenderLooseText(normalized);
+    const grams = charBigramsFromLooseText(looseText);
     if (normalized) exactSet.add(normalized);
     if (strictKey && strictKey.length >= 3) strictSet.add(strictKey);
     if (isTenderSkeletonAllowed(normalized, skeletonKey)) skeletonSet.add(skeletonKey);
     const parsedField = parseTenderFormatField(normalized);
     if (parsedField && isTenderFieldAllowed(parsedField.field)) fieldSet.add(parsedField.field);
-    const entry = { normalized, strictKey, skeletonKey, looseText: buildTenderLooseText(normalized), grams };
+    const entry = { normalized, strictKey, skeletonKey, looseText, grams };
     const entryIndex = entries.length;
     entries.push(entry);
     for (const gram of grams) {
@@ -1939,17 +1941,26 @@ function buildTenderSourceMatcher(tenderSentences) {
     }
   }
 
+  const candidateCounts = new Uint32Array(entries.length);
+
   function matchNear(sentence) {
-    if (!shouldApplyNearTenderMatch(sentence.normalized)) return null;
-    const grams = charBigrams(sentence.normalized);
+    const looseText = buildTenderLooseText(sentence.normalized);
+    if (!shouldApplyNearTenderMatch(sentence.normalized, looseText)) return null;
+    const grams = charBigramsFromLooseText(looseText);
     if (grams.size < 4) return null;
-    const candidates = new Map();
+    const candidates = [];
     for (const gram of grams) {
-      for (const index of gramIndex.get(gram) || []) candidates.set(index, (candidates.get(index) || 0) + 1);
+      for (const index of gramIndex.get(gram) || []) {
+        if (candidateCounts[index] === 0) candidates.push(index);
+        candidateCounts[index] += 1;
+      }
     }
 
     let best = null;
-    for (const [index, shared] of candidates.entries()) {
+    const compactLength = looseText.length;
+    for (const index of candidates) {
+      const shared = candidateCounts[index];
+      candidateCounts[index] = 0;
       const entry = entries[index];
       if (!entry?.grams?.size) continue;
       const shorter = Math.min(grams.size, entry.grams.size);
@@ -1957,7 +1968,6 @@ function buildTenderSourceMatcher(tenderSentences) {
       const containment = shared / Math.max(shorter, 1);
       const dice = diceSimilarityFromShared(shared, grams.size, entry.grams.size);
       const lengthRatio = shorter / Math.max(longer, 1);
-      const compactLength = buildTenderLooseText(sentence.normalized).length;
       const allowed = compactLength >= 30
         ? containment >= 0.9 && dice >= 0.82 && lengthRatio >= 0.5
         : containment >= 0.95 && dice >= 0.88 && lengthRatio >= 0.55;
@@ -2492,6 +2502,7 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
   }
 
   async function runContentDuplicateAnalysis(tenderFiles, bidFiles, contentFiles, signature, webContents, developerLogger) {
+    const contentStartedAt = Date.now();
     developerLogger?.write('duplicate.content_analysis.started', {
       signature,
       bid_file_count: bidFiles.length,
@@ -2520,24 +2531,44 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
     let tenderMatchedSentenceCount = 0;
     let firstOrder = 0;
 
-    for (const file of bidFiles) {
+    for (let fileIndex = 0; fileIndex < bidFiles.length; fileIndex += 1) {
+      const file = bidFiles[fileIndex];
       const fileId = stableFileId(file);
+      const fileStartedAt = Date.now();
       try {
         const markdown = await readContentMarkdown(contentFiles, file);
         const sentences = splitContentSentences(markdown);
         totalSentenceCount += sentences.length;
         const local = new Map();
-        for (const sentence of sentences) {
+        let fileTenderMatchedCount = 0;
+        for (let sentenceIndex = 0; sentenceIndex < sentences.length; sentenceIndex += 1) {
+          const sentence = sentences[sentenceIndex];
           const tenderMatch = tenderMatcher.match(sentence);
           if (tenderMatch) {
             tenderMatchedSentenceCount += 1;
+            fileTenderMatchedCount += 1;
             const reason = tenderMatch.reason || 'unknown';
             tenderMatchReasonCounts[reason] = (tenderMatchReasonCounts[reason] || 0) + 1;
-            continue;
+          } else {
+            const current = local.get(sentence.normalized) || { sentence: sentence.sentence, count: 0, order: firstOrder++ };
+            current.count += 1;
+            local.set(sentence.normalized, current);
           }
-          const current = local.get(sentence.normalized) || { sentence: sentence.sentence, count: 0, order: firstOrder++ };
-          current.count += 1;
-          local.set(sentence.normalized, current);
+
+          const processed = sentenceIndex + 1;
+          if (processed % 500 === 0 && processed < sentences.length) {
+            updateContentAnalysis({
+              status: 'running',
+              progress: bidFiles.length ? Math.min(89, Math.round(5 + ((fileIndex + processed / sentences.length) / bidFiles.length) * 80)) : 85,
+              tenderSentenceCount: tenderMatcher.tenderSentenceCount,
+              tenderMatchedSentenceCount,
+              totalSentenceCount,
+              extraction: { status: 'running', completed: fileIndex, total: bidFiles.length },
+              message: `正文比对 ${fileIndex + 1}/${bidFiles.length}（${processed}/${sentences.length} 句）`,
+            }, webContents, signature);
+            // 大批句子分块让出事件循环，避免单份标书长时间阻塞 Electron 主进程。
+            await new Promise((resolve) => setImmediate(resolve));
+          }
         }
 
         for (const [normalized, item] of local.entries()) {
@@ -2546,22 +2577,30 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
           global.occurrences[fileId] = item.count;
           globalSentences.set(normalized, global);
         }
+        developerLogger?.write('duplicate.content_analysis.file.completed', {
+          file: summarizeDuplicateFileForLog(file, 'bid'),
+          duration_ms: Date.now() - fileStartedAt,
+          sentence_count: sentences.length,
+          tender_matched_sentence_count: fileTenderMatchedCount,
+          compared_sentence_count: sentences.length - fileTenderMatchedCount,
+        });
       } catch (error) {
         updateContentAnalysis({ message: `${file.file_name} 正文比对失败：${error.message || error}` }, webContents, signature);
         developerLogger?.write('duplicate.content_analysis.file.error', {
           file: summarizeDuplicateFileForLog(file, 'bid'),
+          duration_ms: Date.now() - fileStartedAt,
           error: compactLogError(error),
         });
       }
 
       updateContentAnalysis({
         status: 'running',
-        progress: bidFiles.length ? Math.round((globalSentences.size ? 10 : 5) + (bidFiles.indexOf(file) + 1) / bidFiles.length * 80) : 85,
+        progress: bidFiles.length ? Math.round((globalSentences.size ? 10 : 5) + (fileIndex + 1) / bidFiles.length * 80) : 85,
         tenderSentenceCount: tenderMatcher.tenderSentenceCount,
         tenderMatchedSentenceCount,
         totalSentenceCount,
-        extraction: { status: 'running', completed: bidFiles.indexOf(file) + 1, total: bidFiles.length },
-        message: `正文比对 ${bidFiles.indexOf(file) + 1}/${bidFiles.length}`,
+        extraction: { status: 'running', completed: fileIndex + 1, total: bidFiles.length },
+        message: `正文比对 ${fileIndex + 1}/${bidFiles.length}`,
       }, webContents, signature);
     }
 
@@ -2580,6 +2619,7 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
     developerLogger?.write('duplicate.content_analysis.completed', {
       signature,
       status: 'success',
+      duration_ms: Date.now() - contentStartedAt,
       tender_sentence_count: tenderMatcher.tenderSentenceCount,
       tender_matched_sentence_count: tenderMatchedSentenceCount,
       tender_match_reason_counts: tenderMatchReasonCounts,
@@ -2696,17 +2736,21 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       updateContentAnalysis({ status: 'running', progress: 1, message: '元数据提取完成，等待正文内容用于正文比对', extraction: { status: 'running', completed: 0, total: bidFiles.length } }, target, signature);
       updateImageAnalysis({ status: 'running', progress: 1, message: '元数据提取完成，等待正文内容用于图片比对', extraction: { status: 'running', completed: 0, total: bidFiles.length } }, target, signature);
       const contentFiles = await contentPromise;
+      const metadataFailed = contentFiles.some((item) => item.status === 'error') || metadataFiles.some((item) => item.status === 'error');
+      updateAnalysis({
+        status: metadataFailed ? 'error' : 'success',
+        progress: 100,
+        message: metadataFailed ? '部分文件提取失败' : '元数据分析完成',
+      }, target, signature);
       const [outlineFiles, contentResult, imageResult] = await Promise.all([
         runOutlineAnalysis(tenderFiles, bidFiles, contentFiles, signature, target, developerLogger),
         runContentDuplicateAnalysis(tenderFiles, bidFiles, contentFiles, signature, target, developerLogger),
         runImageDuplicateAnalysis(bidFiles, contentFiles, signature, target, developerLogger),
       ]);
-      const failed = contentFiles.some((item) => item.status === 'error')
-        || metadataFiles.some((item) => item.status === 'error')
+      const failed = metadataFailed
         || outlineFiles.some((item) => item.status === 'error')
         || contentResult.status === 'error'
         || imageResult.status === 'error';
-      updateAnalysis({ status: failed ? 'error' : 'success', progress: 100, message: failed ? '部分文件分析失败' : '元数据分析完成' }, target, signature);
       developerLogger?.write('duplicate.pipeline.completed', {
         signature,
         status: failed ? 'error' : 'success',

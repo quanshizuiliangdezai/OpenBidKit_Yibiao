@@ -34,6 +34,7 @@ export { ToastProvider, useToast } from './ToastProvider';
 export type { ToastAction, ToastOptions, ToastType } from './ToastProvider';
 export { AiHttpErrorDialogProvider } from './AiHttpErrorDialogProvider';
 export { AgentQuestionDialogProvider, useAutoAnswer } from './AgentQuestionDialogProvider';
+export { DonationPromptProvider } from './DonationPromptProvider';
 export {
   DocumentParseNoticeProvider,
   isLibreOfficeRequiredMessage,

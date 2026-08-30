@@ -1,6 +1,4 @@
 export type TextModelProvider = 'jinlong' | 'volcengine' | 'deepseek' | 'agnes' | 'custom';
-export type LegacyTextModelProvider = 'longcat';
-export type ConfiguredTextModelProvider = TextModelProvider | LegacyTextModelProvider;
 export type AiRequestMode = 'normal' | 'stream';
 export type UpdateChannel = 'github' | 'cloudflare' | 'atomgit';
 export type AgentRuntimeId = string;
@@ -9,6 +7,7 @@ export interface TextModelConfig {
   api_key: string;
   base_url: string;
   model_name: string;
+  multimodal_enabled: boolean;
   reasoning_effort: string;
   context_length_limit: number;
   concurrency_limit: number;
@@ -17,10 +16,10 @@ export interface TextModelConfig {
   request_mode: AiRequestMode;
 }
 
-export type TextModelProfiles = Record<TextModelProvider, TextModelConfig> & Partial<Record<LegacyTextModelProvider, TextModelConfig>>;
+export type TextModelProfiles = Record<TextModelProvider, TextModelConfig>;
 
 export interface AiConfig extends TextModelConfig {
-  text_model_provider: ConfiguredTextModelProvider;
+  text_model_provider: TextModelProvider;
   text_model_profiles: TextModelProfiles;
 }
 
@@ -49,9 +48,10 @@ export interface ImageModelTestResult {
   mime_type?: string;
 }
 
-export type ImageModelProvider = 'jinlong' | 'volcengine' | 'google-ai-studio' | 'agnes' | 'custom';
+export type ImageModelProvider = 'jinlong' | 'volcengine' | 'google-ai-studio' | 'agnes' | 'custom' | 'comfyui';
 export type ImageModelStatus = 'untested' | 'available' | 'unavailable';
-export type ImageModelSize = 'auto' | '512' | '1K' | '2K' | '4K' | '1024x1024' | '1536x1024' | '1024x1536' | '2048x2048' | '2048x1152' | '3840x2160' | '2160x3840';
+export type ImageModelSize = 'auto' | '512' | '1K' | '2K' | '3K' | '4K' | '1024x768' | '1024x1024' | '768x1024' | '1536x1024' | '1024x1536' | '2048x2048' | '2048x1152' | '3840x2160' | '2160x3840';
+export type ImageModelRatio = '1:1' | '3:4' | '4:3' | '16:9' | '9:16' | '2:3' | '3:2' | '21:9';
 
 export interface ImageModelConfig {
   provider: ImageModelProvider;
@@ -59,8 +59,10 @@ export interface ImageModelConfig {
   api_key: string;
   model_name: string;
   image_size: ImageModelSize;
+  image_ratio?: ImageModelRatio;
   request_mode: AiRequestMode;
   concurrency_limit: number;
+  comfyui_workflow?: string;
   status?: ImageModelStatus;
   tested_at?: string;
   last_error?: string;
@@ -120,10 +122,20 @@ export interface ClientConfig extends AiConfig {
   account?: AccountInfo | null;
 }
 
+export type ModelImageInputStatus = 'supported' | 'unsupported' | 'mixed' | 'unknown';
+export type ModelTemperatureStatus = 'supported' | 'unsupported' | 'mixed' | 'unknown';
+
 export interface ModelInfoCacheEntry {
   reasoningEfforts: string[];
   context: number;
   output: number;
+  inputModalities: string[];
+  outputModalities: string[];
+  imageInputStatus: ModelImageInputStatus;
+  temperatureStatus: ModelTemperatureStatus;
+  concurrencyLimit: number;
+  requestMode: AiRequestMode;
+  sourceCount: number;
 }
 
 export interface ModelInfoResult {

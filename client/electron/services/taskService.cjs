@@ -336,7 +336,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     const patch = { ...(eventPatch.technicalPlanPatch || {}) };
     const taskField = getTaskField(task.type);
     if (taskField) {
-      patch[taskField] = state?.[taskField] || task;
+      patch[taskField] = task || state?.[taskField];
     }
 
     if (task.type === 'bid-analysis') {
@@ -1405,7 +1405,11 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       return startManagedTask('bid-analysis', payload, runBidAnalysisTask);
     },
     startOutlineGeneration(payload) {
-      const outlineMode = payload?.outline_mode === 'response-file' ? 'response-file' : 'aligned';
+      const outlineMode = payload?.outline_mode === 'standalone-technical'
+        ? 'standalone-technical'
+        : payload?.outline_mode === 'response-file'
+          ? 'response-file'
+          : 'aligned';
       const taskPayload = { ...payload, outline_mode: outlineMode };
       return startManagedTask('outline-generation', taskPayload, runOutlineGenerationTaskV2, {
         outlineMode,

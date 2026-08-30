@@ -7,7 +7,7 @@ import GlobalFactsPage from './GlobalFactsPage';
 import ContentEditPage from './ContentEditPage';
 import { TemplatePreview } from '../../export-format/pages/ExportFormatPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
-import { getBidAnalysisTasks } from '../services/bidAnalysisWorkflow';
+import { bidAnalysisTasks, getBidAnalysisTasks, isMissingBidAnalysisResult } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../types';
@@ -342,6 +342,8 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   const [switchingWorkflow, setSwitchingWorkflow] = useState(false);
   const [petInstallDialogOpen, setPetInstallDialogOpen] = useState(false);
   const [installingPetPlugin, setInstallingPetPlugin] = useState(false);
+  const [bidAnalysisFocusRequest, setBidAnalysisFocusRequest] = useState<{ taskId: string } | null>(null);
+  const [globalFactsFocusRequest, setGlobalFactsFocusRequest] = useState<{ groupId: string } | null>(null);
   const sortGuardRef = useRef<OutlineSortGuard | null>(null);
   const sortLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
   const outlineWordControlLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
@@ -358,8 +360,13 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
   const bidSectionReady = state.bidSectionMode !== 'multiple'
     || (state.bidSectionExtractionStatus === 'success' && !isBidSectionExtractionRunning && selectedBidSectionValid);
   const bidAnalysisReady = requiredBidAnalysisReady && !isBidAnalysisTaskRunning && bidSectionReady;
+  const firstMissingBidAnalysisTask = bidAnalysisTasks.find((task) => (
+    state.bidAnalysisSelectedTaskIds.includes(task.id)
+    && isMissingBidAnalysisResult(task, state.bidAnalysisTasks[task.id]?.content)
+  ));
   const globalFactsReady = state.globalFacts.length > 0 && state.globalFactsTask?.status === 'success';
-  const globalFactsHasPlaceholder = state.globalFacts.some((group) => `${group.title || ''}${group.content || ''}`.includes('【待填写】'));
+  const firstGlobalFactWithPlaceholder = state.globalFacts.find((group) => `${group.title || ''}${group.content || ''}`.includes('【待填写】'));
+  const globalFactsHasPlaceholder = Boolean(firstGlobalFactWithPlaceholder);
   const isGlobalFactsAdjusting = state.globalFactsAdjustmentTask?.status === 'running' || state.globalFactsAdjustmentTask?.status === 'pausing';
   const contentTaskStatus = state.contentGenerationTask?.status;
   const isContentGenerating = contentTaskStatus === 'running' || contentTaskStatus === 'pausing';
@@ -377,7 +384,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
     || (state.step === 'document-analysis' && (!state.tenderFile || (requiresOriginalPlan && !state.originalPlanFile)))
     || (state.step === 'bid-analysis' && !bidAnalysisReady)
     || (state.step === 'outline-generation' && (!state.outlineData || !state.outlineWordControlSnapshot))
-    || (state.step === 'global-facts' && (!globalFactsReady || globalFactsHasPlaceholder || isGlobalFactsAdjusting));
+    || (state.step === 'global-facts' && (!globalFactsReady || isGlobalFactsAdjusting));
   const nextTooltip = state.step === 'document-analysis' && !state.tenderFile
       ? '上传完招标文件后才能进入下一步'
       : state.step === 'document-analysis' && requiresOriginalPlan && !state.originalPlanFile
@@ -390,6 +397,8 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
               ? '请先选择本次投标范围'
               : state.step === 'bid-analysis' && isBidAnalysisTaskRunning
                 ? '招标文件解析任务仍在运行，请等待当前任务结束'
+                : state.step === 'bid-analysis' && firstMissingBidAnalysisTask
+                  ? `${firstMissingBidAnalysisTask.label}未提取到有效内容，点击后定位到该项`
                 : state.step === 'bid-analysis' && !requiredBidAnalysisReady
                   ? '招标文件解析完成后才能进入目录生成'
                   : state.step === 'outline-generation' && !state.outlineData
@@ -625,6 +634,16 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
 
   const switchStep = async (step: TechnicalPlanStep) => {
     if (step === state.step) {
+      return;
+    }
+    if (state.step === 'bid-analysis' && step === 'outline-generation' && firstMissingBidAnalysisTask) {
+      setBidAnalysisFocusRequest({ taskId: firstMissingBidAnalysisTask.id });
+      showToast(`“${firstMissingBidAnalysisTask.label}”自动重试后仍未提取到有效内容，请重新解析该项后再进入下一步`, 'info');
+      return;
+    }
+    if (state.step === 'global-facts' && step === 'content-edit' && firstGlobalFactWithPlaceholder) {
+      setGlobalFactsFocusRequest({ groupId: firstGlobalFactWithPlaceholder.id });
+      showToast('存在待填写，请您改为真实数据后再继续', 'info');
       return;
     }
     const allowed = await confirmPendingSortLeave();
@@ -1328,6 +1347,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           tasks={state.bidAnalysisTasks}
           task={state.bidAnalysisTask}
           progress={state.bidAnalysisProgress}
+          focusTaskRequest={bidAnalysisFocusRequest}
           onProgressChange={(progress) => setState((prev) => ({ ...prev, bidAnalysisProgress: progress }))}
           onConfigSaved={(nextState) => setState((prev) => ({ ...prev, ...nextState }))}
         />
@@ -1336,6 +1356,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           <OutlineEditPage
             workflowKind={workflowKind}
             projectOverview={state.projectOverview}
+            outlineMode={state.outlineMode}
             outlineExpansionMode={state.outlineExpansionMode || 'ai-complement'}
           outlineWordControlOptions={state.outlineWordControlOptions}
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}
@@ -1361,6 +1382,7 @@ function TechnicalPlanHome({ workflowKind, registerLeaveGuard, onSectionChange }
           globalFactsMode={state.globalFactsMode || 'fabricate'}
           task={state.globalFactsTask}
           aiAdjustmentRunning={isGlobalFactsAdjusting}
+          focusGroupRequest={globalFactsFocusRequest}
           onGlobalFactsSaved={saveGlobalFacts}
           onGlobalFactsConfigChange={saveGlobalFactsConfig}
         />

@@ -1,4 +1,14 @@
-export const DATASET = 'agnet_analytics';
+export const RAW_DATASET = 'agnet_analytics';
+// 2026-08-26 至 27 日的异常流量误写入生产埋点，仅在查询时排除对应日期和出口 IP。
+export const ANALYTICS_DATA_FILTER = `NOT (
+  blob13 IN ('124.193.61.30', '64.118.148.223')
+  AND formatDateTime(timestamp, '%Y-%m-%d', 'Asia/Shanghai') IN ('2026-08-26', '2026-08-27')
+)`;
+export const DATASET = `(
+  SELECT *
+  FROM ${RAW_DATASET}
+  WHERE ${ANALYTICS_DATA_FILTER}
+)`;
 export const ALLOWED_EVENTS = new Set(['app_open', 'page_view', 'config_usage', 'ai_request', 'resource_click', 'agent_runtime']);
 export const AGENT_RUNTIME_STATUSES = new Set(['success', 'failed']);
 export const AGENT_RUNTIME_MAX_RETRY_COUNT = 3;

@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { Agent } = require('undici');
+const { nativeImage } = require('electron');
 const { getGeneratedImagesDir } = require('../utils/paths.cjs');
 const { createDeveloperLogger } = require('../utils/developerLog.cjs');
 const { createAiRequestQueue } = require('../utils/aiRequestQueue.cjs');
@@ -26,6 +27,8 @@ const textTokenStatsStore = require('./textTokenStatsStore.cjs');
 const { normalizeTokenUsage } = textTokenStatsStore;
 
 const AI_REQUEST_TIMEOUT_MS = 600000;
+const MULTIMODAL_IMAGE_MAX_EDGE = 2048;
+const MULTIMODAL_IMAGE_JPEG_QUALITY = 85;
 
 // 直连 Agent：绕过系统代理（Clash/V2Ray 等），避免 AI 请求被拦截导致 "fetch failed"。
 // Node.js 原生 fetch（undici）支持 dispatcher 选项，用空 Agent 直连目标服务器。
@@ -200,13 +203,133 @@ function normalizeTextRequestMode(config) {
   return config?.request_mode === 'normal' ? 'normal' : 'stream';
 }
 
+// 读取本地图片，按原比例缩小最长边并编码为 JPEG Base64 Data URL。
+async function compressLocalImageToDataUrl(filePath) {
+  const normalizedPath = String(filePath || '').trim();
+  if (!normalizedPath) {
+    throw new Error('本地图片路径不能为空');
+  }
+
+  try {
+    const sourceBuffer = await fs.promises.readFile(normalizedPath);
+    const sourceImage = nativeImage.createFromBuffer(sourceBuffer);
+    if (sourceImage.isEmpty()) {
+      throw new Error('图片格式不受支持或文件已损坏');
+    }
+
+    const { width, height } = sourceImage.getSize();
+    const maxEdge = Math.max(width, height);
+    const image = maxEdge > MULTIMODAL_IMAGE_MAX_EDGE
+      ? sourceImage.resize(width >= height
+        ? { width: MULTIMODAL_IMAGE_MAX_EDGE, quality: 'best' }
+        : { height: MULTIMODAL_IMAGE_MAX_EDGE, quality: 'best' })
+      : sourceImage;
+    const compressedBuffer = image.toJPEG(MULTIMODAL_IMAGE_JPEG_QUALITY);
+    if (!compressedBuffer.length) {
+      throw new Error('图片压缩结果为空');
+    }
+
+    return `data:image/jpeg;base64,${compressedBuffer.toString('base64')}`;
+  } catch (error) {
+    throw new Error(`图片读取或压缩失败（${path.basename(normalizedPath)}）：${error.message}`);
+  }
+}
+
+// 未启用多模态时阻止包含图片的文本模型请求。
+function ensureMultimodalEnabled(config, messages) {
+  if (config.multimodal_enabled) return;
+  const hasImage = messages.some((message) => Array.isArray(message.content)
+    && message.content.some((part) => part?.type === 'local_image' || part?.type === 'image_url'));
+  if (hasImage) {
+    throw new Error('当前文本模型未开启多模态支持，请在设置中开启后重试');
+  }
+}
+
+// 校验多模态能力，并将本地图片串行转换为 OpenAI Chat Completions 图片内容块。
+async function prepareMultimodalMessages(config, messages) {
+  ensureMultimodalEnabled(config, messages);
+  const preparedMessages = [];
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) {
+      preparedMessages.push(message);
+      continue;
+    }
+
+    const content = [];
+    for (const part of message.content) {
+      if (part?.type !== 'local_image') {
+        content.push(part);
+        continue;
+      }
+
+      content.push({
+        type: 'image_url',
+        image_url: {
+          url: await compressLocalImageToDataUrl(part.path),
+          ...(part.detail ? { detail: part.detail } : {}),
+        },
+      });
+    }
+    preparedMessages.push({ ...message, content });
+  }
+  return preparedMessages;
+}
+
 function normalizeImageRequestMode(imageConfig) {
   return imageConfig?.request_mode === 'normal' ? 'normal' : 'stream';
 }
 
 function normalizeOpenAICompatibleImageSize(imageConfig, requestSize) {
-  const size = String(requestSize || imageConfig?.image_size || '1024x1024').trim();
-  return size || '1024x1024';
+  const requested = String(requestSize || '').trim();
+  const configured = String(imageConfig?.image_size || '').trim();
+  return requested || configured || '1024x1024';
+}
+
+const AGNES_IMAGE_2_0_SIZES = new Set(['1024x768', '1024x1024', '768x1024']);
+const AGNES_IMAGE_2_1_SIZES = new Set(['1K', '2K', '3K', '4K']);
+const AGNES_IMAGE_RATIOS = new Set(['1:1', '3:4', '4:3', '16:9', '9:16', '2:3', '3:2', '21:9']);
+
+// 按服务商协议构造 OpenAI 兼容生图请求。
+function createOpenAICompatibleImageRequestBody(provider, imageConfig, prompt, requestSize) {
+  const requestMode = normalizeImageRequestMode(imageConfig);
+  const model = String(imageConfig?.model_name || '').trim();
+  const size = normalizeOpenAICompatibleImageSize(imageConfig, requestSize);
+
+  if (provider !== 'agnes') {
+    return {
+      model,
+      prompt,
+      size,
+      response_format: 'url',
+      ...(requestMode === 'stream' ? { stream: true } : {}),
+    };
+  }
+
+  if (requestMode === 'stream') {
+    throw new Error('Agnes AI 生图仅支持普通请求，请在设置中将请求方式改为普通请求');
+  }
+  if (size === 'auto') {
+    throw new Error('Agnes AI 生图不支持自动尺寸，请在设置中选择具体图片尺寸');
+  }
+
+  if (model === 'agnes-image-2.0-flash' && !AGNES_IMAGE_2_0_SIZES.has(size)) {
+    throw new Error('Agnes Image 2.0 Flash 仅支持 1024x768、1024x1024 或 768x1024');
+  }
+  if (model === 'agnes-image-2.1-flash' && !AGNES_IMAGE_2_1_SIZES.has(size)) {
+    throw new Error('Agnes Image 2.1 Flash 请使用 1K、2K、3K 或 4K 图片尺寸');
+  }
+
+  const body = {
+    model,
+    prompt,
+    size,
+    extra_body: { response_format: 'url' },
+  };
+  if (model === 'agnes-image-2.1-flash') {
+    const ratio = String(imageConfig?.image_ratio || '1:1').trim();
+    body.ratio = AGNES_IMAGE_RATIOS.has(ratio) ? ratio : '1:1';
+  }
+  return body;
 }
 
 function normalizeGoogleImageSize(imageConfig) {
@@ -315,6 +438,13 @@ function getImageModelAvailability(config) {
   const imageConfig = config.image_model || {};
   if (imageConfig.status !== 'available') {
     return { available: false, status: imageConfig.status || 'untested', message: '生图模型未测试可用' };
+  }
+
+  if (imageConfig.provider === 'comfyui') {
+    if (!trimBaseUrl(imageConfig.base_url)) {
+      return { available: false, status: 'unavailable', message: '请先填写 ComfyUI 服务地址' };
+    }
+    return { available: true, status: 'available', message: '生图模型可用' };
   }
 
   if (!imageConfig.api_key) {
@@ -735,6 +865,7 @@ async function parseOrRepairJsonResponseWithConfig(app, config, request, content
 }
 
 async function collectJsonResponseWithConfig(app, config, request) {
+  const preparedMessages = await prepareMultimodalMessages(config, request.messages);
   const maxRetries = request.max_retries ?? 2;
   const totalAttempts = maxRetries + 1;
   const responseFormat = request.response_format || { type: 'json_object' };
@@ -745,7 +876,7 @@ async function collectJsonResponseWithConfig(app, config, request) {
 
   for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
     const content = await chatWithConfig(app, config, {
-      messages: request.messages,
+      messages: preparedMessages,
       response_format: responseFormat,
       timeout_ms: request.timeout_ms,
       timeout_message: request.timeout_message,
@@ -1285,10 +1416,14 @@ async function chatWithConfig(app, config, request) {
 
   requireBaseUrl(config.base_url, '请先在设置中配置文本模型 Base URL');
 
+  const preparedRequest = {
+    ...request,
+    messages: await prepareMultimodalMessages(config, request.messages),
+  };
   const requestId = createRequestId();
   const logTitle = resolveAiLogTitle(request, '文本请求');
   const requestMode = normalizeTextRequestMode(config);
-  let requestBody = createChatRequestBody(config, request, { stream: requestMode === 'stream' });
+  let requestBody = createChatRequestBody(config, preparedRequest, { stream: requestMode === 'stream' });
   let responseData = null;
   let errorMessage = '';
   let analyticsTracked = false;
@@ -1310,11 +1445,11 @@ async function chatWithConfig(app, config, request) {
       try {
         return await requestTextAi(app, config, requestBody, { signal, requestMode });
       } catch (error) {
-        if (!request.response_format || !error.responseFormatUnsupported) {
+        if (!preparedRequest.response_format || !error.responseFormatUnsupported) {
           throw error;
         }
 
-        requestBody = createChatRequestBody(config, request, { omitResponseFormat: true, stream: requestMode === 'stream' });
+        requestBody = createChatRequestBody(config, preparedRequest, { omitResponseFormat: true, stream: requestMode === 'stream' });
         return requestTextAi(app, config, requestBody, { signal, requestMode });
       }
     }, timeoutMs, request.signal));
@@ -1384,6 +1519,7 @@ async function runAgentChatCompletionWithConfig(app, config, request) {
 
   const requestId = createRequestId();
   const requestBody = createAgentChatRequestBody(config, request.body);
+  ensureMultimodalEnabled(config, requestBody.messages);
   const requestMode = requestBody.stream ? 'stream' : 'normal';
   const logTitle = resolveAiLogTitle(request, 'Pi Agent');
   let responseData = null;
@@ -1462,13 +1598,11 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
   const requestMode = normalizeImageRequestMode(imageConfig);
   const requestId = createRequestId();
   const logTitle = `AI生图测试-${meta.label}`;
-  const requestBody = {
-    model: normalizeImageModelName(imageConfig.model_name, imageConfig.base_url),
-    prompt: '大字报，内容是“易标AI老好了”',
-    size: normalizeOpenAICompatibleImageSize(imageConfig),
-    response_format: 'url',
-    ...(requestMode === 'stream' ? { stream: true } : {}),
-  };
+  const requestBody = createOpenAICompatibleImageRequestBody(
+    provider,
+    imageConfig,
+    '大字报，内容是“易标AI老好了”',
+  );
 
   try {
     writeAiLog(app, config, {
@@ -1672,13 +1806,12 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
   const requestId = createRequestId();
   const logTitle = resolveAiLogTitle(request, request.title ? `AI生图-${request.title}` : 'AI生图');
   const requestMode = normalizeImageRequestMode(imageConfig);
-  const requestBody = {
-    model: normalizeImageModelName(imageConfig.model_name, imageConfig.base_url),
-    prompt: normalizeImagePrompt(request),
-    size: normalizeOpenAICompatibleImageSize(imageConfig, request.size),
-    response_format: 'url',
-    ...(requestMode === 'stream' ? { stream: true } : {}),
-  };
+  const requestBody = createOpenAICompatibleImageRequestBody(
+    provider,
+    imageConfig,
+    normalizeImagePrompt(request),
+    request.size,
+  );
   const baseUrl = requireBaseUrl(imageConfig.base_url, `${meta.label} Base URL 缺失，请重新选择服务商后保存配置`);
   let responseData = null;
   let analyticsTracked = false;
@@ -1836,6 +1969,474 @@ async function generateGoogleImage(app, config, request) {
   }
 }
 
+const COMFYUI_POLL_INTERVAL_MS = 2000;
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const COMFYUI_MIN_IMAGE_DIMENSION = 64;
+const COMFYUI_MAX_IMAGE_DIMENSION = 8192;
+
+function isValidComfyUIDimension(value) {
+  return Number.isInteger(value)
+    && value >= COMFYUI_MIN_IMAGE_DIMENSION
+    && value <= COMFYUI_MAX_IMAGE_DIMENSION
+    && value % 8 === 0;
+}
+
+function resolveComfyUIImageSize(imageConfig, requestSize) {
+  const fallback = String(imageConfig?.image_size || '').trim() || '1024x1024';
+  const requested = String(requestSize || '').trim();
+  // 归一化常见写法：中文乘号 × / ✕、大写 X、内部空白
+  const raw = (requested || fallback).replace(/[×✕X]/g, 'x').replace(/\s+/g, '');
+  const direct = raw.match(/^(\d{1,5})x(\d{1,5})$/i);
+  if (direct) {
+    const width = Number(direct[1]);
+    const height = Number(direct[2]);
+    if (isValidComfyUIDimension(width) && isValidComfyUIDimension(height)) {
+      return { width, height };
+    }
+  }
+  switch (raw.toLowerCase()) {
+    case '512':
+      return { width: 512, height: 512 };
+    case '2k':
+      return { width: 2048, height: 2048 };
+    case '4k':
+      return { width: 4096, height: 4096 };
+    default:
+      // 'auto' / '1K' / 无法识别的写法统一回退默认方图
+      return { width: 1024, height: 1024 };
+  }
+}
+
+function parseComfyUIWorkflowJson(raw) {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('ComfyUI 工作流 JSON 解析失败，请检查设置中粘贴的工作流内容');
+  }
+  // 兼容带 prompt 外层包装的导出内容
+  if (parsed && typeof parsed === 'object' && parsed.prompt && typeof parsed.prompt === 'object') {
+    parsed = parsed.prompt;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('ComfyUI 工作流格式不正确，请粘贴 API 格式（Save API Format）导出的 JSON');
+  }
+  const hasNode = Object.values(parsed).some((node) => node && typeof node === 'object' && typeof node.class_type === 'string');
+  if (!hasNode) {
+    throw new Error('ComfyUI 工作流内容为空或不包含有效节点，请粘贴 API 格式（Save API Format）导出的 JSON');
+  }
+  return parsed;
+}
+
+function isComfyUITextToImageWorkflow(workflow) {
+  if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) return false;
+  let hasSampler = false;
+  let hasTextEncode = false;
+  let hasLatent = false;
+  for (const node of Object.values(workflow)) {
+    if (!node || typeof node !== 'object') continue;
+    if (node.class_type === 'KSampler' || node.class_type === 'KSamplerAdvanced') hasSampler = true;
+    if (node.class_type === 'CLIPTextEncode') hasTextEncode = true;
+    if (node.class_type === 'EmptySD3LatentImage' || node.class_type === 'EmptyLatentImage') hasLatent = true;
+  }
+  return hasSampler && hasTextEncode && hasLatent;
+}
+
+// 历史条目的 prompt 元组在不同版本里布局不同（[prio, workflow, ...] 或 [prio, id, workflow, ...]），
+// 取第一个"值为节点对象"的元素即为工作流
+function extractComfyUIHistoryWorkflow(promptTuple) {
+  if (!Array.isArray(promptTuple)) return null;
+  for (const item of promptTuple) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const values = Object.values(item);
+    if (values.length > 0 && values.some((node) => node && typeof node === 'object' && typeof node.class_type === 'string')) {
+      return item;
+    }
+  }
+  return null;
+}
+
+// 从执行消息中取时间戳（execution_start/execution_success），用于排序
+function getComfyUIHistoryEntryTimestamp(entry) {
+  const messages = Array.isArray(entry?.status?.messages) ? entry.status.messages : [];
+  let timestamp = 0;
+  for (const message of messages) {
+    if (Array.isArray(message) && (message[0] === 'execution_start' || message[0] === 'execution_success')) {
+      const value = Number(message[1]?.timestamp);
+      if (Number.isFinite(value) && value > timestamp) timestamp = value;
+    }
+  }
+  return timestamp;
+}
+
+// 从 /history 中挑出最近一次成功执行的文生图工作流
+function pickComfyUIHistoryWorkflow(historyData) {
+  if (!historyData || typeof historyData !== 'object') return null;
+  let picked = null;
+  let pickedRank = -1;
+  let index = 0;
+  for (const entry of Object.values(historyData)) {
+    index += 1;
+    if (entry?.status?.status_str !== 'success') continue;
+    const workflow = extractComfyUIHistoryWorkflow(entry?.prompt);
+    if (!isComfyUITextToImageWorkflow(workflow)) continue;
+    // 优先按执行时间戳取最新；时间戳缺失时退化为遍历顺序（>= 保证取到更靠后的条目）
+    const rank = getComfyUIHistoryEntryTimestamp(entry) || index;
+    if (rank >= pickedRank) {
+      picked = workflow;
+      pickedRank = rank;
+    }
+  }
+  return picked;
+}
+
+async function fetchComfyUIJson(baseUrl, path, options = {}) {
+  let response = null;
+  try {
+    response = await fetch(`${baseUrl}${path}`, { signal: options.signal });
+  } catch {
+    return null;
+  }
+  if (!response.ok) return null;
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+// 服务器装有 checkpoint 模型时，按标准结构组装一个最简文生图工作流
+function buildComfyUICheckpointWorkflow(objectInfo) {
+  const checkpoints = objectInfo?.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0];
+  if (!Array.isArray(checkpoints)) return null;
+  const checkpointName = checkpoints.find((name) => typeof name === 'string' && name.trim());
+  if (!checkpointName) return null;
+  return {
+    '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: checkpointName } },
+    '2': { class_type: 'CLIPTextEncode', inputs: { text: '', clip: ['1', 1] } },
+    '3': { class_type: 'CLIPTextEncode', inputs: { text: '', clip: ['1', 1] } },
+    '4': { class_type: 'EmptyLatentImage', inputs: { width: 1024, height: 1024, batch_size: 1 } },
+    '5': { class_type: 'KSampler', inputs: { model: ['1', 0], positive: ['2', 0], negative: ['3', 0], latent_image: ['4', 0], seed: 0, steps: 20, cfg: 7.0, sampler_name: 'euler', scheduler: 'normal', denoise: 1.0 } },
+    '6': { class_type: 'VAEDecode', inputs: { samples: ['5', 0], vae: ['1', 2] } },
+    '7': { class_type: 'SaveImage', inputs: { images: ['6', 0], filename_prefix: 'yibiao' } },
+  };
+}
+
+// 工作流模板优先级：手动粘贴的 JSON > 服务器最近成功执行的工作流 > 按服务器已装模型自动组装
+async function resolveComfyUIWorkflowTemplate(baseUrl, imageConfig, options = {}) {
+  const raw = String(imageConfig?.comfyui_workflow || '').trim();
+  if (raw) {
+    const customWorkflow = parseComfyUIWorkflowJson(raw);
+    if (!isComfyUITextToImageWorkflow(customWorkflow)) {
+      throw new Error('设置中粘贴的工作流不是完整的文生图工作流：需要包含 KSampler、CLIPTextEncode 与 Empty Latent 节点（当前仅支持文生图，img2img 等工作流暂不支持）');
+    }
+    return { workflow: customWorkflow, source: 'custom' };
+  }
+  const historyData = await fetchComfyUIJson(baseUrl, '/history?max_items=50', options);
+  const historyWorkflow = pickComfyUIHistoryWorkflow(historyData);
+  if (historyWorkflow) {
+    return { workflow: historyWorkflow, source: 'history' };
+  }
+  const objectInfo = await fetchComfyUIJson(baseUrl, '/object_info', options);
+  const builtWorkflow = buildComfyUICheckpointWorkflow(objectInfo);
+  if (builtWorkflow) {
+    return { workflow: builtWorkflow, source: 'auto' };
+  }
+  throw new Error('未能从 ComfyUI 自动探测到可用的文生图工作流：请先在 ComfyUI 中成功运行一次文生图工作流（软件会自动复用最近一次的工作流），或在设置中粘贴 API 格式的工作流 JSON');
+}
+
+function buildComfyUIImageWorkflow(baseWorkflow, prompt, size) {
+  const workflow = JSON.parse(JSON.stringify(baseWorkflow));
+  if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) {
+    throw new Error('ComfyUI 工作流格式不正确');
+  }
+  const normalizedPrompt = String(prompt || '').trim();
+  if (!normalizedPrompt) {
+    throw new Error('生图提示词为空，请检查输入内容');
+  }
+
+  const nodes = Object.entries(workflow);
+  let samplerNode = null;
+  let latentNode = null;
+  let saveNode = null;
+  for (const [, node] of nodes) {
+    if (!node || typeof node !== 'object') continue;
+    if (node.class_type === 'KSampler' || node.class_type === 'KSamplerAdvanced') samplerNode = samplerNode || node;
+    if (node.class_type === 'EmptySD3LatentImage' || node.class_type === 'EmptyLatentImage') latentNode = latentNode || node;
+    if (node.class_type === 'SaveImage') saveNode = saveNode || node;
+  }
+
+  // 正向提示词写入采样器 positive 指向的文本节点。
+  // 兜底时必须排除采样器 negative 指向的节点，否则提示词会被写进负向节点（效果完全相反）
+  let promptNode = null;
+  const positiveRef = samplerNode?.inputs?.positive;
+  if (Array.isArray(positiveRef) && workflow[positiveRef[0]]?.class_type === 'CLIPTextEncode') {
+    promptNode = workflow[positiveRef[0]];
+  }
+  if (!promptNode) {
+    const negativeRef = samplerNode?.inputs?.negative;
+    const negativeNodeId = Array.isArray(negativeRef) ? String(negativeRef[0]) : null;
+    const candidates = [];
+    for (const [nodeId, node] of nodes) {
+      if (node?.class_type === 'CLIPTextEncode' && nodeId !== negativeNodeId) {
+        candidates.push(node);
+      }
+    }
+    // 典型工作流里正向节点留空待注入、负向节点预填词，优先选空文本节点
+    promptNode = candidates.find((node) => !String(node.inputs?.text || '').trim()) || candidates[0] || null;
+  }
+  if (!promptNode) {
+    throw new Error('ComfyUI 工作流中没有可用的 CLIPTextEncode 正向提示词节点（positive 连接无效，且负向节点之外没有其他文本节点），请检查工作流连接');
+  }
+  promptNode.inputs = { ...promptNode.inputs, text: normalizedPrompt };
+
+  if (latentNode) {
+    latentNode.inputs = { ...latentNode.inputs, width: size.width, height: size.height };
+  }
+
+  // seed 为节点链接（数组）时保持原样，不能用随机数覆盖断链
+  if (typeof samplerNode?.inputs?.seed === 'number') {
+    samplerNode.inputs = { ...samplerNode.inputs, seed: crypto.randomInt(0, 4294967296) };
+  } else if (typeof samplerNode?.inputs?.noise_seed === 'number') {
+    samplerNode.inputs = { ...samplerNode.inputs, noise_seed: crypto.randomInt(0, 4294967296) };
+  }
+
+  if (saveNode) {
+    saveNode.inputs = { ...saveNode.inputs, filename_prefix: 'yibiao' };
+  }
+
+  return workflow;
+}
+
+async function submitComfyUIPrompt(baseUrl, workflow, options = {}) {
+  let response = null;
+  try {
+    response = await fetch(`${baseUrl}/prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: workflow }),
+      signal: options.signal,
+    });
+  } catch (error) {
+    // 提交非幂等：网络错误时任务可能已入队，重试会导致同一提示词重复排队
+    throw markAiRequestError(error, { retryable: false });
+  }
+  await ensureOk(response, 'ComfyUI 任务提交失败', { source: options.source || 'comfyui-image-model' });
+  try {
+    return await response.json();
+  } catch (error) {
+    throw markAiRequestError(error, { retryable: false });
+  }
+}
+
+function extractComfyUIImages(entry) {
+  const images = [];
+  for (const output of Object.values(entry?.outputs || {})) {
+    if (Array.isArray(output?.images)) {
+      images.push(...output.images.filter((image) => image?.filename));
+    }
+  }
+  return images;
+}
+
+function getComfyUIExecutionError(entry) {
+  const messages = Array.isArray(entry?.status?.messages) ? entry.status.messages : [];
+  for (const message of messages) {
+    if (Array.isArray(message) && message[0] === 'execution_error') {
+      const detail = message[1] || {};
+      return detail.exception_message || detail.error || 'ComfyUI 节点执行失败';
+    }
+  }
+  return 'ComfyUI 任务执行失败';
+}
+
+async function waitComfyUIImageResult(baseUrl, promptId, options = {}) {
+  const deadline = Date.now() + AI_REQUEST_TIMEOUT_MS;
+  let lastEntry = null;
+  while (Date.now() < deadline) {
+    if (options.signal?.aborted) {
+      throw createAbortError();
+    }
+    try {
+      const response = await fetch(`${baseUrl}/history/${promptId}`, { signal: options.signal });
+      if (response.ok) {
+        const data = await response.json();
+        const entry = data?.[promptId];
+        if (entry) {
+          lastEntry = entry;
+          const statusStr = entry.status?.status_str || '';
+          if (statusStr === 'error') {
+            throw createAiResponseDataError(getComfyUIExecutionError(entry), entry.status);
+          }
+          if (entry.status?.completed || statusStr === 'success') {
+            const images = extractComfyUIImages(entry);
+            if (images.length > 0) {
+              return { entry, images };
+            }
+            // 已到终态但没有图片输出（典型原因：工作流缺少 SaveImage 节点），继续轮询不会有变化
+            throw createAiResponseDataError('ComfyUI 任务已完成但没有产出图片，请检查工作流是否包含 SaveImage 等图片输出节点', entry.status);
+          }
+        }
+      }
+    } catch (error) {
+      if (options.signal?.aborted || error?.name === 'AbortError') throw error;
+      if (error?.raw_response_data) throw error;
+      // 轮询期间的瞬时网络错误不致命，继续等待
+    }
+    await sleepMs(COMFYUI_POLL_INTERVAL_MS);
+  }
+  throw createAiResponseDataError('ComfyUI 生图等待超时', lastEntry?.status || null);
+}
+
+async function fetchComfyUIImage(baseUrl, image, options = {}) {
+  const params = new URLSearchParams({
+    filename: image.filename,
+    subfolder: image.subfolder || '',
+    type: image.type || 'output',
+  });
+  let response = null;
+  try {
+    response = await fetch(`${baseUrl}/view?${params.toString()}`, { signal: options.signal });
+  } catch (error) {
+    throw markAiRequestError(error, { retryable: true });
+  }
+  await ensureOk(response, 'ComfyUI 图片下载失败', { source: options.source || 'comfyui-image-model' });
+  return {
+    buffer: Buffer.from(await response.arrayBuffer()),
+    mime_type: response.headers.get('content-type') || 'image/png',
+  };
+}
+
+async function runComfyUIImageGeneration(app, config, request, options = {}) {
+  const imageConfig = config.image_model || {};
+  const baseUrl = requireBaseUrl(imageConfig.base_url, 'ComfyUI 服务地址缺失，请在设置中填写后保存配置');
+  const overridePrompt = String(options.promptOverride || '').trim();
+  const prompt = overridePrompt || normalizeImagePrompt(request);
+  const size = options.sizeOverride || resolveComfyUIImageSize(imageConfig, request.size);
+  const requestId = createRequestId();
+  const logTitle = resolveAiLogTitle(request, request.title ? `AI生图-${request.title}` : 'AI生图');
+  const logExtra = options.logExtra || {};
+  let responseData = null;
+  let analyticsTracked = false;
+
+  try {
+    const template = await resolveComfyUIWorkflowTemplate(baseUrl, imageConfig, { signal: request.signal });
+    const workflow = buildComfyUIImageWorkflow(template.workflow, prompt, size);
+    writeAiLog(app, config, {
+      request_id: requestId,
+      log_title: logTitle,
+      type: logExtra.pendingType || 'image-pending',
+      provider: 'comfyui',
+      request_mode: 'normal',
+      url: `${baseUrl}/prompt`,
+      request: { prompt, size: `${size.width}x${size.height}`, workflow_source: template.source, workflow },
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    });
+    const submitted = await runWithAiRetry(() => runWithOperationTimeout(
+      (signal) => submitComfyUIPrompt(baseUrl, workflow, { signal }),
+      AI_REQUEST_TIMEOUT_MS,
+      request.signal,
+    ));
+    const promptId = submitted?.prompt_id;
+    if (!promptId) {
+      throw createAiResponseDataError('ComfyUI 未返回任务 ID', submitted);
+    }
+
+    const { entry, images } = await runWithOperationTimeout(
+      (signal) => waitComfyUIImageResult(baseUrl, promptId, { signal }),
+      AI_REQUEST_TIMEOUT_MS,
+      request.signal,
+    );
+    responseData = { prompt_id: promptId, status: entry?.status || null, images };
+    trackAiRequest(app, config, { ai_request_type: 'image' });
+    analyticsTracked = true;
+
+    const image = await runWithOperationTimeout(
+      (signal) => fetchComfyUIImage(baseUrl, images[0], { signal }),
+      AI_REQUEST_TIMEOUT_MS,
+      request.signal,
+    );
+
+    if (options.returnRawImage) {
+      writeAiLog(app, config, {
+        request_id: requestId,
+        log_title: logTitle,
+        type: logExtra.successType || 'image',
+        provider: 'comfyui',
+        request_mode: 'normal',
+        request: { prompt, size: `${size.width}x${size.height}` },
+        response: responseData,
+        result: { filename: images[0].filename },
+        created_at: new Date().toISOString(),
+      });
+      return { responseData, image, workflow_source: template.source };
+    }
+
+    const saved = saveGeneratedImage(app, image);
+    writeAiLog(app, config, {
+      request_id: requestId,
+      log_title: logTitle,
+      type: 'image',
+      provider: 'comfyui',
+      request_mode: 'normal',
+      request: { prompt, size: `${size.width}x${size.height}` },
+      response: responseData,
+      result: saved,
+      created_at: new Date().toISOString(),
+    });
+    return { success: true, title: request.title || '', ...saved };
+  } catch (error) {
+    if (!analyticsTracked) {
+      trackAiRequest(app, config, { ai_request_type: 'image' });
+    }
+    const errorMessage = options.isTest && error?.name === 'AbortError' ? IMAGE_MODEL_TEST_TIMEOUT_MESSAGE : error?.message || 'ComfyUI 生图失败';
+    writeAiLog(app, config, {
+      request_id: requestId,
+      log_title: logTitle,
+      type: logExtra.errorType || 'image-error',
+      provider: 'comfyui',
+      request_mode: 'normal',
+      request: { prompt, size: `${size.width}x${size.height}` },
+      response: getAiErrorLogResponse(error, responseData),
+      error: getAiErrorLogError(error, errorMessage),
+      created_at: new Date().toISOString(),
+    });
+    const finalError = markAiRequestError(copyRawAiErrorResponse(error, new Error(errorMessage)), { retryable: false });
+    emitAiHttpErrorToWindows(finalError);
+    throw finalError;
+  }
+}
+
+async function generateComfyUIImage(app, config, request) {
+  return runComfyUIImageGeneration(app, config, request);
+}
+
+async function testComfyUIImageModel(app, config) {
+  const testRequest = {
+    title: '测试',
+    prompt: '大字报，内容是"易标AI老好了"',
+  };
+  const { image, workflow_source: workflowSource } = await runComfyUIImageGeneration(app, config, testRequest, {
+    returnRawImage: true,
+    isTest: true,
+    logExtra: { pendingType: 'image-test-pending', successType: 'image-test', errorType: 'image-test-error' },
+  });
+  const sourceLabel = workflowSource === 'custom' ? '设置中粘贴的工作流'
+    : workflowSource === 'history' ? '服务器最近成功执行的工作流'
+      : '按服务器已装模型自动组装的工作流';
+  return {
+    success: true,
+    message: `测试成功：ComfyUI 已返回生成的图片（复用${sourceLabel}）`,
+    image_url: '',
+    image_data: image.buffer.toString('base64'),
+    mime_type: image.mime_type || 'image/png',
+  };
+}
 async function generateImageWithConfig(app, config, request) {
   const availability = getImageModelAvailability(config);
   if (!availability.available) {
@@ -1848,6 +2449,10 @@ async function generateImageWithConfig(app, config, request) {
 
   if (config.image_model?.provider === 'google-ai-studio') {
     return generateGoogleImage(app, config, request);
+  }
+
+  if (config.image_model?.provider === 'comfyui') {
+    return generateComfyUIImage(app, config, request);
   }
 
   throw new Error('当前生图服务商暂不支持正文配图');
@@ -2154,6 +2759,10 @@ function createAiService({ app, configStore }) {
         return testGoogleImageModel(app, trackedConfig);
       }
 
+      if (trackedConfig.image_model?.provider === 'comfyui') {
+        return testComfyUIImageModel(app, trackedConfig);
+      }
+
       throw new Error('当前服务商暂不支持测试');
     },
 
@@ -2259,6 +2868,23 @@ function createAiService({ app, configStore }) {
             : [],
           context: Math.max(0, Math.floor(Number(data.model.context) || 0)),
           output: Math.max(0, Math.floor(Number(data.model.output) || 0)),
+          inputModalities: Array.isArray(data.model.inputModalities)
+            ? data.model.inputModalities.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean)
+            : [],
+          outputModalities: Array.isArray(data.model.outputModalities)
+            ? data.model.outputModalities.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean)
+            : [],
+          imageInputStatus: ['supported', 'unsupported', 'mixed', 'unknown'].includes(data.model.imageInputStatus)
+            ? data.model.imageInputStatus
+            : 'unknown',
+          temperatureStatus: ['supported', 'unsupported', 'mixed', 'unknown'].includes(data.model.temperatureStatus)
+            ? data.model.temperatureStatus
+            : 'unknown',
+          concurrencyLimit: Number.isFinite(Number(data.model.concurrencyLimit)) && Number(data.model.concurrencyLimit) > 0
+            ? Math.floor(Number(data.model.concurrencyLimit))
+            : 10,
+          requestMode: data.model.requestMode === 'normal' ? 'normal' : 'stream',
+          sourceCount: Math.max(0, Math.floor(Number(data.model.sourceCount) || 0)),
         },
         syncedAt: data.syncedAt || '',
       };

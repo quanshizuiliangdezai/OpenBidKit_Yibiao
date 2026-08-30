@@ -10,6 +10,7 @@ interface GlobalFactsPageProps {
   globalFactsMode: GlobalFactsMode;
   task?: BackgroundTaskState;
   aiAdjustmentRunning?: boolean;
+  focusGroupRequest?: { groupId: string } | null;
   onGlobalFactsSaved: (globalFacts: GlobalFactGroupState[]) => Promise<void> | void;
   onGlobalFactsConfigChange: (globalFactsMode: GlobalFactsMode) => Promise<void> | void;
 }
@@ -67,6 +68,7 @@ function GlobalFactsPage({
   globalFactsMode,
   task,
   aiAdjustmentRunning = false,
+  focusGroupRequest,
   onGlobalFactsSaved,
   onGlobalFactsConfigChange,
 }: GlobalFactsPageProps) {
@@ -163,6 +165,12 @@ function GlobalFactsPage({
 
     setSelectedGroupId((prev) => globalFacts.some((group) => group.id === prev) ? prev : globalFacts[0].id);
   }, [globalFacts]);
+
+  useEffect(() => {
+    if (focusGroupRequest) {
+      setSelectedGroupId(focusGroupRequest.groupId);
+    }
+  }, [focusGroupRequest]);
 
   useEffect(() => {
     if (!activeGroup) {

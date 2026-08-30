@@ -1,4 +1,12 @@
-<img src="./screenshots/banner.webp" alt="Yibiao usage demo video" width="100%">
+<img src="./screenshots/banner2.webp" alt="Yibiao usage demo video" width="100%">
+
+## 🙏 Sponsors
+
+| Sponsors | Description |
+| --- | --- |
+| ![APIMart_AI](./screenshots/APIMart_AI.jpg) | Thanks to APIMart for sponsoring this project! APIMart is a low-cost API platform for AI image & video generation — GPT-Image-2 from $0.006/image, 160+ images per dollar. One async API covers both image and video: submit a task, get an ID, fetch results via polling or callback. Batch tens of thousands of images without timeouts, switch models without changing code. Pay-as-you-go with no monthly fee — [sign up here](https://s.markup.com.cn/apimart) to get started. |
+| ![JLaudeAPI](./screenshots/JLaudeAPI.png) | Thanks to JLaudeAPI for sponsoring this project!JLaudeAPI is a trusted AI API aggregation platform offering GPT, Claude, Gemini, Grok, leading Chinese LLMs, and mainstream image/video generation models with reliable access.It also provides an enterprise-grade management panel, transparent GPT-Pro account status, invoicing, and corporate payment support—built for business development and production use.Get started via this [registration link](https://s.markup.com.cn/jl).
+ |
 
 # Yibiao Bid Toolbox - AI Bid Proposal Writing Assistant
 
@@ -32,21 +40,23 @@
   <br>
   Yibiao Bid Toolbox is an intelligent bid document creation tool for tendering and bidding scenarios. It is fully open source and includes AI-generated technical proposals, image-and-text generation, commercial bid support, enterprise knowledge base management, duplicate checking, rejection-risk checks, tender information, and more features under development.
   <br>
-  It supports all OpenAI-like AI APIs. GPT, DeepSeek, and Volcano Ark are deeply adapted, and local models can also be connected through Ollama, LM Studio, and similar tools.
+  It supports all OpenAI-compatible AI APIs, as well as local models through Ollama, LM Studio, and similar tools.
   <br>
   <br>
   <strong>❓ What problem does it solve?</strong>
   <br>
-  There are many paid AI bid-writing tools today, but they are extremely expensive. A single proposal can cost tens of yuan, and unless a company reimburses it, small-business workers can hardly afford them. Free tools often have very poor quality. OpenBidKit aims to become the OpenClaw of the bidding field by providing an out-of-the-box, high-quality proposal writing tool. In our tests, generating a 100,000-word bid proposal with DeepSeek V4 Flash costs only about 1 yuan.
+  There are many paid AI bid-writing tools today, but they are extremely expensive. A single proposal can cost tens of yuan, and unless a company reimburses it, small businesses can hardly afford them. Free tools often have very poor quality. OpenBidKit aims to become the OpenClaw of the bidding field by providing an out-of-the-box, high-quality proposal writing tool.
+
+  In a test with gpt-5.6-terra, generating a 110,000-word bid proposal consumed 2,187,250 tokens and cost only CNY 1.03, excluding illustrations.
 </p>
 
 ## 🌐 Official Website
 
 **Online Experience**: [https://yibiao.pro](https://yibiao.pro)  [Get more product information, online demos, and technical support.]
 
-## 💖 Support the Project
+## 💌 Friendly Links
 
-If this project helps you, you can support ongoing maintenance and open-source development on [Afdian](https://afdian.com/a/markup).
+[Yibiao Web Version (provided by a third party)](https://github.com/jdcome/OpenBidKit-Yibiao-Web)
 
 <h2 align="center">✨ Features & Advantages</h2>
 
@@ -100,6 +110,43 @@ If this project helps you, you can support ongoing maintenance and open-source d
   </tr>
 </table>
 
+## Completed Features
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+    <ul>
+      <li>Tender document parsing (18 extracted items)</li>
+      <li>Existing proposal expansion</li>
+      <li>Multi-lot support</li>
+      <li>Multi-stage bidding support</li>
+      <li>Export format settings with preset templates</li>
+      <li>AI-generated images</li>
+      <li>Mermaid rendering</li>
+      <li>HTML drawing</li>
+      <li>No word-count limit</li>
+      <li>Global facts</li>
+    </ul>
+    </td>
+    <td width="33%" valign="top">
+    <ul>
+      <li>Full-document consistency checks</li>
+      <li>Local knowledge base</li>
+      <li>Duplicate checking across multiple bid documents</li>
+      <li>Rejection-risk checks</li>
+      <li>Typo checking</li>
+      <li>Logical fallacy analysis</li>
+      <li>Semantic editing of generated content</li>
+      <li>Plugin system</li>
+      <li>Open API</li>
+      <li>Bid resource downloads</li>
+    </ul>
+    </td>
+    <td width="33%" valign="top">
+    </td>
+  </tr>
+</table>
+
 ## 📦 Download & Usage
 
 ### ⬇️ Download
@@ -109,92 +156,71 @@ Download the latest release from [GitHub Releases](https://github.com/yibiaoai/y
 ### 🎬 Usage Demo
 
 <a href="https://www.bilibili.com/video/BV1sC5i6SE74">
-  <img src="./screenshots/new_home.png" alt="Yibiao usage demo video" width="100%">
+  <img src="./screenshots/home_2.png" alt="Yibiao usage demo video" width="100%">
 </a>
 
 [Watch the usage demo on Bilibili](https://www.bilibili.com/video/BV1sC5i6SE74)
 
 ## 🧑‍💻 Local Development
 
-There is no root-level `package.json` in this repository. The desktop client lives under `client/`, so all client development commands must be run from the `client/` directory.
+The desktop client lives under `client/`. Node.js 22 is recommended. The .NET 10 SDK is also required to debug Open XML features or build local packages.
 
-The client uses Pi Agent exclusively, and the runtime is installed by `npm ci`. Pi's command environment depends on `rg`, `fd`, and `jq`; prepare and verify these tools for your platform before local debugging.
-
-Windows x64:
+### Install and Run
 
 ```powershell
 cd client
 npm ci
-node scripts/prepare-agent-tools.cjs --platform win32 --arch x64
-node scripts/verify-agent-tools.cjs --platform win32 --arch x64
 npm run dev
 ```
 
-macOS Apple Silicon:
+The Pi Agent SDK and its required command-line tools are bundled with the project and do not need to be installed separately.
 
-```bash
-cd client
-npm ci
-node scripts/prepare-agent-tools.cjs --platform darwin --arch arm64
-node scripts/verify-agent-tools.cjs --platform darwin --arch arm64
-npm run dev
-```
-
-macOS Intel:
-
-```bash
-cd client
-npm ci
-node scripts/prepare-agent-tools.cjs --platform darwin --arch x64
-node scripts/verify-agent-tools.cjs --platform darwin --arch x64
-npm run dev
-```
-
-End users who install a GitHub Release package do not need to run these scripts. The release workflow prepares and injects the platform-specific agent command tools automatically. Before building a local installer, run the matching `prepare-agent-tools.cjs` and `verify-agent-tools.cjs` commands.
-
-Regular build verification:
+### Build and Package
 
 ```powershell
 cd client
-npm run build
+npm run build       # TypeScript checks and Vite build
+npm run dist:win    # Windows x64 installer and ZIP
+npm run dist:mac    # macOS Intel / Apple Silicon DMG and ZIP
 ```
+
+Packaging artifacts are written to `client/release/`.
 
 ## 🛠️ Technical Architecture
 
-The current product is an independent desktop client under `client/`. It does not depend on the legacy `frontend/` or `backend/` structure.
-
-- **Desktop**: Electron Main / Preload provides local file access, configuration, export, and background task capabilities.
-- **Renderer**: Vite + React + TypeScript, with global CSS and Radix UI primitives.
-- **Features**: Technical proposal, knowledge base, duplicate-check workspace, rejection-risk checklist workspace, and settings.
-- **Agent Runtime**: Pi Agent uses the text-model configuration, a dedicated AI proxy, bundled command tools, and one global serial queue.
-- **Local Data**: Configuration, workspace data, and generated caches are stored under Electron `userData`.
-- **Packaging**: Built for Windows / macOS with electron-builder.
+- **Desktop**: Electron Main / Preload provides local capabilities, which the Renderer accesses through `window.yibiao`.
+- **UI**: Vite + React + TypeScript with global CSS and Radix UI.
+- **Data and Tasks**: Configuration is stored in local files and business state in SQLite. Long-running tasks execute in the Main process and can be resumed.
+- **AI and Agent**: AI Service manages model requests, while Pi Agent runs agent tasks in independent Runtime / Session instances.
+- **Documents and Online Services**: Supports local or MinerU parsing, Open XML, and local image rendering. Cloudflare Worker provides notices, resources, plugins, model information, licensing, and analytics services.
 
 ### 🏗️ Project Structure
 
 ```
 Yibiao Bid Toolbox/
-├── client/                    # Current desktop client
+├── client/                    # Electron desktop client
 │   ├── electron/              # Main, Preload, IPC, and local services
-│   ├── src/                   # Renderer source code
-│   │   ├── app/               # Routing, menu, and providers
-│   │   ├── features/          # Technical proposal, knowledge base, and other modules
-│   │   └── shared/            # Shared types, AI helpers, UI, and utilities
-│   ├── assets/                # Icons and static assets
-│   └── package.json           # Client dependencies and packaging config
-├── analytics/                 # Independent analytics service
-├── tools/                     # Independent document parsing and MinerU validation tools
-└── README.md                  # Chinese README
+│   ├── src/                   # Renderer application source
+│   │   ├── app/               # Routing, menus, and global providers
+│   │   ├── components/        # Application shell components
+│   │   ├── features/          # Business feature modules
+│   │   ├── shared/            # Shared types, UI, and utilities
+│   │   └── styles/            # Global styles and design tokens
+│   ├── scripts/               # Build, resource preparation, and verification scripts
+│   ├── vendor/agent-tools/    # Pi Agent command-line tools for each platform
+│   ├── assets/                # Client icons and static assets
+│   └── package.json           # Client dependencies and packaging configuration
+├── openxmlhelper/             # .NET 10 Word / Open XML helper
+│   └── src/OpenXmlHelper/     # Helper source code
+├── analytics/                 # Cloudflare online services
+│   ├── worker/                # APIs, aggregation jobs, and storage logic
+│   └── dashboard/             # Administration dashboard
+├── sql/
+│   └── workspace_schema.sql   # Target workspace SQLite schema
+├── .github/workflows/         # CI and client release workflows
+├── screenshots/               # README image assets
+└── README.md                  # Chinese project README
 ```
-
-## 🤝 Contributing
-
-Contributions are welcome.
-
-1. **🐛 Bug Reports**: Report bugs in [Issues](https://github.com/yibiaoai/yibiao-simple/issues).
-2. **💡 Feature Requests**: Suggest new features and improvements.
-3. **🔧 Code Contributions**: Fork the repository and submit a pull request.
-4. **📖 Documentation**: Help improve documentation and usage guides.
 
 ## 🍉 Acknowledgements
 
@@ -255,9 +281,40 @@ People who provide requirement analysis, technical support, test files, useful f
 <p align="center">cc</p>
     </td>
     <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/08/24/20260824134144411.png)
+<p align="center">Giants</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/08/24/20260824134333132.png)
+<p align="center">Anna (AI Study Club)</p>
+    </td>
+    <td width="20%" valign="top">
+    </td>
+    <td width="20%" valign="top">
+    </td>
+    <td width="20%" valign="top">
+    </td>
+    <td width="20%" valign="top">
     </td>
   </tr>
 </table>
+
+### 🤝 Contributing
+
+Contributions are welcome.
+
+1. **🐛 Bug Reports**: Report bugs in [Issues](https://github.com/yibiaoai/yibiao-simple/issues).
+2. **💡 Feature Requests**: Suggest new features and improvements.
+3. **🔧 Code Contributions**: Fork the repository and submit a pull request.
+4. **📖 Documentation**: Help improve documentation and usage guides.
+
+## 💖 Support the Project
+
+If this project helps you, you can support ongoing maintenance and open-source development on [Afdian](https://afdian.com/a/markup).
 
 ## 📄 License
 

@@ -1,4 +1,12 @@
-<img src="./screenshots/banner.webp" alt="易标使用演示视频" width="100%">
+<img src="./screenshots/banner2.webp" alt="易标使用演示视频" width="100%">
+
+## 🙏 赞助商
+
+| 赞助商 | 说明 |
+| --- | --- |
+| ![APIMart_AI](./screenshots/APIMart_AI.jpg) | 感谢 APIMart 赞助了本项目！APIMart 是专注 AI 图片/视频生成的低价 API 平台，GPT-Image-2 低至 $0.006/张，1 美元可出图 160+ 张。图片、视频一套异步 API 通吃，提交任务拿 ID、回调取结果，跑批万张不超时、换模型不改代码。按量付费、无月费，通过此[注册链接](https://s.markup.com.cn/apimart)注册即可开用。 |
+| ![JLaudeAPI](./screenshots/JLaudeAPI.png) | 感谢 JLaudeAPI 赞助了本项目！JLaudeAPI 是老牌 AI 聚合 API 平台，汇集 GPT、Claude、Gemini、Grok、国产大模型，同时覆盖主流生图、视频生成模型，全量模型稳定奔放。配备企业级管理面板，GPT‑pro 账号公示透明；支持开票、对公支付，面向企业开发与生产场景，让你花的每一分钱都发挥它的价值。通过此[注册链接](https://s.markup.com.cn/jl)开通使用。 |
+
 
 # 易标投标工具箱 - AI智能标书写作助手
 
@@ -33,12 +41,14 @@
   <br>
   易标投标工具箱是一款面向招投标场景的智能标书制作工具，完全开源，包括AI生成技术方案、图文生成、商务标、企业知识库管理、标书查重、废标项检查、标讯等，更多功能还在开发中。
   <br>
-  支持OpenAI like模式的所有AI api，目前已深度适配GPT、DeepSeek、火山方舟三个平台，也支持ollama、lm studio等接入本地模型。
+  支持OpenAI like模式的所有AI api，也支持ollama、lm studio等接入本地模型。
   <br>
   <br>
   <strong>❓ 解决什么问题</strong>
   <br>
-  现在AI写标书的付费工具非常多，但是价格都超级高，一份标书几十块，除非企业给报销，小企业的牛马根本用不起。免费的工具质量又非常差，OpenBidkit力争做投标领域的OpenClaw，提供开箱即用的优质标书编写工具，亲测一份10万字的投标标书，用deepseek v4 flash 生成只需要1元。
+  现在AI写标书的付费工具非常多，但是价格都超级高，一份标书几十块，除非企业给报销，小企业的牛马根本用不起。免费的工具质量又非常差，OpenBidkit力争做投标领域的OpenClaw，提供开箱即用的优质标书编写工具。  
+
+  使用gpt-5.6-terra测试，生成11万字的标书，消耗2,187,250 token，仅需1.03元。（未统计配图）
 </p>
 
 
@@ -46,9 +56,10 @@
 
 **在线体验**: [https://yibiao.pro](https://yibiao.pro)  【获取更多产品信息、在线体验和技术支持。】
 
-## 💖 支持项目
+## 💌 友情链接
 
-如果这个项目对你有帮助，欢迎通过 [爱发电](https://afdian.com/a/markup) 支持项目维护和持续开源。
+【[易标 Web 版 (由第三方提供)](https://github.com/jdcome/OpenBidKit-Yibiao-Web)】
+
 
 <h2 align="center">✨ 核心功能与优势</h2>
 <p align="center">
@@ -101,6 +112,42 @@
   </tr>
 </table>
 
+## 已完成功能
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+    <ul>
+      <li>招标文件解析(18个解析项) </li>
+      <li>已有方案扩写</li>
+      <li>多标段支持</li>
+      <li>多阶段投标支持</li>
+      <li>导出格式设置(有预设模版)  </li>
+      <li>AI生成图片</li>
+      <li>mermaid图片渲染</li>
+      <li>html绘图</li>
+      <li>字数无上限</li>
+      <li>全局事实设定</li>
+    </ul>
+    </td>
+    <td width="33%" valign="top">
+    <ul>
+      <li>全文一致性检查</li>
+      <li>本地知识库</li>
+      <li>多份标书查重</li>
+      <li>废标项检查</li>
+      <li>错别字检查</li>
+      <li>逻辑谬误分析</li>
+      <li>语义化修改生成结果</li>
+      <li>插件系统</li>
+      <li>开放API</li>
+      <li>投标资源下载</li>
+    </ul>
+    </td>
+    <td width="33%" valign="top">
+    </td>
+  </tr>
+</table>
 
 
 ## 📦 下载与使用
@@ -112,16 +159,16 @@
 ### 🎬 使用方式
 
 <a href="https://www.bilibili.com/video/BV1sC5i6SE74">
-  <img src="./screenshots/new_home.png" alt="易标使用演示视频" width="100%">
+  <img src="./screenshots/home_2.png" alt="易标使用演示视频" width="100%">
 </a>
 
 [点击前往 Bilibili 观看使用演示视频](https://www.bilibili.com/video/BV1sC5i6SE74)
 
 ## 🧑‍💻 本地开发调试
 
-本仓库根目录没有 `package.json`，桌面客户端代码在 `client/`，开发命令都需要在 `client/` 目录下执行。
+桌面客户端代码位于 `client/`，建议使用 Node.js 22；调试 Open XML 功能或本地打包还需要安装 .NET 10 SDK。
 
-客户端统一使用 Pi Agent，SDK 随 `npm ci` 安装。Pi 使用的 `rg`、`fd`、`jq` 已按 Windows x64、macOS Apple Silicon 和 macOS Intel 分别保存在仓库中，日常开发和打包无需下载工具。三个平台的开发命令一致：
+### 安装与启动
 
 ```powershell
 cd client
@@ -129,71 +176,54 @@ npm ci
 npm run dev
 ```
 
-普通用户下载 GitHub Release 安装包后不需要额外准备；发布流程只校验仓库中对应平台的工具，并将该平台目录注入安装包。
+Pi Agent SDK 及所需命令工具已随项目提供，无需单独安装。
 
-升级内置命令工具时，维护者在 `client/` 目录按目标平台执行：
-
-```powershell
-node scripts/prepare-agent-tools.cjs --platform win32 --arch x64
-node scripts/prepare-agent-tools.cjs --platform darwin --arch x64
-node scripts/prepare-agent-tools.cjs --platform darwin --arch arm64
-```
-
-脚本每次只替换指定平台目录，其他平台资源保持不变；完成三套资源升级后统一提交。
-
-常规构建验证：
+### 构建与打包
 
 ```powershell
 cd client
-npm run build
+npm run build       # TypeScript 检查与 Vite 构建
+npm run dist:win    # Windows x64 安装包和 ZIP
+npm run dist:mac    # macOS Intel / Apple Silicon DMG 和 ZIP
 ```
 
-### Windows 本地打包
-
-完成依赖安装后，在 `client/` 目录执行：
-
-```powershell
-npm run dist:win
-```
-
-打包生成的 x64 安装包和免安装 ZIP 位于 `client/release/`。
+打包产物位于 `client/release/`。
 
 ## 🛠️ 技术架构
 
-当前产品主体是 `client/` 下的独立桌面客户端，不依赖旧 `frontend/`、`backend/` 结构。
-
-- **桌面端**：Electron Main / Preload 提供本地文件、配置、导出和后台任务能力
-- **界面层**：Vite + React + TypeScript，使用全局 CSS 和 Radix UI 基础组件
-- **业务模块**：技术方案、知识库、标书查重、废标项检查、设置页
-- **智能体运行时**：Pi Agent 使用文本模型配置、独立 AI Proxy、命令工具环境和全局串行队列
-- **本地数据**：配置、工作区、生成缓存保存在 Electron `userData` 目录
-- **打包发布**：使用 electron-builder 构建 Windows / macOS 客户端
+- **桌面端**：Electron Main / Preload 提供本地能力，Renderer 通过 `window.yibiao` 调用
+- **界面层**：Vite + React + TypeScript，使用全局 CSS 和 Radix UI
+- **数据与任务**：配置保存在本地文件，业务状态存入 SQLite；耗时任务在 Main 后台运行并支持恢复
+- **AI 与 Agent**：AI Service 统一管理模型请求，Pi Agent 使用独立 Runtime / Session 执行智能体任务
+- **文档与在线服务**：支持本地或 MinerU 解析、Open XML 和本地图片渲染；Cloudflare Worker 提供公告、资源、插件、模型信息、许可证及统计服务
 
 ### 🏗️ 项目结构
 
 ```
 易标投标工具箱/
-├── client/                    # 当前桌面客户端主体
-│   ├── electron/              # Main、Preload、IPC、本地服务
+├── client/                    # Electron 桌面客户端
+│   ├── electron/              # Main、Preload、IPC 与本地服务
 │   ├── src/                   # Renderer 应用源码
-│   │   ├── app/               # 路由、菜单、Provider
-│   │   ├── features/          # 技术方案、知识库等业务模块
-│   │   └── shared/            # 通用类型、AI、UI、工具函数
-│   ├── assets/                # 图标与静态资源
+│   │   ├── app/               # 路由、菜单与全局 Provider
+│   │   ├── components/        # 应用壳层组件
+│   │   ├── features/          # 各业务功能模块
+│   │   ├── shared/            # 通用类型、UI 与工具函数
+│   │   └── styles/            # 全局样式与设计变量
+│   ├── scripts/               # 构建、资源准备与校验脚本
+│   ├── vendor/agent-tools/    # 各平台 Pi Agent 命令工具
+│   ├── assets/                # 客户端图标与静态资源
 │   └── package.json           # 客户端依赖和打包配置
-├── analytics/                 # 独立埋点服务
-├── tools/                     # 独立文档解析与 MinerU 验证工具
-└── README.md                  # 项目文档
+├── openxmlhelper/             # .NET 10 Word / Open XML 助手
+│   └── src/OpenXmlHelper/     # 助手程序源码
+├── analytics/                 # Cloudflare 在线服务
+│   ├── worker/                # API、聚合任务与存储逻辑
+│   └── dashboard/             # 管理后台
+├── sql/
+│   └── workspace_schema.sql   # 工作区 SQLite 目标结构
+├── .github/workflows/         # CI 与客户端发布流程
+├── screenshots/               # README 图片资源
+└── README.md                  # 中文项目说明
 ```
-
-## 🤝 贡献指南
-
-欢迎各种形式的贡献！
-
-1. **🐛 问题反馈**: 在 [Issues](https://github.com/yibiaoai/yibiao-simple/issues) 中报告bug
-2. **💡 功能建议**: 提出新功能需求和改进建议  
-3. **🔧 代码贡献**: Fork项目，提交Pull Request
-4. **📖 文档完善**: 帮助改进文档和使用说明
 
 ## 🍉 鸣谢
 - 感谢所有用户的支持与信任
@@ -252,9 +282,40 @@ npm run dist:win
 <p align="center">cc</p>
     </td>
     <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/08/24/20260824134144411.png)
+<p align="center">Giants</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/08/24/20260824134333132.png)
+<p align="center">Anna（AI研习社）</p>
+    </td>
+    <td width="20%" valign="top">
+    </td>
+    <td width="20%" valign="top">
+    </td>
+    <td width="20%" valign="top">
+    </td>
+    <td width="20%" valign="top">
     </td>
   </tr>
 </table>
+
+### 🤝 贡献指南
+
+欢迎各种形式的贡献！
+
+1. **🐛 问题反馈**: 在 [Issues](https://github.com/yibiaoai/yibiao-simple/issues) 中报告bug
+2. **💡 功能建议**: 提出新功能需求和改进建议  
+3. **🔧 代码贡献**: Fork项目，提交Pull Request
+4. **📖 文档完善**: 帮助改进文档和使用说明
+
+## 💖 支持项目
+
+如果这个项目对你有帮助，欢迎通过 [爱发电](https://afdian.com/a/markup) 支持项目维护和持续开源。
 
 ## 📄 许可证
 
