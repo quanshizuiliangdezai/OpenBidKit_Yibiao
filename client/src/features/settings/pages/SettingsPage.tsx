@@ -4,7 +4,7 @@ import { useAuth } from '../../../shared/auth/AuthContext';
 import { DetailHelpLink, FloatingToolbar, InputWithAction, useAutoAnswer, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { AgentModeScenariosConfig, AgentRuntimeDescriptor, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
+import type { AgentModeScenariosConfig, AgentRuntimeDescriptor, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'components' | 'agent' | 'about';
@@ -85,16 +85,15 @@ const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_TEXT_TEMPERATURE = 0.7;
 
-const textProviderDefaults: Record<ConfiguredTextModelProvider, TextModelConfig> = {
-  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  longcat: { api_key: '', base_url: 'https://api.longcat.chat/openai/v1', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  agnes: { api_key: '', base_url: 'https://apihub.agnes-ai.com/v1', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  custom: { api_key: '', base_url: '', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+const textProviderDefaults: Record<TextModelProvider, TextModelConfig> = {
+  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, multimodal_enabled: false, request_mode: 'stream' },
+  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, multimodal_enabled: false, request_mode: 'stream' },
+  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, multimodal_enabled: false, request_mode: 'stream' },
+  agnes: { api_key: '', base_url: 'https://apihub.agnes-ai.com/v1', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, multimodal_enabled: false, request_mode: 'stream' },
+  custom: { api_key: '', base_url: '', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, multimodal_enabled: false, request_mode: 'stream' },
 };
 
-const textProviderApiKeyUrls: Partial<Record<ConfiguredTextModelProvider, string>> = {
+const textProviderApiKeyUrls: Partial<Record<TextModelProvider, string>> = {
   jinlong: 'https://s.markup.com.cn/jl',
   volcengine: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
   deepseek: 'https://platform.deepseek.com/api_keys',
@@ -146,7 +145,7 @@ function parseTextTemperatureInput(value: string): number {
   return normalizeTextTemperature(value);
 }
 
-function normalizeTextModelProfile(provider: ConfiguredTextModelProvider, profile?: Partial<TextModelConfig>): TextModelConfig {
+function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partial<TextModelConfig>): TextModelConfig {
   const defaults = textProviderDefaults[provider];
   const baseUrl = provider === 'custom' ? profile?.base_url ?? defaults.base_url : defaults.base_url;
   return {
@@ -159,21 +158,18 @@ function normalizeTextModelProfile(provider: ConfiguredTextModelProvider, profil
     temperature_enabled: profile?.temperature_enabled ?? defaults.temperature_enabled,
     temperature: normalizeTextTemperature(profile?.temperature ?? defaults.temperature),
     request_mode: normalizeAiRequestMode(profile?.request_mode ?? defaults.request_mode),
+    multimodal_enabled: profile?.multimodal_enabled ?? defaults.multimodal_enabled,
   };
 }
 
 function normalizeTextModelProfiles(
-  profiles?: Partial<Record<ConfiguredTextModelProvider, TextModelConfig>>,
-  activeProvider?: ConfiguredTextModelProvider,
+  profiles?: Partial<Record<TextModelProvider, TextModelConfig>>,
+  activeProvider?: TextModelProvider,
 ): TextModelProfiles {
   const nextProfiles = textModelProviders.reduce((normalizedProfiles, provider) => ({
     ...normalizedProfiles,
     [provider.value]: normalizeTextModelProfile(provider.value, profiles?.[provider.value]),
   }), {} as TextModelProfiles);
-
-  if (activeProvider === 'longcat' || profiles?.longcat) {
-    nextProfiles.longcat = normalizeTextModelProfile('longcat', profiles?.longcat);
-  }
 
   return nextProfiles;
 }
@@ -189,6 +185,7 @@ function textProfileFromState(textModel: SettingsPageState['textModel']): TextMo
     temperature_enabled: textModel.temperature_enabled,
     temperature: normalizeTextTemperature(textModel.temperature),
     request_mode: textModel.request_mode,
+    multimodal_enabled: false,
   };
 }
 
@@ -198,6 +195,7 @@ const imageProviders: Array<{ value: ImageModelProvider; label: string }> = [
   { value: 'google-ai-studio', label: 'Google AI Studio' },
   { value: 'agnes', label: 'Agnes AI' },
   { value: 'custom', label: '自定义 OpenAI-like' },
+  { value: 'comfyui', label: 'ComfyUI' },
 ];
 
 const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
@@ -293,6 +291,19 @@ const imageProviderDefaults: ImageModelProfiles = {
     tested_at: '',
     last_error: '',
   },
+  comfyui: {
+    provider: 'comfyui',
+    base_url: 'http://127.0.0.1:8188',
+    api_key: '',
+    model_name: '',
+    image_size: '1024x1024',
+    request_mode: 'normal',
+    concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
+    comfyui_workflow: '',
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
+  },
 };
 
 const imageProviderApiKeyUrls: Record<ImageModelProvider, string> = {
@@ -301,6 +312,7 @@ const imageProviderApiKeyUrls: Record<ImageModelProvider, string> = {
   'google-ai-studio': 'https://aistudio.google.com/api-keys',
   agnes: 'https://platform.agnes-ai.com/settings/apiKeys',
   custom: '',
+  comfyui: '',
 };
 
 const imageProviderLabels: Record<ImageModelProvider, string> = {
@@ -309,6 +321,7 @@ const imageProviderLabels: Record<ImageModelProvider, string> = {
   'google-ai-studio': 'Google AI Studio',
   agnes: 'Agnes AI',
   custom: '自定义生图服务',
+  comfyui: 'ComfyUI',
 };
 
 function getImageBaseUrlDescription(provider: ImageModelProvider) {
@@ -711,6 +724,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       temperature_enabled: activeTextProfile.temperature_enabled,
       temperature: activeTextProfile.temperature,
       request_mode: activeTextProfile.request_mode,
+      multimodal_enabled: activeTextProfile.multimodal_enabled,
       image_model: activeImageProfile,
       image_model_profiles: imageModelProfiles,
       // 语义检索复用文本模型：只保存 embedding 模型名（留空则运行期复用文本模型 model_name）
@@ -1776,9 +1790,6 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 value={state.textModel.provider}
                 onChange={(event) => updateTextModelProvider(event.target.value as TextModelProvider)}
               >
-                {state.textModel.provider === 'longcat' && (
-                  <option value="longcat" disabled>龙猫（历史配置）</option>
-                )}
                 {textModelProviders.map((provider) => (
                   <option value={provider.value} key={provider.value}>{provider.label}</option>
                 ))}
