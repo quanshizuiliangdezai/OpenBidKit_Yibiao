@@ -137,6 +137,7 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
       </nav>
 
       <div className="sidebar-footer">
+        {collapsed ? wrapTooltip('设置', renderSettingsButton(activeSection, onSectionChange)) : renderSettingsButton(activeSection, onSectionChange)}
         {renderUserCard(auth.employee, async () => {
           const ok = await confirm({
             title: '退出登录',
@@ -237,6 +238,28 @@ function wrapTooltip(label: string, child: ReactElement) {
         </Tooltip.Content>
       </Tooltip.Portal>
     </Tooltip.Root>
+  );
+}
+
+function renderSettingsButton(activeSection: SectionId, onSectionChange: (section: SectionId) => void) {
+  const isActive = activeSection === 'settings';
+
+  return (
+    <button
+      type="button"
+      className={`settings-trigger ${isActive ? 'is-active' : ''}`}
+      onClick={() => onSectionChange('settings')}
+      aria-current={isActive ? 'page' : undefined}
+      aria-label="设置"
+    >
+      <span className="nav-icon" aria-hidden="true">
+        <GearIcon />
+      </span>
+      <span className="settings-copy">
+        <strong>设置</strong>
+        <small>模型与解析配置</small>
+      </span>
+    </button>
   );
 }
 
