@@ -15,7 +15,7 @@ OUR_MODS=(
   "client/electron/ipc/syncIpc.cjs|registerSyncIpc"
   "client/src/features/settings/pages/AccountPage.tsx|AccountPage"
   "client/electron/preload.cjs|sync: {"
-  "client/src/shared/types/ipc.ts|SyncPushResult"
+  "client/src/shared/types/ipc.ts|KbAuthEmployee"
   "client/src/features/knowledge-base/pages/KnowledgeBasePage.tsx|syncToTeam"
   "client/electron/services/configStore.cjs|normalizeAccount"
   "client/src/app/menuConfig.ts|id: 'account',"
