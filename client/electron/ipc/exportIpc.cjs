@@ -1,9 +1,8 @@
 const { ipcMain, shell } = require('electron');
 
-function registerExportIpc({ exportService, donationService }) {
+function registerExportIpc({ exportService }) {
   ipcMain.handle('export:word', async (event, payload = {}) => {
     const requestId = payload.requestId || payload.request_id;
-    const donationPrompt = donationService.recordWordExport({ deferPrompt: true });
     const sendProgress = (progress) => {
       event.sender.send('export:word-progress', { requestId, ...progress });
     };
@@ -17,8 +16,6 @@ function registerExportIpc({ exportService, donationService }) {
         message: error.message || '导出 Word 失败',
       });
       throw error;
-    } finally {
-      donationService.showPrompt(donationPrompt);
     }
   });
 

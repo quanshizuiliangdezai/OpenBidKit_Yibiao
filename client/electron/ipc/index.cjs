@@ -4,7 +4,6 @@ const { registerAiIpc } = require('./aiIpc.cjs');
 const { registerAutoConfirmationIpc } = require('./autoConfirmationIpc.cjs');
 const { registerConfigIpc } = require('./configIpc.cjs');
 const { registerDeveloperIpc } = require('./developerIpc.cjs');
-const { registerDonationIpc } = require('./donationIpc.cjs');
 const { registerDuplicateCheckIpc } = require('./duplicateCheckIpc.cjs');
 const { registerExportIpc } = require('./exportIpc.cjs');
 const { registerFileIpc } = require('./fileIpc.cjs');
@@ -23,7 +22,6 @@ const { createAiService } = require('../services/aiService.cjs');
 const { createAutoConfirmationService } = require('../services/autoConfirmationService.cjs');
 const { createConfigStore } = require('../services/configStore.cjs');
 const { createDeveloperExpansionReplaceTestService } = require('../services/developerExpansionReplaceTest.cjs');
-const { createDonationService } = require('../services/donationService.cjs');
 const { createDuplicateCheckService } = require('../services/duplicateCheckService.cjs');
 const { createDuplicateCheckStore } = require('../services/duplicateCheckStore.cjs');
 const { createCheckResultExportService } = require('../services/checkResultExportService.cjs');
@@ -355,11 +353,6 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     }
   });
   const developerExpansionReplaceTestService = createDeveloperExpansionReplaceTestService({ aiService });
-  const donationService = createDonationService({
-    app,
-    onPrompt: (payload) => sendToWebContents(mainWindow.webContents, 'donation:prompt', payload),
-    onPaid: () => sendToWebContents(mainWindow.webContents, 'donation:paid'),
-  });
   const autoConfirmationService = createAutoConfirmationService({ configStore });
   const agentService = createAgentService({ app, configStore, aiService, licenseService, autoConfirmationService });
   const fileService = createFileService({ app, configStore });
@@ -371,7 +364,6 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   let gpuTrialRelaunchStarted = false;
 
   const closeServices = async () => {
-    donationService.close?.();
     await agentService.close?.();
     autoConfirmationService.close?.();
     await openXmlHelperService.close?.();
@@ -455,13 +447,12 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     openDeveloperAgentMonitorWindow,
     developerExpansionReplaceTestService,
   });
-  registerDonationIpc({ donationService });
   registerLicenseIpc({ licenseService });
   registerAiIpc({ aiService });
   registerAgentIpc({ agentService });
   registerAutoConfirmationIpc({ autoConfirmationService });
   registerFileIpc({ fileService });
-  registerExportIpc({ exportService, donationService });
+  registerExportIpc({ exportService });
   registerSystemFontIpc({ systemFontService });
   registerKbAuthIpc({ kbAuthService, mainWindow });
   // knowledgeBaseStore 仅在 registerWorkspaceDatabaseServices 内注册 IPC 时使用（fence 服务实例）；
