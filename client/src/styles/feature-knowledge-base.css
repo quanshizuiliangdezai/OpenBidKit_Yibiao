@@ -503,12 +503,19 @@
   box-shadow: 0 12px 28px rgba(33, 116, 253, 0.16);
 }
 
-.knowledge-folder-row,
-.knowledge-document-title-main {
+.knowledge-folder-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.knowledge-document-title-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -607,9 +614,18 @@
 }
 
 .knowledge-document-name {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 4px;
   min-width: 0;
+  width: 100%;
+}
+
+.knowledge-document-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 .knowledge-entity-id {
@@ -629,6 +645,10 @@
   color: var(--yb-text-muted);
   font-size: 12px;
   line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 .knowledge-folder-card small,
@@ -702,6 +722,8 @@
   font-weight: 700;
   background: rgba(148, 163, 184, 0.12);
   border-radius: 999px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .knowledge-status.is-success {

@@ -2617,7 +2617,7 @@ function KnowledgeBasePage() {
                         </label>
                         <div className="knowledge-document-title-main">
                           <div className="knowledge-document-name">
-                            <strong>{document.file_name}</strong>
+                            <strong title={document.file_name}>{document.file_name}</strong>
                             {developerMode && <code className="knowledge-entity-id">文档ID：{document.id}</code>}
                           </div>
                           <small className="knowledge-document-subtitle">
