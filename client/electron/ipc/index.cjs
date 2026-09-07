@@ -172,6 +172,7 @@ const workspaceDatabaseChannels = [
   'rejection-check:export-excel',
   'rejection-check:clear',
   'knowledge-base:list',
+  'knowledge-base:search',
   'knowledge-base:create-folder',
   'knowledge-base:rename-folder',
   'knowledge-base:delete-folder',

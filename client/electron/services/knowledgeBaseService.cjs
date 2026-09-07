@@ -2185,6 +2185,9 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       }
       return knowledgeBaseStore.list();
     },
+    search(request) {
+      return knowledgeBaseStore.search(request);
+    },
 
     createFolder(name) {
       return knowledgeBaseStore.createFolder(name);
