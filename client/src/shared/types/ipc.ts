@@ -1,7 +1,8 @@
 import type { AiHttpErrorPayload, ChatCompletionRequest, JsonCompletionRequest } from './ai';
+import type { OfficialAccountState, OfficialEmailCredentials, OfficialEmailPurpose, OfficialRechargeOption, OfficialRechargeOrder } from './officialAccount';
 import type { DuplicateCheckWorkspacePatch, DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelInfoResult, ModelListResult, TextModelTestResult, UpdateChannel } from './config';
-import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMutationResult, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
+import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMutationResult, KnowledgeBaseSearchRequest, KnowledgeBaseSearchPage, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspacePatch, RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
 import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../../features/technical-plan/types';
 import type { FeasibilityProjectInfo, FeasibilityReportState, FeasibilityReportStep, FeasibilitySaveOutlineRequest, FeasibilitySourceFile } from '../../features/feasibility-report/types';
@@ -769,6 +770,19 @@ export interface YibiaoBridge {
     importOfflineFile: () => Promise<LicenseOfflineActivationResult>;
     activateOfflineCode: (code: string) => Promise<LicenseOfflineActivationResult>;
   };
+  officialAccount: {
+    getState: () => Promise<OfficialAccountState>;
+    getRechargeOptions: () => Promise<OfficialRechargeOption[]>;
+    createRechargeOrder: (input: { optionId: string }) => Promise<OfficialRechargeOrder>;
+    getRechargeOrders: () => Promise<OfficialRechargeOrder[]>;
+    getRechargeOrder: (id: string) => Promise<OfficialRechargeOrder>;
+    closeRechargeOrder: (id: string) => Promise<OfficialRechargeOrder>;
+    onRechargeOrderChanged: (callback: (order: OfficialRechargeOrder) => void) => () => void;
+    onStateChanged: (callback: (state: OfficialAccountState) => void) => () => void;
+    sendEmailCode: (input: { email: string; purpose: OfficialEmailPurpose }) => Promise<boolean>;
+    loginWithEmail: (input: OfficialEmailCredentials) => Promise<OfficialAccountState>;
+    bindEmail: (input: OfficialEmailCredentials) => Promise<OfficialAccountState>;
+  };
   ai: {
     chat: (request: ChatCompletionRequest) => Promise<string>;
     requestJson: <TResult = unknown>(request: JsonCompletionRequest) => Promise<TResult>;
@@ -818,6 +832,7 @@ export interface YibiaoBridge {
   };
   knowledgeBase: {
     list: () => Promise<KnowledgeBaseIndex>;
+    search: (request: KnowledgeBaseSearchRequest) => Promise<KnowledgeBaseSearchPage>;
     createFolder: (name: string) => Promise<KnowledgeFolder>;
     renameFolder: (folderId: string, name: string) => Promise<KnowledgeFolder>;
     reorderFolder: (draggedFolderId: string, targetFolderId: string, position: 'before' | 'after') => Promise<KnowledgeBaseIndexMutationResult>;

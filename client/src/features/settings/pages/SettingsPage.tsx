@@ -86,6 +86,7 @@ const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_TEXT_TEMPERATURE = 0.7;
 
 const textProviderDefaults: Record<TextModelProvider, TextModelConfig> = {
+  official: { api_key: '', base_url: '', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
   jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, multimodal_enabled: false, request_mode: 'stream' },
   volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, multimodal_enabled: false, request_mode: 'stream' },
   deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, multimodal_enabled: false, request_mode: 'stream' },
@@ -555,6 +556,7 @@ const initialState: SettingsPageState = {
   },
   imageModelProfiles: createDefaultImageModelProfiles(),
   embeddingModelName: '',
+  officialApiModelType: 'cost-effective',
   components: {
     file_parser: {
       provider: 'local',
@@ -724,6 +726,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       temperature_enabled: activeTextProfile.temperature_enabled,
       temperature: activeTextProfile.temperature,
       request_mode: activeTextProfile.request_mode,
+      official_api_model_type: state.officialApiModelType,
       multimodal_enabled: activeTextProfile.multimodal_enabled,
       image_model: activeImageProfile,
       image_model_profiles: imageModelProfiles,

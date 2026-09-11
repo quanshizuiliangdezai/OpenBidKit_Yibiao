@@ -4,6 +4,7 @@ function registerKnowledgeBaseIpc({ knowledgeBaseService }) {
   ipcMain.handle('knowledge-base:get-migration-status', () => knowledgeBaseService.getMigrationStatus());
   ipcMain.handle('knowledge-base:migrate-legacy', () => knowledgeBaseService.migrateLegacy());
   ipcMain.handle('knowledge-base:list', () => knowledgeBaseService.list());
+  ipcMain.handle('knowledge-base:search', (_event, request) => knowledgeBaseService.search(request));
   ipcMain.handle('knowledge-base:create-folder', (_event, name) => knowledgeBaseService.createFolder(name));
   ipcMain.handle('knowledge-base:rename-folder', (_event, folderId, name) => knowledgeBaseService.renameFolder(folderId, name));
   ipcMain.handle('knowledge-base:reorder-folder', (_event, draggedFolderId, targetFolderId, position) => knowledgeBaseService.reorderFolder(draggedFolderId, targetFolderId, position));
