@@ -9,7 +9,7 @@ const { registerExportIpc } = require('./exportIpc.cjs');
 const { registerFileIpc } = require('./fileIpc.cjs');
 const { registerKnowledgeBaseIpc } = require('./knowledgeBaseIpc.cjs');
 const { registerLicenseIpc } = require('./licenseIpc.cjs');
-const { registerOfficialAccountIpc } = require('./officialAccountIpc.cjs');
+const { registerOfficialAccountIpc, registerOfficialInvoiceIpc } = require('./officialAccountIpc.cjs');
 const { registerRejectionCheckIpc } = require('./rejectionCheckIpc.cjs');
 const { registerTaskIpc } = require('./taskIpc.cjs');
 const { registerTechnicalPlanIpc } = require('./technicalPlanIpc.cjs');
@@ -42,6 +42,7 @@ const { createAgentWorkspaceService } = require('../services/agentWorkspaceServi
 const { createTaskLogStore } = require('../services/taskLogStore.cjs');
 const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
 const { createFeasibilityReportStore } = require('../services/feasibilityReportStore.cjs');
+const { createOfficialInvoiceStore } = require('../services/officialInvoiceStore.cjs');
 const { createTemplateStore } = require('../services/templateStore.cjs');
 const { createKbAuthService } = require('../services/kbAuthService.cjs');
 const { createKbTeamService } = require('../services/kbTeamService.cjs');
@@ -128,6 +129,8 @@ function sendToWebContents(webContents, channel, payload) {
 }
 
 const workspaceDatabaseChannels = [
+  'official-account:get-invoice-info',
+  'official-account:save-invoice-info',
   'technical-plan:load-state',
   'technical-plan:import-tender-document',
   'technical-plan:remove-tender-document',
@@ -312,6 +315,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   registerDuplicateCheckIpc({ duplicateCheckStore, checkResultExportService });
   registerRejectionCheckIpc({ rejectionCheckStore, taskService, checkResultExportService });
   registerTemplateIpc({ templateStore });
+  registerOfficialInvoiceIpc({ officialInvoiceStore: createOfficialInvoiceStore({ db: sqliteDatabase.db }) });
   registerTaskIpc({ taskService });
   registerSyncIpc({ syncService });
   registerKbQaIpc({ kbQaRetrievalService, kbQaSessionService });

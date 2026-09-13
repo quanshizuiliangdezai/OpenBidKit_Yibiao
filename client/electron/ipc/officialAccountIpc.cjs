@@ -2,6 +2,8 @@ const { BrowserWindow, ipcMain } = require('electron');
 
 // 转发官方账户操作，并向窗口推送不含令牌的展示状态。
 function registerOfficialAccountIpc({ officialAccountService }) {
+  ipcMain.handle('official-account:redeem-code', (_event, input) => officialAccountService.redeemCode(input));
+  ipcMain.handle('official-account:create-invoice-application', (_event, input) => officialAccountService.createInvoiceApplication(input));
   ipcMain.handle('official-account:get-state', () => officialAccountService.getState());
   ipcMain.handle('official-account:send-email-code', (_event, input) => officialAccountService.sendEmailCode(input));
   ipcMain.handle('official-account:login', (_event, input) => officialAccountService.loginWithEmail(input));
@@ -23,4 +25,10 @@ function registerOfficialAccountIpc({ officialAccountService }) {
   });
 }
 
-module.exports = { registerOfficialAccountIpc };
+// 在工作区数据库就绪后注册本地开票信息读写。
+function registerOfficialInvoiceIpc({ officialInvoiceStore }) {
+  ipcMain.handle('official-account:get-invoice-info', () => officialInvoiceStore.get());
+  ipcMain.handle('official-account:save-invoice-info', (_event, input) => officialInvoiceStore.save(input));
+}
+
+module.exports = { registerOfficialAccountIpc, registerOfficialInvoiceIpc };
