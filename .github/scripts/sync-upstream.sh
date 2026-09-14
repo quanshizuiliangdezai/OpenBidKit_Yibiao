@@ -214,6 +214,7 @@ FORCE_OURS=(
   "client/electron/services/outlineGenerationTask.cjs"
   "client/electron/services/outlineComplianceAudit.cjs"
   "client/src/features/technical-plan/pages/OutlineEditPage.tsx"
+  "client/src/features/technical-plan/pages/TechnicalPlanHome.tsx"
   "client/src/features/technical-plan/types.ts"
   "client/electron/services/pi/piRuntimeService.cjs"
   "client/electron/services/configStore.cjs"

@@ -255,10 +255,17 @@ async function prepareMultimodalMessages(config, messages) {
   const systemParts = sourceMessages
     .filter((message) => message?.role === 'system')
     .map((message) => message.content)
-    .filter((content) => content !== undefined && content !== null && String(content).trim());
+    .filter((content) => Array.isArray(content) ? content.length > 0 : content?.trim());
   const nonSystemMessages = sourceMessages.filter((message) => message?.role !== 'system');
+  // 消息之间保留空行；结构化消息内部的内容块保持原样，供后续图片转换使用。
+  const systemContent = systemParts.some(Array.isArray)
+    ? systemParts.flatMap((content, index) => [
+      ...(index > 0 ? [{ type: 'text', text: '\n\n' }] : []),
+      ...(Array.isArray(content) ? content : [{ type: 'text', text: content }]),
+    ])
+    : systemParts.join('\n\n');
   const normalizedMessages = systemParts.length
-    ? [{ role: 'system', content: systemParts.map((content) => String(content)).join('\n\n') }, ...nonSystemMessages]
+    ? [{ role: 'system', content: systemContent }, ...nonSystemMessages]
     : nonSystemMessages;
 
   const preparedMessages = [];
