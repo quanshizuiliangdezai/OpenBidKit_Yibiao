@@ -780,6 +780,23 @@ fieldset.settings-list {
   color: var(--yb-success-deep);
 }
 
+/* 开票状态沿用订单状态文字样式，关闭保持默认灰色。 */
+.official-invoice-status[data-status='CAN_APPLY'] {
+  color: var(--yb-primary-deep);
+}
+
+.official-invoice-status[data-status='PENDING'] {
+  color: var(--yb-warning-deep);
+}
+
+.official-invoice-status[data-status='REJECTED'] {
+  color: var(--yb-danger-deep);
+}
+
+.official-invoice-status[data-status='ISSUED'] {
+  color: var(--yb-success-deep);
+}
+
 .official-order-refund {
   display: block;
   color: var(--yb-text-soft);
@@ -824,7 +841,7 @@ fieldset.settings-list {
 .official-api-balance {
   display: inline-flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 4px;
   max-width: 100%;
   color: var(--yb-primary-deep);
   user-select: text;
@@ -832,8 +849,8 @@ fieldset.settings-list {
 
 .official-api-balance-value {
   min-width: 0;
-  font-size: 32px;
-  font-weight: 700;
+  font-size: 24px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
   overflow-wrap: anywhere;
@@ -842,8 +859,9 @@ fieldset.settings-list {
 .official-api-balance small {
   flex: 0 0 auto;
   color: var(--yb-text-soft);
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 500;
+  line-height: 1;
 }
 
 .official-api-details {
@@ -933,6 +951,16 @@ fieldset.settings-list {
 
 .official-api-table .official-api-empty {
   height: 216px;
+}
+
+/* 两类账户表格共用加载区，flex 保证圆环尺寸和旋转正常显示。 */
+.official-table-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 192px;
+  color: var(--yb-text-soft);
 }
 
 @container (max-width: 540px) {

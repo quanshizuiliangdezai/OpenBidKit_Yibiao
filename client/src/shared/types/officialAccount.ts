@@ -16,6 +16,25 @@ export interface OfficialEmailCredentials {
   code: string;
 }
 
+/** 当前身份可查询的已结算消费；编号、点数保留服务端字符串精度。 */
+export interface OfficialConsumeRecord {
+  recordId: string;
+  requestNo: string | null;
+  consumeType: 'AI_SETTLE';
+  consumePoint: string;
+  availableAfter: string;
+  remark: string | null;
+  consumeTime: string;
+}
+
+/** 匿名和邮箱身份共用消费记录分页结构。 */
+export interface OfficialTransactionsPage {
+  current: number;
+  size: number;
+  total: number;
+  records: OfficialConsumeRecord[];
+}
+
 /** 充值商品展示信息；价格和点数保留服务端字符串精度。 */
 export interface OfficialRechargeOption {
   id: string;

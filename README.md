@@ -298,8 +298,14 @@ npm run dist:mac    # macOS Intel / Apple Silicon DMG 和 ZIP
 <p align="center">Anna（AI研习社）</p>
     </td>
     <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/09/17/20260917160922350.png)
+<p align="center">李小鱼</p>
     </td>
     <td width="20%" valign="top">
+
+![](https://oss.agnet.top/keep/2026/09/17/20260917160857555.png)
+<p align="center">绅士</p>
     </td>
     <td width="20%" valign="top">
     </td>
@@ -336,6 +342,8 @@ npm run dist:mac    # macOS Intel / Apple Silicon DMG 和 ZIP
 - **官方网站**: [https://yibiao.pro](https://yibiao.pro)
 - **问题反馈**: [GitHub Issues](https://github.com/yibiaoai/yibiao-simple/issues)
 - **邮箱联系**: support@yibiao.pro
+- **Telegram**: [https://t.me/OpenBidKit](https://t.me/OpenBidKit)
+- **X**: [https://x.com/markup668](https://x.com/markup668)
 
     </td>
     <td width="33%" valign="top">

@@ -59,6 +59,148 @@ function setup(t, handler, keyHandler = () => ({ code: 0, data: [{ name: '易标
   return { create, requests, powerMonitor, configStore, sessionFile: path.join(directory, 'official_api_session.json'), qrCacheFile: path.join(directory, 'official_recharge_qr_cache.json') };
 }
 
+test('匿名、绑定和邮箱登录统一查询消费接口，使用各自凭据并保留点数精度', async (t) => {
+  const anonymousRecord = { recordId: '2087000000000000099', consumePoint: '9007199254740993', availableAfter: '100', consumeType: 'AI_SETTLE' };
+  const emailRecord = { ...anonymousRecord, recordId: '2087000000000000100', consumePoint: '20' };
+  const login = emailLogin('transactions');
+  const relogin = emailLogin('transactions-relogin');
+  const env = setup(t, ({ endpoint, url, headers }) => {
+    if (endpoint === '/account') return { code: 0, data: account };
+    if (endpoint === '/email/bind' || endpoint === '/email/login') return {
+      code: 0, data: { account: { ...account, email: 'user@example.com' }, login: endpoint === '/email/bind' ? login : relogin },
+    };
+    if (endpoint === '/recharge/orders') return { code: 0, data: [] };
+    if (endpoint === '/account/consume-records') {
+      const query = new URL(url).searchParams;
+      return { code: 0, data: { current: query.get('current'), size: query.get('size'), total: '12', records: [headers.Authorization ? emailRecord : anonymousRecord] } };
+    }
+    return { code: 0, data: token('transactions-anonymous') };
+  });
+  const service = env.create();
+  await service.start();
+  assert.deepEqual(await service.getTransactions(2), { current: 2, size: 5, total: 12, records: [anonymousRecord] });
+  const anonymousRequest = env.requests.findLast(item => item.endpoint === '/account/consume-records');
+  assert.equal(anonymousRequest.url, 'https://v3.yibiao.pro/qhp-yibiao/anonymous/yibiao/open/account/consume-records?current=2&size=5');
+  assert.equal(anonymousRequest.method, 'GET');
+  assert.equal(anonymousRequest.headers['X-Yibiao-Open-Token'], 'transactions-anonymous');
+  assert.equal(anonymousRequest.headers.Authorization, undefined);
+  await service.bindEmail({ email: 'user@example.com', code: '123456' });
+  assert.deepEqual(await service.getTransactions(1), { current: 1, size: 5, total: 12, records: [emailRecord] });
+  const emailRequest = env.requests.findLast(item => item.endpoint === '/account/consume-records');
+  assert.equal(emailRequest.url, 'https://v3.yibiao.pro/qhp-yibiao/anonymous/yibiao/open/account/consume-records?current=1&size=5');
+  assert.equal(emailRequest.method, 'GET');
+  assert.equal(emailRequest.headers.Authorization, `Bearer ${login.token}`);
+  assert.equal(emailRequest.headers['X-Yibiao-Open-Token'], undefined);
+  await service.loginWithEmail({ email: 'user@example.com', code: '123456' });
+  assert.deepEqual(await service.getTransactions(2), { current: 2, size: 5, total: 12, records: [emailRecord] });
+  const reloginRequest = env.requests.findLast(item => item.endpoint === '/account/consume-records');
+  assert.equal(reloginRequest.headers.Authorization, `Bearer ${relogin.token}`);
+  assert.equal(reloginRequest.headers['X-Yibiao-Open-Token'], undefined);
+  assert.equal(env.requests.some(item => item.endpoint === '/yibiao/point/consume-orders'), false);
+});
+
+test('流水查询区分空列表、接口失败和错误分页，会话失效后不请求', async (t) => {
+  let response = { code: 0, data: { current: '1', size: '5', total: '0', records: [] } };
+  const env = setup(t, ({ endpoint }) => {
+    if (endpoint === '/account') return { code: 0, data: account };
+    if (endpoint === '/recharge/orders') return { code: 0, data: [] };
+    if (endpoint === '/account/consume-records') return response;
+    return { code: 0, data: token('anonymous') };
+  });
+  const service = env.create();
+  await assert.rejects(service.getTransactions(1), /请先登陆/);
+  assert.equal(env.requests.length, 0);
+  await service.start();
+  assert.deepEqual((await service.getTransactions(1)).records, []);
+  response = { code: -1, msg: '消费流水查询失败' };
+  await assert.rejects(service.getTransactions(1), /消费流水查询失败/);
+  assert.equal(service.getState().status, 'signed-in');
+  response = { code: 0, data: { current: '1', size: '5', total: '0' } };
+  await assert.rejects(service.getTransactions(1), /分页数据不完整/);
+  response = { httpStatus: 401, code: -1, msg: '登录失效' };
+  await assert.rejects(service.getTransactions(1), /登录失效/);
+  const count = env.requests.length;
+  await assert.rejects(service.getTransactions(1), /请先登陆/);
+  assert.equal(env.requests.length, count);
+});
+
+test('刷新余额合并重叠请求，广播并保存最新 e 点，使用当前身份且不访问 Key', async (t) => {
+  let finishRefresh;
+  let delay = false;
+  let currentAccount = account;
+  const env = setup(t, ({ endpoint }) => {
+    if (endpoint === '/account') return delay
+      ? new Promise(resolve => { finishRefresh = resolve; })
+      : { code: 0, data: currentAccount };
+    if (endpoint === '/email/login') return { code: 0, data: { account: currentAccount, login: emailLogin() } };
+    if (endpoint === '/recharge/orders') return { code: 0, data: [] };
+    return { code: 0, data: token('anonymous') };
+  });
+  const service = env.create();
+  await service.start();
+  const keyRequests = env.requests.filter(item => item.endpoint === '/api-keys').length;
+  const before = env.requests.filter(item => item.endpoint === '/account').length;
+  const changes = [];
+  service.onChanged(state => changes.push(state));
+  delay = true;
+  const first = service.refreshBalance();
+  assert.equal(service.refreshBalance(), first);
+  await settle();
+  assert.equal(env.requests.filter(item => item.endpoint === '/account').length, before + 1);
+  const request = env.requests.findLast(item => item.endpoint === '/account');
+  assert.equal(request.method, 'GET');
+  assert.equal(request.headers['X-Yibiao-Open-Token'], 'anonymous');
+  currentAccount = { ...account, availablePoint: '9007199254740993.12' };
+  finishRefresh({ code: 0, data: currentAccount });
+  assert.equal((await first).availablePoint, currentAccount.availablePoint);
+  assert.equal(changes.at(-1).availablePoint, currentAccount.availablePoint);
+  assert.equal(JSON.parse(fs.readFileSync(env.sessionFile, 'utf-8')).account.availablePoint, currentAccount.availablePoint);
+  assert.equal(env.requests.filter(item => item.endpoint === '/api-keys').length, keyRequests);
+
+  delay = false;
+  currentAccount = { ...currentAccount, email: 'user@example.com' };
+  await service.loginWithEmail({ email: currentAccount.email, code: '123456' });
+  const configBefore = JSON.stringify(env.configStore.load());
+  currentAccount = { ...currentAccount, availablePoint: '12.34' };
+  const afterLogin = env.requests.length;
+  await service.refreshBalance();
+  const refreshed = env.requests.slice(afterLogin).filter(item => item.endpoint === '/account');
+  assert.equal(refreshed.length, 1);
+  assert.equal(refreshed[0].headers.Authorization, `Bearer ${emailLogin().token}`);
+  assert.equal(refreshed[0].headers['X-Yibiao-Open-Token'], undefined);
+  assert.equal(service.getState().availablePoint, '12.34');
+  assert.equal(JSON.stringify(env.configStore.load()), configBefore);
+});
+
+test('余额刷新失败保留原值，失败后可再刷新，未登录或会话过期时不查询', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1800000000000 });
+  let response = { code: 0, data: { ...account, availablePoint: '88.80' } };
+  const env = setup(t, ({ endpoint }) => {
+    if (endpoint === '/account') return response;
+    if (endpoint === '/recharge/orders') return { code: 0, data: [] };
+    return { code: 0, data: token('anonymous') };
+  });
+  const service = env.create();
+  await assert.rejects(service.refreshBalance(), /请先登陆/);
+  assert.equal(env.requests.length, 0);
+  await service.start();
+  response = { httpStatus: 503, code: -1, msg: '余额查询失败' };
+  await assert.rejects(service.refreshBalance(), /余额查询失败/);
+  assert.equal(service.getState().availablePoint, '88.80');
+  assert.equal(service.getState().status, 'signed-in');
+  response = { code: 0, data: { ...account, availablePoint: '66.60' } };
+  await service.refreshBalance();
+  assert.equal(service.getState().availablePoint, '66.60');
+  const savedKey = env.configStore.load().api_key;
+  t.mock.timers.setTime(Date.now() + 901000);
+  const count = env.requests.length;
+  await assert.rejects(service.refreshBalance(), /请先登陆/);
+  assert.equal(env.requests.length, count);
+  assert.equal(service.getState().status, 'signed-out');
+  assert.match(service.getState().error, /重新登录/);
+  assert.equal(env.configStore.load().api_key, savedKey);
+});
+
 test('注册、绑定、登录及邮箱启动恢复同步有效 Key，切换第三方不受影响', async (t) => {
   let currentKey = 'anonymous-key';
   const bound = { ...account, email: 'user@example.com' };
@@ -500,6 +642,12 @@ test('preload 转发订单字段并去除内部 IPC 错误前缀', async () => {
   assert.equal((await bridge.officialAccount.createRechargeOrder({ optionId: 'one' })).id, 'order-one');
   assert.equal(calls[0].channel, 'official-account:create-recharge-order');
   assert.equal(calls[0].args[0].optionId, 'one');
+  await bridge.officialAccount.refreshBalance();
+  assert.equal(calls.at(-1).channel, 'official-account:refresh-balance');
+  assert.deepEqual(calls.at(-1).args, []);
+  await bridge.officialAccount.getTransactions(2);
+  assert.equal(calls.at(-1).channel, 'official-account:get-transactions');
+  assert.deepEqual(calls.at(-1).args, [2]);
   fail = true;
   await assert.rejects(bridge.officialAccount.getRechargeOrders(), error => error.message === '商品暂不可用');
 });

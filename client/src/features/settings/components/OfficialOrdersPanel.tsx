@@ -126,25 +126,26 @@ export default function OfficialOrdersPanel() {
     <>
       <div className="official-orders-toolbar">
         <span role="status">{status === 'loading' ? '正在加载订单…' : status === 'error' ? '订单加载失败' : `共 ${orders.length} 笔订单`}</span>
-        <button type="button" className="inline-action" disabled={status === 'loading'} onClick={() => setAttempt((value) => value + 1)}>{status === 'error' ? '重试' : '刷新'}</button>
+        <button type="button" className="inline-action" disabled={status === 'loading'} onClick={() => setAttempt((value) => value + 1)}>{status === 'loading' ? <><InlineSpinner />加载中…</> : status === 'error' ? '重试' : '刷新'}</button>
       </div>
       <table className="official-api-table official-orders-table" aria-label="订单记录" aria-busy={status === 'loading'}>
         <thead><tr>{['时间', '订单号', '金额', 'e点', '状态', '开票状态', '操作'].map((label) => <th scope="col" key={label}>{label}</th>)}</tr></thead>
         <tbody>
-          {orders.slice((currentPage - 1) * 5, currentPage * 5).map((order) => (
+          {status === 'loading' && <tr><td colSpan={7}><div className="official-table-loading" role="status"><InlineSpinner /><span>正在加载订单…</span></div></td></tr>}
+          {status !== 'loading' && orders.slice((currentPage - 1) * 5, currentPage * 5).map((order) => (
             <tr key={order.id}>
               <td>{order.createTime}</td>
               <td><button type="button" className="official-order-link" onClick={(event) => { void openDetail(order, event.currentTarget); }}>{order.orderNo}</button></td>
               <td>¥{order.payPrice}</td>
               <td>{order.totalPoint}</td>
               <td><span className={`official-order-status is-${order.payStatus.toLowerCase()}`}>{paymentLabels[order.payStatus]}</span>{order.refundStatus !== 'NONE' && <small className="official-order-refund">{refundLabels[order.refundStatus]}</small>}</td>
-              <td>{invoiceLabels[order.invoiceStatus]}</td>
+              <td><span className="official-order-status official-invoice-status" data-status={order.invoiceStatus}>{invoiceLabels[order.invoiceStatus]}</span></td>
               <td>{order.payStatus === 'WAITING' && <button type="button" className="inline-action" disabled={!!resuming} onClick={(event) => { void resumePayment(order, event.currentTarget); }}>{resuming === order.id ? '正在读取…' : '继续支付'}</button>}
                 {order.payStatus === 'SUCCESS' && order.invoiceStatus === 'CAN_APPLY' && <OfficialInvoiceAction isEmailAccount={account.identityType === 'email'} order={order} onSubmitted={() => setAttempt((value) => value + 1)} />}
               </td>
             </tr>
           ))}
-          {orders.length === 0 && <tr><td colSpan={7} className="official-api-empty">{status === 'loading' ? <InlineSpinner /> : status === 'error' ? '请重试加载订单' : '暂无订单'}</td></tr>}
+          {status !== 'loading' && orders.length === 0 && <tr><td colSpan={7} className="official-api-empty">{status === 'error' ? '请重试加载订单' : '暂无订单'}</td></tr>}
         </tbody>
       </table>
       {status === 'ready' && orders.length > 0 && (

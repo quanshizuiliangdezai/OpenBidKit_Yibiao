@@ -46,6 +46,7 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
   let balanceRetryAt = 0;
   let orderRetryAt = 0;
   let creatingOrder = null;
+  let refreshingBalance = null;
   let qrCodes = [];
   let qrCleanupTimer = null;
 
@@ -341,6 +342,16 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     });
   }
 
+  // 页面和手动刷新共用同一请求，沿用当前会话查询并广播最新余额。
+  function refreshBalance() {
+    if (refreshingBalance) return refreshingBalance;
+    refreshingBalance = enqueue(async () => {
+      acceptAccount(await request('/account', { method: 'GET', authenticated: true }));
+      return getState();
+    }).finally(() => { refreshingBalance = null; });
+    return refreshingBalance;
+  }
+
   // 兑换成功后查询当前余额；幂等响应中的余额是首次入账快照。
   function redeemCode(input) {
     return enqueue(async () => {
@@ -494,6 +505,23 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     });
   }
 
+  // 两种登录身份共用消费接口，凭据及查询范围由现有账户鉴权处理。
+  function getTransactions(page) {
+    return enqueue(async () => {
+      const data = await request(`/account/consume-records?current=${page}&size=5`, {
+        method: 'GET', authenticated: true,
+      });
+      const current = Number(data?.current);
+      const size = Number(data?.size);
+      const total = Number(data?.total);
+      if (!Array.isArray(data?.records) || !Number.isSafeInteger(current) || current < 1
+        || !Number.isSafeInteger(size) || size < 1 || !Number.isSafeInteger(total) || total < 0) {
+        throw new Error('官方流水接口返回的分页数据不完整，请重试');
+      }
+      return { records: data.records, current, size, total };
+    });
+  }
+
   // 先查询服务端状态，仅为仍待支付的订单附上当前账户的有效本地缓存。
   function getRechargeOrder(id) {
     return enqueue(async () => {
@@ -549,8 +577,8 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     return tail;
   }
 
-  return { start, getState, onChanged, sendEmailCode, loginWithEmail, bindEmail, getRechargeOptions,
-    redeemCode, createInvoiceApplication, createRechargeOrder, getRechargeOrders, getRechargeOrder, closeRechargeOrder, onRechargeOrderChanged, close };
+  return { start, getState, onChanged, sendEmailCode, loginWithEmail, bindEmail, refreshBalance, getRechargeOptions,
+    redeemCode, createInvoiceApplication, createRechargeOrder, getRechargeOrders, getTransactions, getRechargeOrder, closeRechargeOrder, onRechargeOrderChanged, close };
 }
 
 module.exports = { createOfficialAccountService };
