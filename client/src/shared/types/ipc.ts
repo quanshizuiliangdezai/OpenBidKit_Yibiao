@@ -9,6 +9,13 @@ import type { FeasibilityProjectInfo, FeasibilityReportState, FeasibilityReportS
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
 import type { OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from './outline';
 
+/** 配置保存只更新提交字段，文本服务商档案也支持局部更新。 */
+export type ClientConfigPatch = Partial<Omit<ClientConfig, 'text_model_profiles'>> & {
+  text_model_profiles?: {
+    [Provider in keyof ClientConfig['text_model_profiles']]?: Partial<ClientConfig['text_model_profiles'][Provider]>;
+  };
+};
+
 export interface TaskEventTask {
   task_id: string;
   type: string;
@@ -738,7 +745,7 @@ export interface YibiaoBridge {
   };
   config: {
     load: () => Promise<ClientConfig>;
-    save: (config: ClientConfig) => Promise<ConfigSaveResult>;
+    save: (config: ClientConfigPatch) => Promise<ConfigSaveResult>;
     listModels: (config?: ClientConfig) => Promise<ModelListResult>;
     getModelInfo: (modelName: string) => Promise<ModelInfoResult>;
     openConfigFolder: () => Promise<{ success: boolean; path: string }>;

@@ -33,6 +33,7 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
   let clientId = '';
   let loading = true;
   let sessionError = '';
+  let apiKeyError = '';
   let closed = false;
   let startPromise = null;
   let tail = Promise.resolve();
@@ -55,7 +56,7 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
       status: loading ? 'loading' : account ? 'signed-in' : 'signed-out',
       clientId,
       identityType: account ? session.kind : null,
-      error: sessionError,
+      error: apiKeyError || sessionError,
       email: account?.email || null,
       accountId: account?.accountId || null,
       availablePoint: account?.availablePoint ?? null,
@@ -167,6 +168,26 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     return result.data;
   }
 
+  // 列表按创建时间倒序返回；复用最新有效同名 Key，没有则创建并立即保存。
+  async function syncApiKey() {
+    try {
+      const keys = await request('/api-keys', { method: 'GET', authenticated: true });
+      if (!Array.isArray(keys)) throw new Error('API Key 列表格式不正确');
+      const key = keys.find((item) => item.name === '易标开源版' && item.status === 'ACTIVE'
+        && (!item.expireTime || Date.parse(item.expireTime) > Date.now()))
+        || await request('/api-keys', { body: { name: '易标开源版' }, authenticated: true });
+      if (typeof key?.apiKey !== 'string' || !key.apiKey.trim()) throw new Error('接口未返回完整 API Key');
+      configStore.save({ text_model_profiles: { official: { api_key: key.apiKey } } });
+      apiKeyError = '';
+    } catch (error) {
+      apiKeyError = '获取官方 API Key 失败，请重启软件或重新登录';
+      throw new Error(apiKeyError, { cause: error });
+    } finally {
+      loading = false;
+      publish();
+    }
+  }
+
   // 安排唯一的刷新任务，网络重试也使用同一个计时器。
   function scheduleRefresh(delay) {
     clearTimeout(refreshTimer);
@@ -241,6 +262,7 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
       else acceptAnonymousToken(await request('/tokens/refresh', { authenticated: true }));
       acceptAccount(await request('/account', { method: 'GET', authenticated: true }));
       if (!orderTrackingStarted) beginOrderTracking();
+      return true;
     } catch (error) {
       handleAutomaticFailure(error);
     }
@@ -276,7 +298,7 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
         publish();
         if (fs.existsSync(sessionFile)) session = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'));
         if (session?.kind === 'email') {
-          await refreshSession();
+          if (await refreshSession()) await syncApiKey();
           return;
         }
         session = null;
@@ -284,6 +306,7 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
         acceptAnonymousToken(await request('/clients/register', { body: { clientId } }));
         acceptAccount(await request('/account', { method: 'GET', authenticated: true }));
         beginOrderTracking();
+        await syncApiKey();
       } catch (error) {
         handleAutomaticFailure(error);
       }
@@ -301,9 +324,8 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     return enqueue(async () => {
       const result = await request('/email/login', { body: { email, code } });
       acceptEmailLogin(result.login, result.account);
-      loading = false;
-      publish();
       beginOrderTracking();
+      await syncApiKey();
       return getState();
     });
   }
@@ -313,9 +335,8 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     return enqueue(async () => {
       const result = await request('/email/bind', { body: { email, code }, authenticated: true });
       acceptEmailLogin(result.login, result.account);
-      loading = false;
-      publish();
       beginOrderTracking();
+      await syncApiKey();
       return getState();
     });
   }

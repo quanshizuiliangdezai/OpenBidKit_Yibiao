@@ -15,8 +15,21 @@ test('官方 API 设置保存重载后保留模型类型、账号和第三方配
   assert.equal(initial.text_model_provider, 'official');
   assert.equal(initial.official_api_model_type, 'cost-effective');
   assert.equal(initial.api_key, '');
-  assert.equal(initial.base_url, '');
-  assert.equal(initial.model_name, '');
+  const officialProfile = {
+    api_key: '',
+    base_url: 'https://v3.yibiao.pro/qhp-yibiao/anonymous/yibiao/openai/v1',
+    model_name: 'yibiao-text',
+    multimodal_enabled: true,
+    reasoning_effort: '',
+    context_length_limit: 258000,
+    output_token_limit: 128000,
+    concurrency_limit: 50,
+    temperature_enabled: false,
+    temperature: 0.7,
+    request_mode: 'stream',
+  };
+  assert.deepEqual(initial.text_model_profiles.official, officialProfile);
+  for (const [field, value] of Object.entries(officialProfile)) assert.equal(initial[field], value);
   assert.ok(initial.analytics_client_id);
 
   const customProfile = {
@@ -26,30 +39,48 @@ test('官方 API 设置保存重载后保留模型类型、账号和第三方配
     model_name: '测试模型',
   };
   store.save({ text_model_provider: 'custom', ...customProfile });
-  const existing = store.load();
-  delete existing.official_api_model_type;
-  fs.writeFileSync(store.getConfigFilePath(), JSON.stringify(existing), 'utf-8');
+  // 后台更新官方档案，不切换当前服务商，也不改变第三方 Key。
+  store.save({ text_model_profiles: { official: { api_key: 'official-first' } } });
   assert.equal(store.load().text_model_provider, 'custom');
-  assert.deepEqual(store.load().text_model_profiles.custom, customProfile);
+  assert.equal(store.load().api_key, customProfile.api_key);
+  assert.deepEqual(store.load().text_model_profiles.official, { ...officialProfile, api_key: 'official-first' });
 
   for (const modelType of ['high-quality', 'cost-effective']) {
-    store.save({
-      text_model_provider: 'official',
-      official_api_model_type: modelType,
-      ...initial.text_model_profiles.official,
-    });
+    const modelName = modelType === 'high-quality' ? 'yibiao-reasoning' : 'yibiao-text';
+    store.save({ text_model_provider: 'official' });
+    store.save({ official_api_model_type: modelType, model_name: modelName });
     const reloaded = createConfigStore(app).load();
-    assert.equal(reloaded.text_model_provider, 'official');
     assert.equal(reloaded.official_api_model_type, modelType);
     assert.equal(reloaded.analytics_client_id, initial.analytics_client_id);
     assert.deepEqual(reloaded.text_model_profiles.custom, customProfile);
-    assert.deepEqual(reloaded.text_model_profiles.official, initial.text_model_profiles.official);
+    const expected = { ...officialProfile, api_key: 'official-first', model_name: modelName };
+    assert.deepEqual(reloaded.text_model_profiles.official, expected);
+    for (const [field, value] of Object.entries(expected)) assert.equal(reloaded[field], value);
   }
 
-  store.save({ text_model_provider: 'custom', ...store.load().text_model_profiles.custom });
+  // 设置页旧快照省略自动维护的 Key，后台写入后再保存也不能将其覆盖。
+  const { api_key: oldKey, ...stale } = store.load();
+  const { api_key: oldProfileKey, ...official } = stale.text_model_profiles.official;
+  stale.text_model_profiles.official = official;
+  store.save({ text_model_profiles: { official: { api_key: 'official-latest' } } });
+  store.save({ ...stale, model_name: 'yibiao-reasoning', official_api_model_type: 'high-quality' });
+  assert.equal(store.load().api_key, 'official-latest');
+  assert.equal(store.load().text_model_profiles.official.api_key, 'official-latest');
+
+  store.save({ text_model_provider: 'custom' });
   const restored = createConfigStore(app).load();
-  assert.equal(restored.text_model_provider, 'custom');
+  assert.deepEqual(restored.text_model_profiles.custom, customProfile);
   assert.equal(restored.api_key, customProfile.api_key);
-  assert.equal(restored.base_url, customProfile.base_url);
-  assert.equal(restored.model_name, customProfile.model_name);
+  store.save({ text_model_provider: 'official' });
+  assert.equal(store.load().model_name, 'yibiao-reasoning');
+  assert.equal(store.load().api_key, 'official-latest');
+
+  // 局部字段合并适用于其他渠道，清空字段仍显式生效。
+  store.save({ text_model_profiles: { custom: { api_key: 'custom-updated' } } });
+  store.save({ text_model_provider: 'custom' });
+  assert.equal(store.load().api_key, 'custom-updated');
+  assert.equal(store.load().base_url, customProfile.base_url);
+  store.save({ api_key: '' });
+  assert.equal(store.load().api_key, '');
+  assert.equal(store.load().text_model_profiles.official.api_key, 'official-latest');
 });
