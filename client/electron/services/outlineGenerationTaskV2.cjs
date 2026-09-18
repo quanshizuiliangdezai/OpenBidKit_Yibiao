@@ -1,3 +1,4 @@
+const Ajv = require('ajv');
 const {
   OUTLINE_AGENT_TASK_KEY,
   TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
@@ -970,6 +971,8 @@ async function runOutlineGenerationTaskV2({ aiService, agentService, ordinaryAge
   }
 
   if (!restoringOutlineSelection) {
+    const ajv = new Ajv({ allErrors: true, strict: true });
+    const validateOutline = ajv.compile(OUTLINE_JSON_SCHEMA);
     updateAgentState({ status: 'running', phase: 'initial-outline', agent_connection: 'running', session_file: '' });
     const initialResult = await agentService.runTask({
       task_id: task.task_id,
@@ -985,11 +988,22 @@ async function runOutlineGenerationTaskV2({ aiService, agentService, ordinaryAge
       initial_stage: 'initial-outline',
       initial_stage_index: 0,
       json_validation_schemas: jsonValidationSchemas,
-      max_retries: 0,
+      max_retries: 1,
+      // 在当前 Session 的修复循环内校验一级目录，通过后才进入用户确认。
+      validateOutput(candidate) {
+        if (!String(candidate.output_content || '').trim()) {
+          throw new Error(`${OUTLINE_OUTPUT_FILE} 未生成或内容为空，请写入完整的一级目录 JSON`);
+        }
+        const generated = readJson(candidate.output_content, OUTLINE_OUTPUT_FILE);
+        if (!validateOutline(generated)) {
+          throw new Error(`${OUTLINE_OUTPUT_FILE} 不符合目录结构要求：${ajv.errorsText(validateOutline.errors, { dataVar: OUTLINE_OUTPUT_FILE })}`);
+        }
+        return generated;
+      },
       onActivity: publishAgentActivity,
       onCheckpoint: syncAgentCheckpoint,
     });
-    const generated = readJson(initialResult.output_content, OUTLINE_OUTPUT_FILE);
+    const generated = initialResult.validation_result;
     const items = generated.outline || [];
     const defaultSelectedIds = items.filter((item) => item.attr === '技术').map((item) => item.id);
     const selection = { items, selected_ids: defaultSelectedIds, confirmed: false };
